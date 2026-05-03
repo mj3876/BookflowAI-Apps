@@ -6,6 +6,7 @@ ROLE_USERS = {
     "wh-manager-1": ("00000000-0000-0000-0000-000000000002", "wh-manager",      1, None),
     "wh-manager-2": ("00000000-0000-0000-0000-000000000003", "wh-manager",      2, None),
     "branch-clerk": ("00000000-0000-0000-0000-000000000004", "branch-clerk", None,    1),
+    "system":       ("00000000-0000-0000-0000-000000000099", "system",       None, None),
 }
 
 
