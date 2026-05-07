@@ -1,75 +1,132 @@
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchCuration, type Role } from '../api';
+import { useScope } from '../auth';
 import { useLocations } from '../useLocations';
+import EmptyState from '../components/EmptyState';
+import HelpHint from '../components/HelpHint';
 
 export default function BranchCuration() {
   const { role } = useOutletContext<{ role: Role }>();
-  const my_store = 1;
+  const { scope_store_id } = useScope();
   const { nameOf } = useLocations(role);
-  const q = useQuery({ queryKey: ['curation', my_store, role], queryFn: () => fetchCuration(role, my_store), refetchInterval: 30000 });
+  const my_store = scope_store_id ?? 1;  // hq-admin 등은 fallback
+
+  const q = useQuery({
+    queryKey: ['curation', my_store, role],
+    queryFn: () => fetchCuration(role, my_store),
+    refetchInterval: 30000,
+    enabled: my_store > 0,
+  });
 
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h1 className="h1">{nameOf(my_store)} · 큐레이션 추천</h1>
+        <h1 className="h1">{nameOf(my_store)} · 진열 추천</h1>
         <p className="text-bf-muted text-xs mt-1">
-          최근 24시간 SNS 에서 급등한 도서 중 매장에 재고가 있는 책을 우선 진열하세요. 30초마다 갱신.
+          최근 24시간 SNS 에서 급등한 도서 중 우리 매장에 재고가 있는 책을 우선 진열하세요.
+          재고 부족 시 "입고 요청" 으로 물류센터에 알릴 수 있어요. <span className="text-bf-muted/70">30초마다 갱신.</span>
         </p>
       </div>
 
       <div className="card">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="h2">급등 인기 도서 ({q.data?.items.length ?? 0})</h2>
-          <span className="label-tag">spike_events JOIN inventory · 30초 갱신</span>
+          <h2 className="h2">
+            급등 도서 ({q.data?.items.length ?? 0})
+            <HelpHint text="SNS 언급량 z-score ≥ 0.5 인 도서 (10분마다 spike-detect Lambda 가 감지). z-score 가 높을수록 평소보다 화제." />
+          </h2>
         </div>
+
+        {q.isLoading && (
+          <div className="text-center py-10 text-bf-muted text-xs">로딩 중…</div>
+        )}
+
+        {q.data?.items.length === 0 && !q.isLoading && (
+          <EmptyState
+            message="최근 24시간 급등 감지 없음"
+            hint="spike-detect Lambda 가 10분마다 SNS 데이터를 분석합니다. 급등 도서가 생기면 자동 표시돼요."
+          />
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {q.data?.items.map((c) => {
             const sev = (c.z_score ?? 0) >= 3 ? 'CRITICAL' : (c.z_score ?? 0) >= 1.5 ? 'WARNING' : 'INFO';
+            const sevLabel = sev === 'CRITICAL' ? '매우 높음' : sev === 'WARNING' ? '높음' : '보통';
             const stockOk = c.available > 0;
             return (
-              <div key={c.isbn13} className="card-tight">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold truncate">{c.title ?? c.isbn13}</div>
-                    <div className="text-[10px] text-bf-muted truncate">{c.author ?? '-'} · {c.category ?? '-'}</div>
-                  </div>
-                  <span className={
-                    sev === 'CRITICAL' ? 'pill-rejected' :
-                    sev === 'WARNING'  ? 'pill-pending' : 'pill-info'
-                  }>{sev}</span>
+              <div key={c.isbn13} className="card-tight flex gap-3">
+                {/* 표지 */}
+                <div className="shrink-0">
+                  {c.cover_url ? (
+                    <img
+                      src={c.cover_url}
+                      alt={c.title ?? c.isbn13}
+                      className="w-[60px] h-[84px] object-cover rounded-sm border border-bf-border"
+                      loading="lazy"
+                      onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                    />
+                  ) : (
+                    <div className="w-[60px] h-[84px] bg-bf-panel2 rounded-sm border border-bf-border" />
+                  )}
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center text-xs my-3">
-                  <div>
-                    <div className="text-[10px] text-bf-muted">z-score</div>
-                    <div className="font-semibold text-bf-danger">{c.z_score?.toFixed(2) ?? '-'}</div>
+
+                {/* 정보 */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold truncate" title={c.title ?? c.isbn13}>
+                        {c.title ?? c.isbn13}
+                      </div>
+                      <div className="text-[10px] text-bf-muted truncate">
+                        {c.author ?? '-'} · {c.category ?? '-'}
+                      </div>
+                    </div>
+                    <span className={
+                      sev === 'CRITICAL' ? 'pill-rejected' :
+                      sev === 'WARNING'  ? 'pill-pending' : 'pill-info'
+                    } title={`z-score ${c.z_score?.toFixed(2)}`}>
+                      {sevLabel}
+                    </span>
                   </div>
-                  <div>
-                    <div className="text-[10px] text-bf-muted">매출</div>
-                    <div className="font-semibold">{c.mentions_count}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-bf-muted">매장 가용</div>
-                    <div className={`font-semibold ${stockOk ? 'text-bf-success' : 'text-bf-danger'}`}>
-                      {c.available}
+
+                  <div className="grid grid-cols-3 gap-1 text-center text-[11px] my-1">
+                    <div>
+                      <div className="text-[9px] text-bf-muted">수요 급등</div>
+                      <div className="font-semibold text-bf-danger">{c.z_score?.toFixed(1) ?? '-'}</div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] text-bf-muted">SNS 언급</div>
+                      <div className="font-semibold">{c.mentions_count}</div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] text-bf-muted">매장 재고</div>
+                      <div className={`font-semibold ${stockOk ? 'text-bf-success' : 'text-bf-danger'}`}>
+                        {c.available}
+                      </div>
                     </div>
                   </div>
+
+                  <div className="mt-auto flex items-center justify-between text-[10px]">
+                    <span className="text-bf-muted">
+                      {c.price_sales ? `₩${c.price_sales.toLocaleString()}` : '-'}
+                    </span>
+                    {stockOk ? (
+                      <span className="pill-approved">진열 가능</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn-outline btn-sm"
+                        title="물류센터에 입고 요청 (현재는 알림 표시만)"
+                        onClick={() => alert(`[입고 요청] ${c.title ?? c.isbn13}\n매장: ${nameOf(my_store)}\n\n구현 예정: notification-svc 통해 물류센터 알림.`)}
+                      >
+                        입고 요청
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-bf-muted">{c.price_sales ? `₩${c.price_sales.toLocaleString()}` : '-'}</span>
-                  <span className="font-mono text-[10px] text-bf-muted">{c.isbn13}</span>
-                </div>
-                {!stockOk && (
-                  <div className="mt-2 text-[10px] text-bf-warn">⚠ 매장 재고 없음 - 입고 요청 필요</div>
-                )}
               </div>
             );
           })}
-          {q.data?.items.length === 0 && (
-            <div className="col-span-full text-center py-6 text-bf-muted text-xs">
-              최근 24시간 내 급등 감지 없음 · spike-detect Lambda 가 10분마다 실행
-            </div>
-          )}
         </div>
       </div>
     </div>
