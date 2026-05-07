@@ -1,5 +1,5 @@
 ### Stage 1: Vite build (React + Tailwind + Router) ###
-FROM node:20-alpine AS web
+FROM public.ecr.aws/docker/library/node:20-alpine AS web
 WORKDIR /web
 COPY web/package.json ./
 RUN npm install --no-audit --no-fund
@@ -8,7 +8,7 @@ COPY web/src ./src
 RUN npm run build
 
 ### Stage 2: FastAPI + StaticFiles ###
-FROM python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.12-slim
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
