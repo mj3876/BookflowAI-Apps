@@ -15,9 +15,9 @@ export default function Login() {
 
   // Entra OIDC cookie 자동 감지 — bookflow_session 유효시 mock 버튼 안 거치고 자동 진입.
   useEffect(() => {
-    fetchSessionRole().then((r) => {
-      if (r) {
-        setRole(r);
+    fetchSessionRole().then((s) => {
+      if (s) {
+        setRole(s.role, s.scope);
         nav('/', { replace: true });
       } else {
         setChecking(false);

@@ -270,6 +270,7 @@ export type CurationItem = {
   author: string | null;
   category: string | null;
   price_sales: number | null;
+  cover_url: string | null;
   on_hand: number;
   available: number;
 };

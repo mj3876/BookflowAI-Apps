@@ -629,7 +629,7 @@ def curation(store_id: int, ctx: AuthContext = Depends(require_auth)):
     _check_store_scope(ctx, store_id)
     sql = """
         SELECT s.isbn13, s.z_score, s.mentions_count, s.detected_at,
-               b.title, b.author, b.category_name, b.price_sales,
+               b.title, b.author, b.category_name, b.price_sales, b.cover_url,
                COALESCE(i.on_hand, 0) AS on_hand, COALESCE(i.reserved_qty, 0) AS reserved_qty
           FROM spike_events s
           LEFT JOIN books b ON b.isbn13 = s.isbn13
@@ -654,8 +654,9 @@ def curation(store_id: int, ctx: AuthContext = Depends(require_auth)):
                 "author":         r[5],
                 "category":       r[6],
                 "price_sales":    r[7],
-                "on_hand":        r[8],
-                "available":      r[8] - r[9],
+                "cover_url":      r[8],
+                "on_hand":        r[9],
+                "available":      r[9] - r[10],
             }
             for r in rows
         ],
