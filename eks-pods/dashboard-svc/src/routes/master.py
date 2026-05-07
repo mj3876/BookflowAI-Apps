@@ -112,7 +112,7 @@ def books(
     sql = f"""
         SELECT isbn13, title, author, publisher, pub_date, category_name,
                price_standard, price_sales, active, discontinue_mode,
-               discontinue_reason, discontinue_at, expected_soldout_at
+               discontinue_reason, discontinue_at, expected_soldout_at, cover_url
           FROM books
           {where}
          ORDER BY isbn13
@@ -140,6 +140,7 @@ def books(
                 "discontinue_reason": r[10],
                 "discontinue_at": r[11].isoformat() if r[11] else None,
                 "expected_soldout_at": r[12].isoformat() if r[12] else None,
+                "cover_url": r[13],
             }
             for r in rows
         ],
