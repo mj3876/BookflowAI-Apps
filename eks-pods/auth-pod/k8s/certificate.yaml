@@ -1,0 +1,18 @@
+# Let's Encrypt Certificate for bookflow.duckdns.org
+# cert-manager 가 K8s Secret 'bookflow-tls' 에 cert + key 저장 → Ingress 가 사용
+# 90일 갱신 자동 (renewBefore=15일)
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bookflow-tls
+  namespace: bookflow
+spec:
+  secretName: bookflow-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - bookflow.duckdns.org
+  duration: 2160h  # 90 days
+  renewBefore: 360h  # 15 days

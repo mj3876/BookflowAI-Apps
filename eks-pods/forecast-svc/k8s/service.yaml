@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: forecast-svc
+  namespace: bookflow
+spec:
+  type: ClusterIP
+  selector:
+    app: forecast-svc
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

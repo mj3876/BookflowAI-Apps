@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-svc
+  namespace: bookflow
+  labels:
+    app: dashboard-svc
+    component: msa-pod
+spec:
+  replicas: 1  # dev cluster (t3.medium 17-pod limit). Phase 4: 2+ replicas with bigger nodegroup
+  selector:
+    matchLabels:
+      app: dashboard-svc
+  template:
+    metadata:
+      labels:
+        app: dashboard-svc
+        component: msa-pod
+    spec:
+      serviceAccountName: dashboard-svc
+      containers:
+        - name: app
+          image: ${ECR_REGISTRY}/bookflow/dashboard-svc:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+          envFrom:
+            - configMapRef:
+                name: dashboard-svc-env
+            - secretRef:
+                name: dashboard-svc-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 15

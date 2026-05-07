@@ -33,7 +33,8 @@ phases:
       - |
         for svc in $SVCS; do
           echo "=== Building $svc ==="
-          docker build -t "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG" "$svc"
+          # Build context = ecs-sims root so Dockerfile can COPY sibling _shared module
+          docker build -t "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG" -f "$svc/Dockerfile" .
           docker tag "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG" "$ECR_REGISTRY/$PROJECT_NAME/$svc:latest"
           docker push "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG"
           docker push "$ECR_REGISTRY/$PROJECT_NAME/$svc:latest"

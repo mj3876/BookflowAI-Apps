@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: intervention-auto-execute
+  namespace: bookflow
+  labels:
+    app: intervention-svc
+    component: cronjob
+spec:
+  # 07:00 KST = 22:00 UTC (전날). dev RDS 가 야간 destroy 되므로
+  # 평일 가동 9-18 KST 시간대를 피해 매일 22:00 UTC 한 번 실행되도록.
+  schedule: "0 22 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: intervention-svc
+            component: cronjob
+        spec:
+          serviceAccountName: intervention-svc
+          restartPolicy: Never
+          containers:
+            - name: auto-execute
+              image: ${ECR_REGISTRY}/bookflow/intervention-svc:${IMAGE_TAG}
+              imagePullPolicy: Always
+              command: ["python", "-m", "src.cron.auto_execute"]
+              envFrom:
+                - configMapRef:
+                    name: intervention-svc-env
+                - secretRef:
+                    name: intervention-svc-secret
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi

@@ -1,0 +1,40 @@
+{{- range $mock := .Values.mocks }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $mock.name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "csp-mocks.commonLabels" (dict "root" $ "mock" $mock) | nindent 4 }}
+spec:
+  replicas: {{ $mock.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $mock.name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "csp-mocks.commonLabels" (dict "root" $ "mock" $mock) | nindent 8 }}
+    spec:
+      containers:
+        - name: app
+          image: {{ include "csp-mocks.image" (dict "root" $ "mock" $mock) }}
+          imagePullPolicy: {{ if eq $.Values.imageTag "latest" }}Always{{ else }}IfNotPresent{{ end }}
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 15
+{{- end }}

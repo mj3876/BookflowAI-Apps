@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decision-svc
+  namespace: bookflow
+  labels:
+    app: decision-svc
+    component: msa-pod
+spec:
+  replicas: 1  # dev cluster (t3.medium 17-pod limit). Phase 4: 2+ replicas with bigger nodegroup
+  selector:
+    matchLabels:
+      app: decision-svc
+  template:
+    metadata:
+      labels:
+        app: decision-svc
+        component: msa-pod
+    spec:
+      serviceAccountName: decision-svc
+      containers:
+        - name: app
+          image: ${ECR_REGISTRY}/bookflow/decision-svc:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+          envFrom:
+            - configMapRef:
+                name: decision-svc-env
+            - secretRef:
+                name: decision-svc-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 15

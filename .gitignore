@@ -33,3 +33,8 @@ credentials.json
 # Glue local
 glue-temp/
 spark-warehouse/
+
+# Design artifacts (encrypted .pen, accessed via Pencil MCP only)
+*.pen
+web/tsconfig.tsbuildinfo
+**/tsconfig.tsbuildinfo

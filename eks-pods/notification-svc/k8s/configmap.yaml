@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-svc-env
+  namespace: bookflow
+data:
+  NOTIFICATION_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  NOTIFICATION_RDS_PORT: "5432"
+  NOTIFICATION_RDS_DB: "bookflow"
+  NOTIFICATION_RDS_USER: "notification_svc"
+  NOTIFICATION_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  NOTIFICATION_REDIS_PORT: "6379"
+  # Phase 2-3: azure-logic-apps-mock (in-cluster). Phase 4 swap: real Azure Logic Apps URL via Egress NAT.
+  NOTIFICATION_LOGIC_APPS_URL: "http://azure-logic-apps-mock.stubs.svc.cluster.local"
+  NOTIFICATION_LOGIC_APPS_TIMEOUT_SECONDS: "5.0"
+  NOTIFICATION_AUTH_MODE: "mock"
+  NOTIFICATION_LOG_LEVEL: "INFO"
+  AUTH_MODE: "jwt"
+  AUTH_JWT_ISSUER: "bookflow-auth-pod"
+  AUTH_JWT_AUDIENCE: "bookflow-services"

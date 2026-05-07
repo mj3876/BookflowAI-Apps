@@ -1,0 +1,45 @@
+# Let's Encrypt ClusterIssuer (Production · DNS-01 challenge via DuckDNS webhook)
+# 90일 자동 갱신 · 5 cert/7day rate limit · staging 으로 먼저 테스트 권장
+# Webhook chart: mmontes11/cert-manager-webhook-duckdns (groupName=acme.duckdns.org)
+# Webhook secret: cert-manager-webhook-duckdns (key=token, in cert-manager namespace)
+# 적용: kubectl apply -f cluster-issuer.yaml
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: bleach10905@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - dns01:
+        webhook:
+          groupName: acme.duckdns.org
+          solverName: duckdns
+          config:
+            apiTokenSecretRef:
+              name: cert-manager-webhook-duckdns
+              key: token
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: bleach10905@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+    - dns01:
+        webhook:
+          groupName: acme.duckdns.org
+          solverName: duckdns
+          config:
+            apiTokenSecretRef:
+              name: cert-manager-webhook-duckdns
+              key: token

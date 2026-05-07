@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: Pretendard, Inter, "Noto Sans KR", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #F1F3F5;
+  color: #212529;
+}
+
+@layer components {
+  .card { @apply bg-bf-panel border border-bf-border rounded-md p-5 shadow-sm; }
+  .card-tight { @apply bg-bf-panel border border-bf-border rounded-md p-4 shadow-sm; }
+  .label-tag { @apply text-[11px] uppercase tracking-wider text-bf-muted font-semibold; }
+  .h1 { @apply text-xl font-bold text-bf-text m-0; }
+  .h2 { @apply text-base font-bold text-bf-text m-0; }
+  .h3 { @apply text-sm font-semibold text-bf-text m-0; }
+
+  .pill { @apply inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium; }
+  .pill-up      { @apply pill bg-bf-successbg text-bf-success; }
+  .pill-down    { @apply pill bg-bf-dangerbg text-bf-danger; }
+  .pill-connecting { @apply pill bg-bf-warnbg text-bf-warn; }
+  .pill-info    { @apply pill bg-blue-50 text-blue-700; }
+  .pill-pending { @apply pill bg-bf-warnbg text-bf-warn; }
+  .pill-approved{ @apply pill bg-bf-successbg text-bf-success; }
+  .pill-rejected{ @apply pill bg-bf-dangerbg text-bf-danger; }
+
+  .btn { @apply inline-flex items-center justify-center px-3 py-1.5 rounded-md text-xs font-medium transition cursor-pointer; }
+  .btn-primary { @apply btn bg-bf-primary text-white hover:bg-bf-primary2 active:bg-bf-primary3; }
+  .btn-danger  { @apply btn bg-bf-danger text-white hover:bg-red-800; }
+  .btn-ghost   { @apply btn bg-bf-panel text-bf-text border border-bf-border hover:bg-bf-panel2; }
+  .btn-sm      { @apply px-2 py-1 text-[11px]; }
+
+  .ipt { @apply bg-bf-panel text-bf-text border border-bf-border rounded-md px-2 py-1.5 text-xs focus:outline-none focus:border-bf-primary focus:ring-2 focus:ring-bf-ring; }
+
+  .metric-card { @apply card-tight; }
+  .metric-label { @apply text-[10px] uppercase tracking-wider text-bf-muted font-semibold; }
+  .metric-value { @apply text-2xl font-bold text-bf-text mt-1; }
+
+  .table-wrap { @apply card-tight overflow-hidden; }
+  .data-table { @apply w-full text-xs; }
+  .data-table th { @apply text-left text-[10px] uppercase tracking-wider text-bf-muted font-semibold py-2 px-2 border-b border-bf-border2; }
+  .data-table td { @apply py-2 px-2 border-b border-bf-border2; }
+  .data-table tbody tr:hover { @apply bg-bf-panel2; }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #CED4DA; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #ADB5BD; }

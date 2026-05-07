@@ -1,0 +1,6 @@
+apiVersion: v2
+name: csp-mocks
+description: BookFlow cross-CSP mock services (Azure Entra OIDC, Logic Apps, GCP Vertex AI, BigQuery)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

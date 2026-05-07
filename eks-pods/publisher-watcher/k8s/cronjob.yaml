@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: publisher-watcher
+  namespace: bookflow
+  labels:
+    app: publisher-watcher
+    component: msa-cronjob
+spec:
+  # 매 1분 (V6.3 plan 줄 25). Phase 4 에서 5분/10분 등 비용 최적화 가능.
+  schedule: "*/1 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid    # 이전 폴링 끝나기 전 새 폴링 막기
+  startingDeadlineSeconds: 50
+  jobTemplate:
+    spec:
+      backoffLimit: 1          # 한 번 실패하면 다음 cron 까지 기다림
+      ttlSecondsAfterFinished: 120
+      template:
+        metadata:
+          labels:
+            app: publisher-watcher
+        spec:
+          serviceAccountName: publisher-watcher
+          restartPolicy: OnFailure
+          containers:
+            - name: app
+              image: ${ECR_REGISTRY}/bookflow/publisher-watcher:${IMAGE_TAG}
+              imagePullPolicy: Always
+              envFrom:
+                - configMapRef:
+                    name: publisher-watcher-env
+                - secretRef:
+                    name: publisher-watcher-secret
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 192Mi

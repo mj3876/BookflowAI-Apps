@@ -1,0 +1,36 @@
+# csp-mocks · values
+# Override at install: --set ecrRegistry=ACCOUNT.dkr.ecr.REGION.amazonaws.com --set imageTag=latest
+
+namespace: stubs
+
+# ECR registry (no trailing slash). Required.
+ecrRegistry: ""
+
+# Repo prefix in ECR (full image = ${ecrRegistry}/${repoPrefix}/${name}:${imageTag})
+repoPrefix: bookflow
+
+imageTag: latest
+
+# Default resource budget (each mock is tiny FastAPI)
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# 4 mocks. Add/remove here without touching templates.
+mocks:
+  - name: azure-entra-mock
+    csp: azure
+    replicas: 1
+  - name: azure-logic-apps-mock
+    csp: azure
+    replicas: 1
+  - name: gcp-vertex-mock
+    csp: gcp
+    replicas: 1
+  - name: gcp-bigquery-mock
+    csp: gcp
+    replicas: 1

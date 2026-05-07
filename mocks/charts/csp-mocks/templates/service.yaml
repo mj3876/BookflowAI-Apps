@@ -1,0 +1,20 @@
+{{- range $mock := .Values.mocks }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $mock.name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "csp-mocks.commonLabels" (dict "root" $ "mock" $mock) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ $mock.name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+{{- end }}

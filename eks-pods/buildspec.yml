@@ -70,6 +70,9 @@ phases:
           export POD_NAME="$pod"
           for f in "$pod"/k8s/*.yaml "$pod"/k8s/*.yml; do
             [ -f "$f" ] || continue
+            # *.example.yaml/*.example.yml 은 placeholder 라 cicd 가 apply 하지 않음
+            # (실 K8s Secret 은 eks_addons.py 의 _sync_pod_secrets 가 AWS Secrets Manager 에서 동기화)
+            case "$f" in *.example.yaml|*.example.yml) echo "  skip $f (example)"; continue;; esac
             envsubst < "$f" | kubectl apply -n "$NAMESPACE" -f -
           done
         done

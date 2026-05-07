@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forecast-svc-env
+  namespace: bookflow
+data:
+  FORECAST_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  FORECAST_RDS_PORT: "5432"
+  FORECAST_RDS_DB: "bookflow"
+  FORECAST_RDS_USER: "forecast_svc"
+  FORECAST_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  FORECAST_REDIS_PORT: "6379"
+  FORECAST_AUTH_MODE: "mock"
+  FORECAST_LOG_LEVEL: "INFO"
+  AUTH_MODE: "jwt"
+  AUTH_JWT_ISSUER: "bookflow-auth-pod"
+  AUTH_JWT_AUDIENCE: "bookflow-services"

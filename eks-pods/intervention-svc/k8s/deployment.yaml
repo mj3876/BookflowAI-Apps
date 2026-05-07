@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: intervention-svc
+  namespace: bookflow
+  labels:
+    app: intervention-svc
+    component: msa-pod
+spec:
+  replicas: 1  # dev cluster (t3.medium 17-pod limit). Phase 4: 2+ replicas
+  selector:
+    matchLabels:
+      app: intervention-svc
+  template:
+    metadata:
+      labels:
+        app: intervention-svc
+        component: msa-pod
+    spec:
+      serviceAccountName: intervention-svc
+      containers:
+        - name: app
+          image: ${ECR_REGISTRY}/bookflow/intervention-svc:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+          envFrom:
+            - configMapRef:
+                name: intervention-svc-env
+            - secretRef:
+                name: intervention-svc-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 15

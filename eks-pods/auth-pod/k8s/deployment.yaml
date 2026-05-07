@@ -11,15 +11,23 @@ spec:
     metadata:
       labels: { app: ${POD_NAME} }
     spec:
+      serviceAccountName: ${POD_NAME}
       containers:
         - name: ${POD_NAME}
           image: ${ECR_REGISTRY}/${PROJECT_NAME}/${POD_NAME}:${IMAGE_TAG}
           imagePullPolicy: Always
           ports:
             - containerPort: 80
+          envFrom:
+            - configMapRef: { name: ${POD_NAME}-config }
+            - secretRef:    { name: ${POD_NAME}-secret }
           readinessProbe:
-            httpGet: { path: /, port: 80 }
+            httpGet: { path: /health, port: 80 }
             initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 80 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 200m, memory: 128Mi }
+            requests: { cpu: 100m, memory: 192Mi }
+            limits:   { cpu: 500m, memory: 384Mi }
