@@ -108,6 +108,7 @@ export type Book = {
   discontinue_reason: string | null;
   discontinue_at: string | null;
   expected_soldout_at: string | null;
+  cover_url: string | null;
 };
 export const fetchBooks = (
   role: Role,

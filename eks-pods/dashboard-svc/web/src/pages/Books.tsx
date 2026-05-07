@@ -179,6 +179,7 @@ export default function Books() {
         <table className="data-table">
           <thead>
             <tr>
+              <th className="w-[60px]">표지</th>
               <th>ISBN13</th>
               <th>제목</th>
               <th>저자</th>
@@ -192,10 +193,23 @@ export default function Books() {
           </thead>
           <tbody>
             {books.isLoading && (
-              <tr><td colSpan={9} className="text-center py-6 text-bf-muted">로딩 중…</td></tr>
+              <tr><td colSpan={10} className="text-center py-6 text-bf-muted">로딩 중…</td></tr>
             )}
             {books.data?.items.map((b) => (
               <tr key={b.isbn13}>
+                <td>
+                  {b.cover_url ? (
+                    <img
+                      src={b.cover_url}
+                      alt={b.title}
+                      className="w-[44px] h-[60px] object-cover rounded-sm border border-bf-border"
+                      loading="lazy"
+                      onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                    />
+                  ) : (
+                    <div className="w-[44px] h-[60px] bg-bf-panel2 rounded-sm border border-bf-border" />
+                  )}
+                </td>
                 <td className="font-mono text-[11px]">{b.isbn13}</td>
                 <td className="font-medium">{b.title}</td>
                 <td>{b.author ?? '-'}</td>
@@ -228,7 +242,7 @@ export default function Books() {
             ))}
             {books.data && books.data.items.length === 0 && (
               <tr>
-                <td colSpan={9} className="text-center py-10 text-bf-muted">
+                <td colSpan={10} className="text-center py-10 text-bf-muted">
                   <div className="text-sm font-medium text-bf-text mb-1">결과 없음</div>
                   <div className="text-[11px]">
                     {q ? `"${q}" 로 검색된 결과가 없습니다.` : '이 탭에 해당하는 도서가 없습니다.'}
