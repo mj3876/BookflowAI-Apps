@@ -11,12 +11,10 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
       { to: '/inventory',   label: '전사 재고',           desc: '모든 매장 재고와 부족 알림',              allow: 'HQ' },
-      { to: '/books',       label: '도서 카탈로그',       desc: '도서 검색 · 판매 ON/OFF 결정',            allow: 'HQ' },
-      { to: '/decision',    label: '의사결정 발의',       desc: '필요한 도서를 어디서 보낼지 결정 시작',    allow: 'HQ' },
+      { to: '/decision',    label: '의사결정 현황',       desc: '3단계 발주 진행 상황 + 본사 강제 승인',    allow: 'HQ' },
       { to: '/approval',    label: '외부 발주 승인',      desc: '비용 발생하는 출판사 발주 최종 승인',      allow: 'HQ' },
       { to: '/returns',     label: '반품 처리',           desc: '매장이 신청한 반품 승인 / 거부',           allow: 'HQ' },
       { to: '/requests',    label: '신간 편입 결정',      desc: '출판사 신간을 우리 매장에 들일지 결정',    allow: 'HQ' },
-      { to: '/spikes',      label: 'SNS 급등 감지',       desc: '최근 24시간 화제가 된 도서 (수요 급변)',   allow: 'HQ' },
     ],
   },
   {
@@ -42,6 +40,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: '공통',
     items: [
+      { to: '/books',         label: '도서 카탈로그',       desc: '전체 도서 검색·정보 조회 (본사만 판매 ON/OFF)', allow: 'ALL' },
+      { to: '/spikes',        label: 'SNS 급등 도서',       desc: '최근 24시간 화제가 된 도서 (수요 급변)',   allow: 'ALL' },
       { to: '/notifications', label: '알림 이력',           desc: '주문 / 시스템 이벤트 송신 이력',          allow: 'ALL' },
       { to: '/live',          label: '실시간 이벤트',       desc: '재고 변동 · 주문 · SNS 급등 실시간 스트림', allow: 'ALL' },
     ],
@@ -60,7 +60,7 @@ const PAGE_LABEL: Record<string, string> = {
   kpi: '실시간 KPI',
   inventory: '전사 재고',
   books: '도서 카탈로그',
-  decision: '의사결정',
+  decision: '의사결정 현황',
   approval: '승인 / 거절',
   returns: '반품 처리',
   requests: '신간 신청',

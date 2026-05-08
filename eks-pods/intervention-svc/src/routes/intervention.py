@@ -207,8 +207,9 @@ def queue(
         SELECT po.order_id, po.order_type, po.isbn13,
                po.source_location_id, po.target_location_id, po.qty,
                po.urgency_level, po.auto_execute_eligible, po.status, po.created_at,
-               po.forecast_rationale
+               po.forecast_rationale, b.title
           FROM pending_orders po
+          LEFT JOIN books b ON b.isbn13 = po.isbn13
          WHERE {' AND '.join(where)}
          ORDER BY po.urgency_level DESC, po.created_at ASC
          LIMIT %s
@@ -223,7 +224,7 @@ def queue(
             source_location_id=r[3], target_location_id=r[4],
             qty=r[5], urgency_level=r[6], auto_execute_eligible=r[7],
             status=r[8], created_at=r[9],
-            forecast_rationale=r[10],
+            forecast_rationale=r[10], title=r[11],
         )
         for r in rows
     ]

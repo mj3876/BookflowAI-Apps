@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..auth import AuthContext, require_auth
 from ..db import db_conn
 from ..models import ForecastResponse, ForecastRow, RefreshRequest, RefreshResponse
+# InsufficientStockItem/Response 모델은 models.py 에 정의됨 (다음 bundle 의 endpoint 에서 사용)
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
 

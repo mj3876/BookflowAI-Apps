@@ -27,6 +27,7 @@ class QueueItem(BaseModel):
     status: str
     created_at: datetime
     forecast_rationale: dict | None = None
+    title: str | None = None  # P3-1 ISBN → 제목 우선 표시 (LEFT JOIN books · 일부 ISBN 은 books 에 없을 수도)
 
 
 class QueueResponse(BaseModel):

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchPending, postIntervene, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
+import { useLocations } from '../useLocations';
 
 /**
  * 창고 승인 큐 - 자기 wh 의 Stage 1 (REBALANCE) + Stage 2 (WH_TRANSFER SOURCE/TARGET) 분리.
@@ -21,6 +22,7 @@ export default function WhApprove() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
   const [approveTarget, setApproveTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET'; isbn13: string; qty: number; isPublisher: boolean } | null>(null);
+  const { nameOf } = useLocations(role);
 
   const pending = useQuery({
     queryKey: ['pending', tab, role],
@@ -112,7 +114,7 @@ export default function WhApprove() {
           <thead>
             <tr>
               <th>긴급도</th>
-              <th>ISBN</th>
+              <th>도서</th>
               <th>출발 → 도착</th>
               {tab === 'WH_TRANSFER' && <th>나의 사이드</th>}
               <th>수량</th>
@@ -134,8 +136,15 @@ export default function WhApprove() {
                       o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
                     }>{o.urgency_level}</span>
                   </td>
-                  <td className="font-mono text-[11px]">{o.isbn13}</td>
-                  <td>{o.source_location_id ?? '-'} → {o.target_location_id ?? '-'}</td>
+                  <td>
+                    <div className="text-sm">{o.title ?? o.isbn13}</div>
+                    <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
+                  </td>
+                  <td className="text-[11px]">
+                    {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'}
+                    {' → '}
+                    {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
+                  </td>
                   {tab === 'WH_TRANSFER' && (
                     <td>{side ? <span className="pill-info">{side === 'SOURCE' ? '출고 측' : '입고 측'}</span> : <span className="text-bf-muted text-[10px]">-</span>}</td>
                   )}
