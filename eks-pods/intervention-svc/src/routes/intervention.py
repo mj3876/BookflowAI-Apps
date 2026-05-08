@@ -38,6 +38,8 @@ from ..models import (
     ReturnApproveResponse,
     ReturnRejectRequest,
     ReturnRejectResponse,
+    ReturnRequestRequest,
+    ReturnRequestResponse,
 )
 
 log = logging.getLogger(__name__)
@@ -368,6 +370,77 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
         correlation_id=str(req.order_id),
     )
     return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at)
+
+
+@router.post("/returns/request", response_model=ReturnRequestResponse)
+def returns_request(req: ReturnRequestRequest, ctx: AuthContext = Depends(require_auth)):
+    """P1-3 Branch 반품 신청 (R&R 3.2 line 143).
+
+    매장 직원이 입고 후 파손/불량/누락/계약 종료 등 발견 시 반품 신청.
+    returns INSERT status='PENDING' (default) → HQ Returns 큐 진입 + ⑩ReturnPending 알림 발행.
+
+    권한:
+      - branch-clerk: scope_store_id == location_id (자기 매장만)
+      - hq-admin: 모두 허용 (운영 보조)
+      - wh-manager: 거부 (반품은 매장 발의)
+    """
+    if ctx.role == "branch-clerk":
+        if ctx.scope_store_id is None or ctx.scope_store_id != req.location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"자기 매장만 반품 신청 가능 (scope_store_id={ctx.scope_store_id} · target={req.location_id})",
+            )
+    elif ctx.role != "hq-admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="반품 신청 권한 없음")
+
+    return_id = uuid4()
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO returns (return_id, isbn13, location_id, qty, reason)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING status, requested_at
+                """,
+                (str(return_id), req.isbn13, req.location_id, req.qty, req.reason),
+            )
+            row = cur.fetchone()
+            cur.execute(
+                """
+                INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
+                VALUES ('user', %s, 'returns.request', 'returns', %s, %s::jsonb)
+                """,
+                (ctx.user_id, str(return_id), json.dumps({
+                    "isbn13": req.isbn13, "location_id": req.location_id,
+                    "qty": req.qty, "reason": req.reason,
+                })),
+            )
+        conn.commit()
+
+    # 시트04 ⑩ReturnPending — HQ Returns 큐 진입 알림 (severity INFO)
+    _notify(
+        ctx.token, "ReturnPending",
+        severity="INFO",
+        payload={
+            "return_id": str(return_id),
+            "isbn13": req.isbn13,
+            "location_id": req.location_id,
+            "qty": req.qty,
+            "reason": req.reason,
+            "requester_role": ctx.role,
+        },
+        correlation_id=str(return_id),
+    )
+
+    return ReturnRequestResponse(
+        return_id=return_id,
+        isbn13=req.isbn13,
+        location_id=req.location_id,
+        qty=req.qty,
+        reason=req.reason,
+        status=row[0],
+        requested_at=row[1],
+    )
 
 
 @router.post("/returns/approve", response_model=ReturnApproveResponse)

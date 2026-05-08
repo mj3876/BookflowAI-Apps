@@ -25,6 +25,7 @@ from ..clients import (
     post_intervention_returns_reject,
     post_inbound_receive,
     post_inbound_reject,
+    post_intervention_returns_request,
     post_inventory_adjust,
     post_notification_send,
 )
@@ -141,6 +142,17 @@ async def inbound_reject(order_id: str, body: dict = Body(...), ctx: AuthContext
     완료 시 pending_orders.status='REJECTED' + reject_reason + WH 알림 (InboundRejected).
     """
     sc, data = await post_inbound_reject(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/returns/request")
+async def returns_request(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """P1-3 Branch 반품 신청 (intervention-svc /intervention/returns/request proxy).
+
+    body = {isbn13, location_id, qty, reason}. branch-clerk 자기 매장 only (intervention-svc 검증).
+    완료 시 returns INSERT status='PENDING' + ⑩ReturnPending 알림.
+    """
+    sc, data = await post_intervention_returns_request(body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
 
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchPending, postIntervene, type Role } from '../api';
+import ConfirmModal from '../components/ConfirmModal';
 
 /**
  * 창고 승인 큐 - 자기 wh 의 Stage 1 (REBALANCE) + Stage 2 (WH_TRANSFER SOURCE/TARGET) 분리.
@@ -18,6 +19,7 @@ export default function WhApprove() {
   const [tab, setTab] = useState<'REBALANCE' | 'WH_TRANSFER'>('REBALANCE');
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
 
   const pending = useQuery({
     queryKey: ['pending', tab, role],
@@ -61,9 +63,9 @@ export default function WhApprove() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h1 className="h1">창고 승인 큐 · 창고 {my_wh} ({my_wh === 1 ? '수도권' : '영남'})</h1>
+        <h1 className="h1">{my_wh === 1 ? '수도권' : '영남'} 권역 · 처리 대기</h1>
         <p className="text-bf-muted text-xs mt-1">
-          본인 창고 관련 PENDING 만 자동 필터 (intervention-svc 가 scope_wh_id 검증)
+          내 권역 관련 처리 대기 건만 표시됩니다. 같은 권역 내 재분배는 단독 승인, 권역 간 이동은 양쪽 권역 승인이 필요해요.
         </p>
       </div>
 
@@ -78,13 +80,13 @@ export default function WhApprove() {
           className={`px-4 py-2 text-xs font-medium border-b-2 ${tab === 'REBALANCE' ? 'border-bf-primary text-bf-primary' : 'border-transparent text-bf-muted'}`}
           onClick={() => setTab('REBALANCE')}
         >
-          Stage 1 · 재분배 (단독 승인)
+          권역 내 재분배 (단독 승인)
         </button>
         <button
           className={`px-4 py-2 text-xs font-medium border-b-2 ${tab === 'WH_TRANSFER' ? 'border-bf-primary text-bf-primary' : 'border-transparent text-bf-muted'}`}
           onClick={() => setTab('WH_TRANSFER')}
         >
-          Stage 2 · 권역 이동 (SOURCE+TARGET 양쪽 승인)
+          권역 간 이동 (양측 승인 필요)
         </button>
       </div>
 
@@ -141,10 +143,7 @@ export default function WhApprove() {
                         <button
                           className="btn-danger btn-sm"
                           disabled={busy === o.order_id}
-                          onClick={() => {
-                            const reason = window.prompt('거절 사유?', '재고 부족');
-                            if (reason) act.mutate({ order_id: o.order_id, action: 'reject', side: side as 'FINAL' | 'SOURCE' | 'TARGET', reason });
-                          }}
+                          onClick={() => setRejectTarget({ order_id: o.order_id, side: side as 'FINAL' | 'SOURCE' | 'TARGET' })}
                         >
                           거절
                         </button>
@@ -162,6 +161,26 @@ export default function WhApprove() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={rejectTarget !== null}
+        title="거절"
+        message={`처리 요청을 거절합니다 (order_id: ${rejectTarget?.order_id.slice(0, 8) ?? ''}).\n사유는 발의자에게 알림으로 전달됩니다.`}
+        confirmText="거절"
+        danger
+        withReason
+        reasonRequired
+        reasonLabel="거절 사유"
+        reasonPlaceholder="예: 재고 부족 / 출고 일정 불가 / 정책 외"
+        onConfirm={(reason) => {
+          if (rejectTarget && reason) {
+            act.mutate({ order_id: rejectTarget.order_id, action: 'reject', side: rejectTarget.side, reason });
+            setRejectTarget(null);
+          }
+        }}
+        onCancel={() => setRejectTarget(null)}
+        isLoading={act.isPending}
+      />
     </div>
   );
 }
