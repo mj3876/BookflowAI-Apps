@@ -11,6 +11,7 @@ import {
   type Role,
 } from '../api';
 import { roleGroup } from '../auth';
+import ConfirmModal from '../components/ConfirmModal';
 
 type StatusTab = 'NEW' | 'REVIEWING' | 'APPROVED' | 'REJECTED';
 
@@ -193,6 +194,7 @@ function DetailPanel({
   const [wh2, setWh2] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
+  const [showApproveConfirm, setShowApproveConfirm] = useState(false);
 
   // hint 로드되면 prefill (이미 사용자가 손대지 않았을 때만)
   useEffect(() => {
@@ -295,7 +297,7 @@ function DetailPanel({
             className="btn-primary flex-1"
             disabled={total <= 0 || approve.isPending}
             title={total <= 0 ? 'WH-1 + WH-2 합이 1 이상이어야 합니다' : ''}
-            onClick={() => approve.mutate()}
+            onClick={() => setShowApproveConfirm(true)}
           >
             {approve.isPending ? '처리 중…' : `신간 편입 결정 (총 ${total}권)`}
           </button>
@@ -321,6 +323,16 @@ function DetailPanel({
           submitting={reject.isPending}
         />
       )}
+
+      <ConfirmModal
+        open={showApproveConfirm}
+        title="신간 편입 결정"
+        message={`총 ${total}권 (수도권 ${wh1 ?? 0} + 영남 ${wh2 ?? 0}) 편입 결정 시 양쪽 권역에 발주 지시서가 자동 발송됩니다.`}
+        confirmText="편입 결정"
+        onConfirm={() => { setShowApproveConfirm(false); approve.mutate(); }}
+        onCancel={() => setShowApproveConfirm(false)}
+        isLoading={approve.isPending}
+      />
     </>
   );
 }

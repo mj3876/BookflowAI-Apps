@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchSalesBySpecificStore, type Role } from '../api';
 import { useLocations } from '../useLocations';
+import EmptyState from '../components/EmptyState';
 
 export default function BranchSales() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -88,7 +89,9 @@ export default function BranchSales() {
               </tr>
             ))}
             {items.length === 0 && (
-              <tr><td colSpan={8} className="text-center py-6 text-bf-muted">최근 트랜잭션 없음</td></tr>
+              <tr><td colSpan={8}>
+                <EmptyState message="최근 트랜잭션 없음" hint="POS 판매가 발생하면 5초 내에 여기에 표시됩니다 (pos-ingestor Lambda)" />
+              </td></tr>
             )}
           </tbody>
         </table>

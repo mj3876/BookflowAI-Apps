@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchNotifications, type Role } from '../api';
 import { ko, NOTIFICATION_STATUS_KO } from '../labels';
+import EmptyState from '../components/EmptyState';
 
 const SEVERITY_PILL: Record<string, string> = {
   CRITICAL: 'pill-rejected', WARNING: 'pill-pending', INFO: 'pill-info',
@@ -57,8 +58,10 @@ export default function Notifications() {
                 </td>
               </tr>
             ))}
-            {q.data?.items.length === 0 && (
-              <tr><td colSpan={6} className="text-center py-6 text-bf-muted">알림 없음</td></tr>
+            {q.data?.items.length === 0 && !q.isLoading && (
+              <tr><td colSpan={6}>
+                <EmptyState message="알림 없음" hint="시스템 이벤트(승인/거절/입고 등)가 발생하면 여기에 표시됩니다" />
+              </td></tr>
             )}
           </tbody>
         </table>

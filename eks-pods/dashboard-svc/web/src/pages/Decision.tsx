@@ -1,8 +1,10 @@
-import { useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchPending, postDecide, type DecideResult, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
+import ConfirmModal from '../components/ConfirmModal';
+import EmptyState from '../components/EmptyState';
 
 const LOCATIONS = [
   { id: 3, name: '강남점 (수도권)' },
@@ -20,19 +22,38 @@ const LOCATIONS = [
 ];
 
 const STAGE_LABEL: Record<number, { name: string; color: string; desc: string }> = {
-  1: { name: 'Stage 1 · 재분배', color: 'pill-info',     desc: '같은 권역 내 location 간 이동 - WH 매니저 단독 승인' },
-  2: { name: 'Stage 2 · 권역이동', color: 'pill-pending', desc: '수도권 ↔ 영남 - SOURCE/TARGET WH 양쪽 승인 필요' },
-  3: { name: 'Stage 3 · EOQ 발주', color: 'pill-rejected', desc: '외부 출판사 발주 - HQ 단독 최종 승인' },
+  1: { name: '1단계 · 권역 내 재분배', color: 'pill-info',     desc: '같은 권역 내 매장끼리 재고 이동 — 물류센터(창고 매니저) 단독 승인' },
+  2: { name: '2단계 · 권역 간 이동',   color: 'pill-pending', desc: '수도권 ↔ 영남 — 양쪽 권역 매니저 승인 필요' },
+  3: { name: '3단계 · 외부 발주',      color: 'pill-rejected', desc: '출판사에 신규 발주 — 비용 발생, 본사 단독 최종 승인 (긴급은 자동 발주)' },
 };
 
 export default function Decision() {
   const { role } = useOutletContext<{ role: Role }>();
   const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
 
   const pending = useQuery({ queryKey: ['pending', role], queryFn: () => fetchPending(role, { limit: 30 }), refetchInterval: 5000 });
 
+  // P2-5 Spike → Decision pre-fill: ?isbn=...&qty=...
   const [form, setForm] = useState({ isbn13: '', target_location_id: 3, qty: 50, note: '' });
   const [result, setResult] = useState<DecideResult | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    const qIsbn = params.get('isbn');
+    const qQty = params.get('qty');
+    const qNote = params.get('note');
+    if (qIsbn || qQty || qNote) {
+      setForm((f) => ({
+        ...f,
+        isbn13: qIsbn ?? f.isbn13,
+        qty: qQty ? Number(qQty) : f.qty,
+        note: qNote ?? f.note,
+      }));
+      // URL 정리 (한 번 적용 후 query 제거)
+      setParams({});
+    }
+  }, [params, setParams]);
 
   const decide = useMutation({
     mutationFn: () => postDecide(role, {
@@ -48,13 +69,15 @@ export default function Decision() {
     onError: (e) => alert(`실패: ${String(e)}`),
   });
 
+  const targetName = LOCATIONS.find((l) => l.id === form.target_location_id)?.name ?? `매장 ${form.target_location_id}`;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div className="lg:col-span-2 flex flex-col gap-4">
         <div>
-          <h1 className="h1">3단계 의사결정</h1>
+          <h1 className="h1">재고 결정 (3단계 자동 진행)</h1>
           <p className="text-bf-muted text-xs mt-1">
-            decision-svc 자동 cascade · ISBN/도착지/수량 입력 → Stage 1 (재분배) → Stage 2 (권역이동) → Stage 3 (EOQ 발주) 순으로 자동 시도
+            ISBN/도착 매장/수량을 입력하면 자동으로 1단계(권역 내 재분배) → 2단계(권역 간 이동) → 3단계(외부 발주) 순으로 가능 여부를 확인하고 결정해요.
           </p>
         </div>
 
@@ -71,8 +94,8 @@ export default function Decision() {
 
         <div className="card">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="h2">PENDING 결정 큐</h2>
-            <span className="label-tag">5초 polling · role 자동 필터</span>
+            <h2 className="h2">처리 대기 큐</h2>
+            <span className="label-tag">5초마다 자동 갱신</span>
           </div>
           <table className="data-table">
             <thead>
@@ -91,10 +114,15 @@ export default function Decision() {
                   <td className="font-mono text-[11px]">{o.isbn13}</td>
                   <td>{o.source_location_id ?? '-'} → {o.target_location_id ?? '-'}</td>
                   <td>{o.qty}권</td>
-                  <td className="text-bf-muted">-</td>
+                  <td className="text-bf-muted">{o.auto_execute_eligible ? '✓' : '-'}</td>
                   <td className="text-bf-muted">{new Date(o.created_at).toLocaleString('ko-KR')}</td>
                 </tr>
               ))}
+              {(pending.data?.items.length ?? 0) === 0 && !pending.isLoading && (
+                <tr><td colSpan={7}>
+                  <EmptyState message="처리 대기 결정 없음" hint="새 결정을 발의하면 cascade 결과가 여기에 표시됩니다" />
+                </td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -102,8 +130,10 @@ export default function Decision() {
 
       <div className="flex flex-col gap-4">
         <div className="card">
-          <h2 className="h2 mb-3">신규 의사결정</h2>
-          <p className="text-[11px] text-bf-muted mb-3">백엔드가 inventory + forecast_cache 조회 후 Stage 자동 결정</p>
+          <h2 className="h2 mb-3">새 결정 발의</h2>
+          <p className="text-[11px] text-bf-muted mb-3">
+            매장 재고 + 24h 매출 + 예측 수요를 종합해 백엔드가 가능한 단계를 자동 선택합니다.
+          </p>
           <div className="space-y-3">
             <div>
               <div className="label-tag mb-1">도서 ISBN13</div>
@@ -146,9 +176,9 @@ export default function Decision() {
             <button
               className="btn-primary w-full"
               disabled={!form.isbn13 || decide.isPending}
-              onClick={() => decide.mutate()}
+              onClick={() => setConfirmOpen(true)}
             >
-              {decide.isPending ? '결정 중…' : '3단계 의사결정 시작'}
+              {decide.isPending ? '결정 중…' : '결정 시작'}
             </button>
           </div>
         </div>
@@ -179,6 +209,16 @@ export default function Decision() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={confirmOpen}
+        title="결정 발의 확인"
+        message={`도서 ${form.isbn13}\n도착: ${targetName}\n수량: ${form.qty}권\n\n3단계 자동 cascade 가 시작됩니다 (3단계 도달 시 외부 발주 → 비용 발생).`}
+        confirmText="발의"
+        onConfirm={() => { setConfirmOpen(false); decide.mutate(); }}
+        onCancel={() => setConfirmOpen(false)}
+        isLoading={decide.isPending}
+      />
     </div>
   );
 }

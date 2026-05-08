@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { postInventoryAdjust, type Role } from '../api';
 import InlineMessage from '../components/InlineMessage';
+import ConfirmModal from '../components/ConfirmModal';
 import { useLocations } from '../useLocations';
 
 const REASONS = ['파손', '분실', '도난', '입고 누락', '폐기', '기타'];
@@ -22,6 +23,7 @@ export default function Manual({ scope }: { scope: 'WH' | 'BRANCH' }) {
     note: '',
   });
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const { items: locItems, nameOf } = useLocations(role);
   const locOptions = locItems.filter((l) =>
     isWh ? l.location_type === 'WH' : l.location_type !== 'WH'
@@ -126,12 +128,23 @@ export default function Manual({ scope }: { scope: 'WH' | 'BRANCH' }) {
           <button
             className="btn-primary w-full"
             disabled={!form.isbn13 || form.delta === 0 || submit.isPending}
-            onClick={() => submit.mutate()}
+            onClick={() => setConfirmOpen(true)}
           >
             {submit.isPending ? '처리 중…' : '조정 제출'}
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={confirmOpen}
+        title="재고 수동 조정 확인"
+        message={`도서 ${form.isbn13}\n위치: ${nameOf(form.location_id)}\n변경: ${form.delta > 0 ? '+' : ''}${form.delta}권 (${form.reason})\n\nsingle writer 룰: 모든 변경은 audit_log 에 기록됩니다.`}
+        confirmText="조정 제출"
+        danger={form.delta < 0}
+        onConfirm={() => { setConfirmOpen(false); submit.mutate(); }}
+        onCancel={() => setConfirmOpen(false)}
+        isLoading={submit.isPending}
+      />
 
       <div className="card-tight bg-bf-card text-bf-muted">
         <div className="text-xs">
