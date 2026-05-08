@@ -350,6 +350,12 @@ export type InboundReceiveResult = {
 export const postInboundReceive = (role: Role, order_id: string) =>
   postJson<InboundReceiveResult>(`/dashboard/inbound/${order_id}/receive`, role, {});
 
+// P1-2 매장 입고 거부 — reject_reason 필수 (수량 불일치/파손/누락 등)
+export const postInboundReject = (role: Role, order_id: string, reject_reason: string) =>
+  postJson<{ order_id: string; status: string; isbn13: string; qty: number; reject_reason: string }>(
+    `/dashboard/inbound/${order_id}/reject`, role, { reject_reason },
+  );
+
 export const postReturnsApprove = (role: Role, body: { return_id: string; note?: string }) =>
   postJson<{ return_id: string; status: string; hq_approved_at: string }>('/dashboard/returns/approve', role, body);
 

@@ -24,7 +24,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from ..auth import AuthContext, require_auth
 from ..db import db_conn
@@ -776,4 +776,103 @@ def receive_inbound(order_id: str, ctx: AuthContext = Depends(require_auth)):
         "isbn13": isbn13,
         "qty": qty,
         "inventory_adjust": inv_status,
+    }
+
+
+# ─── A1 inbound reject (FR-A6.6 · 수량 불일치/파손/누락) ──────────────────────────────────
+@router.post("/inbound/{order_id}/reject")
+def reject_inbound(
+    order_id: str,
+    body: dict = Body(...),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """매장/창고 입고 거부 — pending_orders.status='REJECTED' + audit_log + notification.
+
+    Body: {"reject_reason": "...수량 불일치/파손/누락 사유"}
+
+    권한:
+      - branch-clerk: scope_store_id == target_location_id
+      - wh-manager:   scope_wh_id   == target_wh
+      - hq-admin:     모두 허용
+
+    재고 변동 없음 (single writer 룰 — 수령 X). WH 에 알림 발행 → 후속 처리 (재출고 또는 반품).
+    """
+    reject_reason = (body.get("reject_reason") or "").strip()
+    if not reject_reason:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reject_reason 필수")
+
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT order_type, target_location_id, qty, isbn13, status
+                     FROM pending_orders WHERE order_id = %s""",
+                (order_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+            order_type, target_loc, qty, isbn13, st = row
+            if st != "APPROVED":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"입고 거부는 APPROVED 상태에서만 가능 (현재 status={st})",
+                )
+            target_wh = _location_wh(cur, target_loc)
+
+            # 권한 (수령과 동일 매트릭스)
+            if ctx.role == "branch-clerk":
+                if ctx.scope_store_id is None or ctx.scope_store_id != target_loc:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"자기 매장만 거부 가능 (scope_store_id={ctx.scope_store_id} · target={target_loc})",
+                    )
+            elif ctx.role == "wh-manager":
+                if ctx.scope_wh_id is None or ctx.scope_wh_id != target_wh:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"자기 권역만 거부 가능 (scope_wh_id={ctx.scope_wh_id} · target_wh={target_wh})",
+                    )
+            elif ctx.role != "hq-admin":
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="입고 거부 권한 없음")
+
+            # pending_orders 에 rejected_at 컬럼 없음 (schema). reject_reason VARCHAR(50) 만 있음.
+            # 거부 시점은 audit_log 의 created_at 으로 추적.
+            cur.execute(
+                """UPDATE pending_orders SET status='REJECTED', reject_reason=%s
+                    WHERE order_id = %s""",
+                (reject_reason[:50], order_id),
+            )
+            cur.execute(
+                """INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
+                   VALUES ('user', %s, 'inbound.reject', 'pending_orders', %s, %s::jsonb)""",
+                (ctx.user_id, order_id, json.dumps({
+                    "status": "REJECTED", "qty": qty, "isbn13": isbn13,
+                    "target_location_id": target_loc, "reject_reason": reject_reason,
+                })),
+            )
+        conn.commit()
+
+    # WH 에 알림 발행 (시트04 변형 · severity WARNING)
+    _notify(
+        ctx.token,
+        "InboundRejected",
+        severity="WARNING",
+        payload={
+            "order_id": order_id,
+            "order_type": order_type,
+            "isbn13": isbn13,
+            "qty": qty,
+            "target_location_id": target_loc,
+            "target_wh_id": target_wh,
+            "reject_reason": reject_reason,
+        },
+        correlation_id=order_id,
+    )
+
+    return {
+        "order_id": order_id,
+        "status": "REJECTED",
+        "isbn13": isbn13,
+        "qty": qty,
+        "reject_reason": reject_reason,
     }

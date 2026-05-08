@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchInstructions, postInboundReceive, postIntervene, type Role } from '../api';
+import { fetchInstructions, postInboundReceive, postInboundReject, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
@@ -45,12 +45,11 @@ export default function BranchInbound() {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [receiveTarget, setReceiveTarget] = useState<{ order_id: string; qty: number } | null>(null);
 
+  // P1-2 입고 거부 — intervention-svc /inbound/{order_id}/reject 호출 (별도 endpoint).
+  // 이전 postIntervene 'reject' 는 의사결정 큐 거부였어서 mismatch 였음 (Phase C 갭 list G4).
   const reject = useMutation({
-    mutationFn: async (body: { order_id: string; approval_side: 'FINAL'; reject_reason: string }) => {
-      const r = await postIntervene(role, 'reject', body);
-      if (r.detail) throw new Error(r.detail);
-      return r;
-    },
+    mutationFn: ({ order_id, reject_reason }: { order_id: string; reject_reason: string }) =>
+      postInboundReject(role, order_id, reject_reason),
     onSuccess: () => {
       setFeedback({ type: 'success', msg: '거부 처리됨 — 물류센터에 통보되었습니다' });
       setRejectTarget(null);
@@ -94,7 +93,6 @@ export default function BranchInbound() {
     const reasonText = note ? `${reason}: ${note}`.slice(0, 50) : reason;
     reject.mutate({
       order_id: rejectTarget.order_id,
-      approval_side: 'FINAL',
       reject_reason: reasonText,
     });
   };

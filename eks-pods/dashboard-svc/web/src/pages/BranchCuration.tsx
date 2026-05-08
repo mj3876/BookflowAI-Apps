@@ -1,10 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchCuration, type Role } from '../api';
+import { fetchCuration, postNotifySend, type Role } from '../api';
 import { useScope } from '../auth';
 import { useLocations } from '../useLocations';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
+import ConfirmModal from '../components/ConfirmModal';
+
+type RequestTarget = { isbn13: string; title: string };
 
 export default function BranchCuration() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -12,11 +16,34 @@ export default function BranchCuration() {
   const { nameOf } = useLocations(role);
   const my_store = scope_store_id ?? 1;  // hq-admin 등은 fallback
 
+  const [target, setTarget] = useState<RequestTarget | null>(null);
+  const [resultMsg, setResultMsg] = useState<string | null>(null);
+
   const q = useQuery({
     queryKey: ['curation', my_store, role],
     queryFn: () => fetchCuration(role, my_store),
     refetchInterval: 30000,
     enabled: my_store > 0,
+  });
+
+  const requestMu = useMutation({
+    mutationFn: (t: RequestTarget) =>
+      postNotifySend(role, {
+        event_type: 'StockArrivalPending',
+        severity: 'INFO',
+        payload: {
+          isbn13: t.isbn13,
+          title: t.title,
+          store_id: my_store,
+          store_name: nameOf(my_store),
+        },
+      }),
+    onSuccess: (_, t) => {
+      setTarget(null);
+      setResultMsg(`물류센터에 입고 요청 알림을 보냈어요 — ${t.title}`);
+      setTimeout(() => setResultMsg(null), 4000);
+    },
+    onError: (e: Error) => alert(`입고 요청 실패: ${e.message}`),
   });
 
   return (
@@ -116,8 +143,8 @@ export default function BranchCuration() {
                       <button
                         type="button"
                         className="btn-outline btn-sm"
-                        title="물류센터에 입고 요청 (현재는 알림 표시만)"
-                        onClick={() => alert(`[입고 요청] ${c.title ?? c.isbn13}\n매장: ${nameOf(my_store)}\n\n구현 예정: notification-svc 통해 물류센터 알림.`)}
+                        title="물류센터에 입고 요청 알림 (notification-svc → Logic Apps)"
+                        onClick={() => setTarget({ isbn13: c.isbn13, title: c.title ?? c.isbn13 })}
                       >
                         입고 요청
                       </button>
@@ -129,6 +156,23 @@ export default function BranchCuration() {
           })}
         </div>
       </div>
+
+      {resultMsg && (
+        <div className="card-tight bg-bf-success/10 border-bf-success text-bf-success text-xs">
+          {resultMsg}
+        </div>
+      )}
+
+      <ConfirmModal
+        open={!!target}
+        title="입고 요청"
+        message={target ? `"${target.title}" 을(를) 매장 ${nameOf(my_store)} 으로 입고 요청 알림을 물류센터에 보냅니다.` : ''}
+        confirmText="요청 보내기"
+        cancelText="취소"
+        onConfirm={() => target && requestMu.mutate(target)}
+        onCancel={() => setTarget(null)}
+        isLoading={requestMu.isPending}
+      />
     </div>
   );
 }

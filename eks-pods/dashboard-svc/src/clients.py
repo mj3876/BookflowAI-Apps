@@ -100,6 +100,16 @@ async def post_inbound_receive(order_id: str, token: str) -> tuple[int, Any]:
     )
 
 
+async def post_inbound_reject(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    """P1-2 매장 입고 거부 — intervention-svc /intervention/inbound/{order_id}/reject 프록시.
+
+    body = {reject_reason: str}. 거부 후 pending_orders.status='REJECTED' + WH 알림.
+    """
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/inbound/{order_id}/reject", body, token
+    )
+
+
 async def post_intervention_approve(body: dict, token: str) -> tuple[int, Any]:
     return await _safe_post(f"{settings.intervention_svc_url}/intervention/approve", body, token)
 

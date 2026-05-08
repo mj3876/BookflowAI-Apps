@@ -24,6 +24,7 @@ from ..clients import (
     post_intervention_returns_approve,
     post_intervention_returns_reject,
     post_inbound_receive,
+    post_inbound_reject,
     post_inventory_adjust,
     post_notification_send,
 )
@@ -129,6 +130,17 @@ async def inbound_receive(order_id: str, ctx: AuthContext = Depends(require_auth
     완료 시 status=EXECUTED + inventory.on_hand += qty (intervention 내부에서 inventory-svc 호출).
     """
     sc, data = await post_inbound_receive(order_id, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/inbound/{order_id}/reject")
+async def inbound_reject(order_id: str, body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """P1-2 매장 입고 거부 — intervention-svc /intervention/inbound/{order_id}/reject 프록시.
+
+    body = {reject_reason: str}. 권한 = receive 와 동일 (branch-clerk 자기 매장 / wh-manager 자기 권역 / hq-admin).
+    완료 시 pending_orders.status='REJECTED' + reject_reason + WH 알림 (InboundRejected).
+    """
+    sc, data = await post_inbound_reject(order_id, body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
 
 
