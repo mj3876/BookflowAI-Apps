@@ -296,7 +296,7 @@ function DetailPanel({
           <button
             className="btn-primary flex-1"
             disabled={total <= 0 || approve.isPending}
-            title={total <= 0 ? 'WH-1 + WH-2 합이 1 이상이어야 합니다' : ''}
+            title={total <= 0 ? '수도권 + 영남 권역 분배 합이 1 이상이어야 합니다' : ''}
             onClick={() => setShowApproveConfirm(true)}
           >
             {approve.isPending ? '처리 중…' : `신간 편입 결정 (총 ${total}권)`}

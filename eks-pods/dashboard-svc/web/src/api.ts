@@ -42,11 +42,14 @@ export type PendingOrder = {
   target_location_id: number | null;
   qty: number;
   urgency_level: string;
+  auto_execute_eligible: boolean;
   status: string;
   created_at: string;
   // decision-svc 가 채운 의사결정 근거 (Stage 1 effective / Stage 2 partner_surplus / Stage 3 EOQ).
   // intervention-svc /queue 에서 반환 (UX-4 / FR-A5.6).
   forecast_rationale?: Record<string, unknown> | null;
+  // P3-1 ISBN → 제목 우선 표시 (intervention-svc 가 LEFT JOIN books 로 채움)
+  title?: string | null;
 };
 
 export const fetchOverview = (whId: number, role: Role) =>

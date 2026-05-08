@@ -71,7 +71,7 @@ export default function Approval() {
         </div>
         <table className="data-table">
           <thead>
-            <tr><th>긴급도</th><th>ISBN</th><th>도착</th><th>수량</th><th>생성</th><th className="text-right">액션</th></tr>
+            <tr><th>긴급도</th><th>도서</th><th>도착</th><th>수량</th><th>생성</th><th className="text-right">액션</th></tr>
           </thead>
           <tbody>
             {pending.data?.items.map((o) => (
@@ -82,7 +82,10 @@ export default function Approval() {
                     o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
                   }>{o.urgency_level}</span>
                 </td>
-                <td className="font-mono text-[11px]">{o.isbn13}</td>
+                <td>
+                  <div className="text-sm">{o.title ?? o.isbn13}</div>
+                  <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
+                </td>
                 <td>{nameOf(o.target_location_id)}</td>
                 <td>{o.qty}</td>
                 <td className="text-bf-muted">{new Date(o.created_at).toLocaleString()}</td>

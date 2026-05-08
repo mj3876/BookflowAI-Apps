@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchInventoryHeatmap, fetchOverview, fetchSalesByStore, type LocationCell, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
+import { useLocations } from '../useLocations';
 
 // 부족률 (low_count / sku_count) 기반 히트맵 색상.
 // 0% green / <5% yellow / <15% orange / 15%+ red. 데이터 없으면 회색.
@@ -23,6 +24,7 @@ function locationLabel(c: LocationCell): string {
 export default function WhDashboard() {
   const { role } = useOutletContext<{ role: Role }>();
   const wh_id = role === 'wh-manager-2' ? 2 : 1;
+  const { nameOf } = useLocations(role);
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
   const byStore = useQuery({ queryKey: ['byStore', role], queryFn: () => fetchSalesByStore(role), refetchInterval: 5000 });
@@ -161,8 +163,15 @@ export default function WhDashboard() {
                   }>{ko(URGENCY_KO, o.urgency_level)}</span>
                 </td>
                 <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
-                <td className="font-mono text-[11px]">{o.isbn13}</td>
-                <td>{o.source_location_id ?? '-'} → {o.target_location_id ?? '-'}</td>
+                <td>
+                  <div className="text-sm">{o.title ?? o.isbn13}</div>
+                  <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
+                </td>
+                <td className="text-[11px]">
+                  {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'}
+                  {' → '}
+                  {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
+                </td>
                 <td>{o.qty}권</td>
                 <td className="text-bf-muted">{new Date(o.created_at).toLocaleString('ko-KR')}</td>
               </tr>
