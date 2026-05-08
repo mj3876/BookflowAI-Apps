@@ -425,3 +425,18 @@ export const postNewBookReject = (
 
 export const postNotifySend = (role: Role, body: unknown) =>
   postJson<{ notification_id: string; status: string; sent_at: string }>('/dashboard/notify/send', role, body);
+
+// P1-4b 시연 trigger: 예측 수요 > 가용 재고 인 도서 list (HQ 만 호출)
+export type InsufficientStockItem = {
+  isbn13: string;
+  title: string | null;
+  store_id: number;
+  predicted_demand: number;
+  available: number;
+  gap: number;
+  suggested_qty: number;
+};
+export const fetchInsufficientStock = (role: Role, limit = 20) =>
+  getJson<{ snapshot_date: string; items: InsufficientStockItem[] }>(
+    `/dashboard/forecast/insufficient?limit=${limit}`, role,
+  );

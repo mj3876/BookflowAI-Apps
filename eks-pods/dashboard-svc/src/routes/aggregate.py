@@ -23,6 +23,7 @@ from ..clients import (
     post_intervention_reject,
     post_intervention_returns_approve,
     post_intervention_returns_reject,
+    get_insufficient_stock,
     post_inbound_receive,
     post_inbound_reject,
     post_intervention_returns_request,
@@ -121,6 +122,18 @@ async def inventory_adjust(body: dict = Body(...), ctx: AuthContext = Depends(re
     """
     sc, data = await post_inventory_adjust(body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "inventory-svc unavailable"})
+
+
+@router.get("/forecast/insufficient")
+async def forecast_insufficient(limit: int = 20, ctx: AuthContext = Depends(require_auth)):
+    """P1-4b 시연 trigger — forecast-svc /forecast/insufficient-stock 프록시.
+
+    HQ 만 호출 (시연 자동 cascade 일괄 발의용 list).
+    """
+    if ctx.role != "hq-admin":
+        return JSONResponse(status_code=403, content={"detail": "본사만 가능"})
+    data = await get_insufficient_stock(ctx.token, limit)
+    return JSONResponse(content=data or {"items": [], "snapshot_date": None})
 
 
 @router.post("/inbound/{order_id}/receive")

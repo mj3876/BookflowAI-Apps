@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchPending, postIntervene, type Role } from '../api';
+import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, type InsufficientStockItem, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
@@ -52,15 +52,68 @@ export default function Decision() {
     onError: (e) => alert(`강제 승인 실패: ${String(e)}`),
   });
 
+  // P1-4b 시연 trigger — 예측 부족 도서 자동 cascade 일괄 발의 (HQ 만)
+  const [demoOpen, setDemoOpen] = useState(false);
+  const [demoResult, setDemoResult] = useState<string | null>(null);
+  const insufficient = useQuery({
+    queryKey: ['insufficient', role],
+    queryFn: () => fetchInsufficientStock(role, 10),
+    enabled: role === 'hq-admin' && demoOpen,
+  });
+
+  const triggerDemo = useMutation({
+    mutationFn: async (items: InsufficientStockItem[]) => {
+      let s1 = 0, s2 = 0, s3 = 0;
+      for (const it of items) {
+        try {
+          const r = await postDecide(role, {
+            isbn13: it.isbn13,
+            target_location_id: it.store_id,
+            qty: it.suggested_qty,
+            note: '시연용 자동 cascade · 예측 부족',
+          });
+          if (r.stage === 1) s1++;
+          else if (r.stage === 2) s2++;
+          else if (r.stage === 3) s3++;
+        } catch { /* skip */ }
+      }
+      return { total: items.length, s1, s2, s3 };
+    },
+    onSuccess: (r) => {
+      setDemoResult(`${r.total}건 처리 — 1단계 ${r.s1} · 2단계 ${r.s2} · 3단계 ${r.s3}`);
+      setDemoOpen(false);
+      qc.invalidateQueries({ queryKey: ['pending-all'] });
+      setTimeout(() => setDemoResult(null), 8000);
+    },
+    onError: (e) => alert(`자동 발의 실패: ${String(e)}`),
+  });
+
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="h1">의사결정 플로우 현황</h1>
-        <p className="text-bf-muted text-xs mt-1">
-          현재 진행 중인 모든 발주 결정의 단계와 처리 상황. 자동 cascade (수요 예측·SNS 급등·매장 요청)로 발의되며,
-          {role === 'hq-admin' ? ' 본사는 필요 시 다른 역할의 승인을 기다리지 않고 강제 승인 (escalation) 할 수 있어요.' : ' 권한이 있는 행만 처리 가능합니다.'}
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="h1">의사결정 플로우 현황</h1>
+          <p className="text-bf-muted text-xs mt-1">
+            현재 진행 중인 모든 발주 결정의 단계와 처리 상황. 자동 cascade (수요 예측·SNS 급등·매장 요청)로 발의되며,
+            {role === 'hq-admin' ? ' 본사는 필요 시 다른 역할의 승인을 기다리지 않고 강제 승인 (escalation) 할 수 있어요.' : ' 권한이 있는 행만 처리 가능합니다.'}
+          </p>
+        </div>
+        {role === 'hq-admin' && (
+          <button
+            className="btn-outline btn-sm shrink-0"
+            title="시연용 — 예측 부족 도서 자동 cascade 일괄 발의 (각 단계의 처리 대기를 만들어 다른 역할이 승인 흐름 검증)"
+            onClick={() => setDemoOpen(true)}
+          >
+            시연: 예측 자동 발의
+          </button>
+        )}
       </div>
+
+      {demoResult && (
+        <div className="card-tight bg-bf-success/10 border-bf-success text-bf-success text-xs">
+          ✓ {demoResult}
+        </div>
+      )}
 
       {/* Stage 별 카운트 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -148,6 +201,56 @@ export default function Decision() {
           </tbody>
         </table>
       </div>
+
+      {/* 시연 trigger 모달 — 예측 부족 도서 list 보여주고 일괄 cascade 발의 */}
+      {demoOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setDemoOpen(false)}>
+          <div className="bg-bf-bg border border-bf-border rounded-lg p-5 w-full max-w-2xl max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="h2 mb-2">시연: 예측 부족 도서 자동 발의</h3>
+            <p className="text-xs text-bf-muted mb-3">
+              forecast-svc 가 detect 한 "예측 수요 &gt; 현 가용 재고" 인 도서. 한 번 클릭으로 각 도서 cascade 자동 발의 (1단계→2단계→3단계).
+              결과 pending_orders 가 생성되어 각 역할이 들어가 승인 흐름 검증 가능.
+            </p>
+            {insufficient.isLoading && <div className="text-xs text-bf-muted">조회 중…</div>}
+            {insufficient.data && (
+              <>
+                <div className="text-[11px] text-bf-muted mb-2">
+                  snapshot {insufficient.data.snapshot_date} · 부족 도서 {insufficient.data.items.length}건
+                </div>
+                <table className="data-table text-[11px]">
+                  <thead>
+                    <tr><th>도서</th><th>매장</th><th className="text-right">예측</th><th className="text-right">가용</th><th className="text-right">제안 발주</th></tr>
+                  </thead>
+                  <tbody>
+                    {insufficient.data.items.map((it) => (
+                      <tr key={`${it.isbn13}-${it.store_id}`}>
+                        <td>{it.title ?? it.isbn13}</td>
+                        <td>{nameOf(it.store_id)}</td>
+                        <td className="text-right">{it.predicted_demand.toFixed(1)}</td>
+                        <td className="text-right">{it.available}</td>
+                        <td className="text-right font-semibold">{it.suggested_qty}권</td>
+                      </tr>
+                    ))}
+                    {insufficient.data.items.length === 0 && (
+                      <tr><td colSpan={5} className="text-center py-4 text-bf-muted">부족 도서 없음 (시드 forecast_cache 확인 필요)</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setDemoOpen(false)}>취소</button>
+              <button
+                className="btn-primary"
+                disabled={triggerDemo.isPending || !insufficient.data || insufficient.data.items.length === 0}
+                onClick={() => insufficient.data && triggerDemo.mutate(insufficient.data.items)}
+              >
+                {triggerDemo.isPending ? '처리 중…' : `${insufficient.data?.items.length ?? 0}건 일괄 발의`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfirmModal
         open={escalateTarget !== null}

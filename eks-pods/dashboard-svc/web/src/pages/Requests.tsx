@@ -13,13 +13,12 @@ import {
 import { roleGroup } from '../auth';
 import ConfirmModal from '../components/ConfirmModal';
 
-type StatusTab = 'NEW' | 'REVIEWING' | 'APPROVED' | 'REJECTED';
+// 사용자 정정 (2026-05-08): 4 탭 → 2 탭 단순화 (대기중 = NEW+FETCHED · 처리완료 = APPROVED+REJECTED)
+type StatusTab = 'PENDING' | 'DONE';
 
 const TABS: { key: StatusTab; label: string; hint: string }[] = [
-  { key: 'NEW',       label: '신규',     hint: '출판사 신간 신청 도착 직후' },
-  { key: 'REVIEWING', label: '검토중',   hint: '본사가 자료 확인 중' },
-  { key: 'APPROVED',  label: '편입완료', hint: '본사 편입 결정 + 발주 지시서 발송 완료' },
-  { key: 'REJECTED',  label: '거절',     hint: '본사가 편입 거절' },
+  { key: 'PENDING', label: '대기중',   hint: '신규 신청 + 검토중 (본사 결정 필요)' },
+  { key: 'DONE',    label: '처리완료', hint: '편입 완료 + 거절' },
 ];
 
 // DB status → 한글 라벨
@@ -30,13 +29,10 @@ const STATUS_KO: Record<string, string> = {
   REJECTED: '거절',
 };
 
-// new_book_requests.status 값 매핑 - 'FETCHED' 도 검토중 탭으로 묶어 표시.
+// new_book_requests.status 값 → 2 bucket 매핑
 function bucketOf(status: string): StatusTab {
-  if (status === 'NEW')      return 'NEW';
-  if (status === 'FETCHED')  return 'REVIEWING';
-  if (status === 'APPROVED') return 'APPROVED';
-  if (status === 'REJECTED') return 'REJECTED';
-  return 'NEW';
+  if (status === 'NEW' || status === 'FETCHED') return 'PENDING';
+  return 'DONE';
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -51,7 +47,7 @@ export default function Requests() {
   const { role } = useOutletContext<{ role: Role }>();
   const isHQ = roleGroup(role) === 'HQ';
 
-  const [tab, setTab] = useState<StatusTab>('NEW');
+  const [tab, setTab] = useState<StatusTab>('PENDING');
   const [selected, setSelected] = useState<NewBookRequest | null>(null);
 
   const list = useQuery({
@@ -62,7 +58,7 @@ export default function Requests() {
   });
 
   const filtered = (list.data?.items ?? []).filter((r) => bucketOf(r.status) === tab);
-  const tabCounts: Record<StatusTab, number> = { NEW: 0, REVIEWING: 0, APPROVED: 0, REJECTED: 0 };
+  const tabCounts: Record<StatusTab, number> = { PENDING: 0, DONE: 0 };
   for (const r of list.data?.items ?? []) tabCounts[bucketOf(r.status)] += 1;
 
   // Auto-select first row when tab changes / new data arrives
@@ -123,10 +119,8 @@ export default function Requests() {
                       이 탭에 요청 없음
                     </div>
                     <div className="text-[11px]">
-                      {tab === 'NEW' && '출판사가 새 신청을 보내면 여기에 표시됩니다 (1분 주기 갱신).'}
-                      {tab === 'REVIEWING' && '본사가 자료를 확인 중인 요청만 표시됩니다.'}
-                      {tab === 'APPROVED' && '본사가 편입 결정한 요청 + 권역별 발주 수량.'}
-                      {tab === 'REJECTED' && '본사가 거절한 요청 + 사유.'}
+                      {tab === 'PENDING' && '출판사가 새 신청을 보내면 여기에 표시됩니다 (1분 주기 갱신).'}
+                      {tab === 'DONE' && '본사가 편입 결정 또는 거절 처리한 요청 (수량/사유 포함).'}
                     </div>
                   </td>
                 </tr>

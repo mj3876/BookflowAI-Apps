@@ -100,6 +100,13 @@ async def post_inbound_receive(order_id: str, token: str) -> tuple[int, Any]:
     )
 
 
+async def get_insufficient_stock(token: str, limit: int = 20) -> dict | None:
+    """P1-4b 시연 trigger — forecast-svc /forecast/insufficient-stock 프록시."""
+    return await _safe_get(
+        f"{settings.forecast_svc_url}/forecast/insufficient-stock?limit={limit}", token
+    )
+
+
 async def post_inbound_reject(order_id: str, body: dict, token: str) -> tuple[int, Any]:
     """P1-2 매장 입고 거부 — intervention-svc /intervention/inbound/{order_id}/reject 프록시.
 
