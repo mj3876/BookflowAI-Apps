@@ -4,6 +4,7 @@ import { useOutletContext } from 'react-router-dom';
 import { fetchReturns, postReturnsApprove, postReturnsReject, type Role } from '../api';
 import { ko, RETURN_STATUS_KO } from '../labels';
 import { useLocations } from '../useLocations';
+import ConfirmModal from '../components/ConfirmModal';
 
 const RETURN_REASON_KO: Record<string, string> = {
   CUSTOMER:             '고객 반품',
@@ -17,6 +18,7 @@ export default function Returns() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const { nameOf } = useLocations(role);
 
   const q = useQuery({ queryKey: ['returns', role], queryFn: () => fetchReturns(role, 50), refetchInterval: 8000 });
@@ -103,12 +105,7 @@ export default function Returns() {
                       <button
                         className="btn-danger btn-sm"
                         disabled={busy === r.return_id}
-                        onClick={() => {
-                          const reason = window.prompt('거부 사유? (최대 200자)', '재고 회수 보류');
-                          if (reason && reason.trim()) {
-                            reject.mutate({ return_id: r.return_id, reject_reason: reason.trim() });
-                          }
-                        }}
+                        onClick={() => setRejectTarget(r.return_id)}
                       >
                         거부
                       </button>
@@ -125,6 +122,26 @@ export default function Returns() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={rejectTarget !== null}
+        title="반품 거부"
+        message={`반품 요청을 거부합니다 (return_id: ${rejectTarget?.slice(0, 8) ?? ''}).\n매장에 거부 사유와 함께 알림이 전송됩니다.`}
+        confirmText="거부"
+        danger
+        withReason
+        reasonRequired
+        reasonLabel="거부 사유 (최대 200자)"
+        reasonPlaceholder="예: 재고 회수 보류 / 추가 검수 필요 / 정책 외"
+        onConfirm={(reason) => {
+          if (rejectTarget && reason) {
+            reject.mutate({ return_id: rejectTarget, reject_reason: reason });
+            setRejectTarget(null);
+          }
+        }}
+        onCancel={() => setRejectTarget(null)}
+        isLoading={reject.isPending}
+      />
     </div>
   );
 }

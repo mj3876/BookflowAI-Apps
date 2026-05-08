@@ -356,6 +356,16 @@ export const postInboundReject = (role: Role, order_id: string, reject_reason: s
     `/dashboard/inbound/${order_id}/reject`, role, { reject_reason },
   );
 
+// P1-3 Branch 반품 신청 — branch-clerk only (scope_store_id == location_id)
+export const postReturnsRequest = (
+  role: Role,
+  body: { isbn13: string; location_id: number; qty: number; reason: string },
+) =>
+  postJson<{
+    return_id: string; isbn13: string; location_id: number; qty: number;
+    reason: string; status: string; requested_at: string;
+  }>('/dashboard/returns/request', role, body);
+
 export const postReturnsApprove = (role: Role, body: { return_id: string; note?: string }) =>
   postJson<{ return_id: string; status: string; hq_approved_at: string }>('/dashboard/returns/approve', role, body);
 

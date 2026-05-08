@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchPending, postIntervene, type Role } from '../api';
 import { useLocations } from '../useLocations';
+import ConfirmModal from '../components/ConfirmModal';
 
 /**
  * HQ Approval - Stage 3 (PUBLISHER_ORDER) 단독 최종 승인.
@@ -13,6 +14,7 @@ export default function Approval() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const { nameOf } = useLocations(role);
 
   // PUBLISHER_ORDER 만 필터 (HQ 가 처리할 외부 발주)
@@ -49,9 +51,9 @@ export default function Approval() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h1 className="h1">Stage 3 · 외부 발주 최종 승인</h1>
+        <h1 className="h1">외부 발주 (출판사) 최종 승인</h1>
         <p className="text-bf-muted text-xs mt-1">
-          출판사 발주 (PUBLISHER_ORDER) 는 비용 발생으로 본사 단독 최종 승인. 권역 이동 (Stage 2) 은 WH 매니저 영역.
+          출판사에 발주하는 건은 비용이 발생하므로 본사 단독 최종 승인 단계입니다. 권역 간 이동은 물류센터 (창고 매니저) 영역이에요.
         </p>
       </div>
 
@@ -63,8 +65,8 @@ export default function Approval() {
 
       <div className="card">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="h2">PUBLISHER_ORDER 큐 ({pending.data?.items.length ?? 0})</h2>
-          <span className="label-tag">5초 polling · approval_side=FINAL</span>
+          <h2 className="h2">외부 발주 대기 ({pending.data?.items.length ?? 0})</h2>
+          <span className="label-tag">5초마다 자동 갱신</span>
         </div>
         <table className="data-table">
           <thead>
@@ -95,10 +97,7 @@ export default function Approval() {
                     <button
                       className="btn-danger btn-sm"
                       disabled={busy === o.order_id}
-                      onClick={() => {
-                        const reason = window.prompt('거절 사유?', '예산 미배정');
-                        if (reason) act.mutate({ order_id: o.order_id, action: 'reject', reason });
-                      }}
+                      onClick={() => setRejectTarget(o.order_id)}
                     >
                       거절
                     </button>
@@ -112,6 +111,26 @@ export default function Approval() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={rejectTarget !== null}
+        title="외부 발주 거절"
+        message={`PUBLISHER_ORDER 를 거절합니다 (order_id: ${rejectTarget?.slice(0, 8) ?? ''}).\n비용 발생 발주라 거절 후 신중히 다시 발의해야 합니다.`}
+        confirmText="거절"
+        danger
+        withReason
+        reasonRequired
+        reasonLabel="거절 사유"
+        reasonPlaceholder="예: 예산 미배정 / 단가 재협상 필요 / 분기 외"
+        onConfirm={(reason) => {
+          if (rejectTarget && reason) {
+            act.mutate({ order_id: rejectTarget, action: 'reject', reason });
+            setRejectTarget(null);
+          }
+        }}
+        onCancel={() => setRejectTarget(null)}
+        isLoading={act.isPending}
+      />
     </div>
   );
 }

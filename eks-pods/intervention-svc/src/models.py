@@ -76,6 +76,28 @@ class ReturnRejectResponse(BaseModel):
     reject_reason: str
 
 
+class ReturnRequestRequest(BaseModel):
+    """P1-3 Branch 반품 신청 (R&R 3.2 line 143).
+
+    branch-clerk 전용 — scope_store_id == location_id 검증.
+    returns INSERT status='PENDING' (default) → HQ Returns 큐 진입 + ⑩ReturnPending 알림.
+    """
+    isbn13: str = Field(min_length=13, max_length=13)
+    location_id: int
+    qty: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=50)
+
+
+class ReturnRequestResponse(BaseModel):
+    return_id: UUID
+    isbn13: str
+    location_id: int
+    qty: int
+    reason: str
+    status: str
+    requested_at: datetime
+
+
 # ─── A5 ErrorResponse 표준 (intervention-svc pilot) ──────────────────────────
 class ErrorResponse(BaseModel):
     """전 endpoint 공통 에러 응답 스키마.

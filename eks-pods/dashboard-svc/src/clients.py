@@ -126,6 +126,13 @@ async def post_decision_decide(body: dict, token: str) -> tuple[int, Any]:
     return await _safe_post(f"{settings.decision_svc_url}/decision/decide", body, token)
 
 
+async def post_intervention_returns_request(body: dict, token: str) -> tuple[int, Any]:
+    """P1-3 Branch 반품 신청 (intervention-svc /intervention/returns/request)."""
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/returns/request", body, token
+    )
+
+
 async def post_intervention_returns_approve(body: dict, token: str) -> tuple[int, Any]:
     return await _safe_post(f"{settings.intervention_svc_url}/intervention/returns/approve", body, token)
 
