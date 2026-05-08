@@ -16,10 +16,11 @@ export default function WhApprove() {
   const { role } = useOutletContext<{ role: Role }>();
   const qc = useQueryClient();
   const my_wh = role === 'wh-manager-2' ? 2 : 1;
-  const [tab, setTab] = useState<'REBALANCE' | 'WH_TRANSFER'>('REBALANCE');
+  const [tab, setTab] = useState<'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER'>('REBALANCE');
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
+  const [approveTarget, setApproveTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET'; isbn13: string; qty: number; isPublisher: boolean } | null>(null);
 
   const pending = useQuery({
     queryKey: ['pending', tab, role],
@@ -65,7 +66,8 @@ export default function WhApprove() {
       <div>
         <h1 className="h1">{my_wh === 1 ? '수도권' : '영남'} 권역 · 처리 대기</h1>
         <p className="text-bf-muted text-xs mt-1">
-          내 권역 관련 처리 대기 건만 표시됩니다. 같은 권역 내 재분배는 단독 승인, 권역 간 이동은 양쪽 권역 승인이 필요해요.
+          내 권역 관련 처리 대기 건만 표시됩니다. 권역 내 재분배는 단독 승인,
+          권역 간 이동은 양쪽 권역 매니저 승인 필요, 외부 발주는 자기 권역분 단독 승인 (비용 발생).
         </p>
       </div>
 
@@ -88,15 +90,23 @@ export default function WhApprove() {
         >
           권역 간 이동 (양측 승인 필요)
         </button>
+        <button
+          className={`px-4 py-2 text-xs font-medium border-b-2 ${tab === 'PUBLISHER_ORDER' ? 'border-bf-primary text-bf-primary' : 'border-transparent text-bf-muted'}`}
+          onClick={() => setTab('PUBLISHER_ORDER')}
+        >
+          외부 발주 (자기 권역분 · 비용 발생)
+        </button>
       </div>
 
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="h2">
-            {tab === 'REBALANCE' ? '재분배 (자기 창고 내)' : '권역 이동 (수도권 ↔ 영남)'}
+            {tab === 'REBALANCE' ? '재분배 (자기 권역 내)'
+              : tab === 'WH_TRANSFER' ? '권역 이동 (수도권 ↔ 영남)'
+              : '외부 발주 (자기 권역분)'}
             <span className="text-bf-muted ml-2">({pending.data?.items.length ?? 0})</span>
           </h2>
-          <span className="label-tag">5초 polling</span>
+          <span className="label-tag">5초마다 자동 갱신</span>
         </div>
         <table className="data-table">
           <thead>
@@ -113,7 +123,9 @@ export default function WhApprove() {
           </thead>
           <tbody>
             {pending.data?.items.map((o) => {
+              // REBALANCE/PUBLISHER_ORDER 는 'FINAL' (단독 승인) · WH_TRANSFER 는 sideForOrder() 로 자기 측 (SOURCE/TARGET)
               const side = tab === 'WH_TRANSFER' ? sideForOrder(o) : 'FINAL' as const;
+              const isPublisher = tab === 'PUBLISHER_ORDER';
               return (
                 <tr key={o.order_id}>
                   <td>
@@ -136,9 +148,11 @@ export default function WhApprove() {
                         <button
                           className="btn-primary btn-sm"
                           disabled={busy === o.order_id}
-                          onClick={() => act.mutate({ order_id: o.order_id, action: 'approve', side: side as 'FINAL' | 'SOURCE' | 'TARGET' })}
+                          onClick={() => setApproveTarget({ order_id: o.order_id, side: side as 'FINAL' | 'SOURCE' | 'TARGET', isbn13: o.isbn13, qty: o.qty, isPublisher })}
                         >
-                          {tab === 'REBALANCE' ? '승인' : (side === 'SOURCE' ? '출고 승인' : '입고 승인')}
+                          {tab === 'REBALANCE' ? '승인'
+                            : tab === 'PUBLISHER_ORDER' ? '발주 승인'
+                            : (side === 'SOURCE' ? '출고 승인' : '입고 승인')}
                         </button>
                         <button
                           className="btn-danger btn-sm"
@@ -161,6 +175,27 @@ export default function WhApprove() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={approveTarget !== null}
+        title={approveTarget?.isPublisher ? '외부 발주 승인 (비용 발생)' : '승인'}
+        message={
+          approveTarget
+            ? approveTarget.isPublisher
+              ? `ISBN ${approveTarget.isbn13} · ${approveTarget.qty}권 외부 발주를 자기 권역분으로 승인합니다.\n\n비용이 발생합니다.`
+              : `ISBN ${approveTarget.isbn13} · ${approveTarget.qty}권 처리를 승인합니다.${approveTarget.side === 'SOURCE' ? ' (출고 측)' : approveTarget.side === 'TARGET' ? ' (입고 측)' : ''}`
+            : ''
+        }
+        confirmText={approveTarget?.isPublisher ? '발주 승인 (비용 발생)' : '승인'}
+        onConfirm={() => {
+          if (approveTarget) {
+            act.mutate({ order_id: approveTarget.order_id, action: 'approve', side: approveTarget.side });
+            setApproveTarget(null);
+          }
+        }}
+        onCancel={() => setApproveTarget(null)}
+        isLoading={act.isPending}
+      />
 
       <ConfirmModal
         open={rejectTarget !== null}

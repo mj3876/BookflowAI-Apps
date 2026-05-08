@@ -19,6 +19,7 @@ export default function Returns() {
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [approveTarget, setApproveTarget] = useState<string | null>(null);
   const { nameOf } = useLocations(role);
 
   const q = useQuery({ queryKey: ['returns', role], queryFn: () => fetchReturns(role, 50), refetchInterval: 8000 });
@@ -98,7 +99,7 @@ export default function Returns() {
                       <button
                         className="btn-primary btn-sm"
                         disabled={busy === r.return_id}
-                        onClick={() => approve.mutate(r.return_id)}
+                        onClick={() => setApproveTarget(r.return_id)}
                       >
                         승인
                       </button>
@@ -122,6 +123,21 @@ export default function Returns() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={approveTarget !== null}
+        title="반품 승인"
+        message={`반품 요청을 승인합니다 (return_id: ${approveTarget?.slice(0, 8) ?? ''}).\n\n매장에서 물류센터로 도서 회수가 시작되며 매장에 알림이 전송됩니다.`}
+        confirmText="승인"
+        onConfirm={() => {
+          if (approveTarget) {
+            approve.mutate(approveTarget);
+            setApproveTarget(null);
+          }
+        }}
+        onCancel={() => setApproveTarget(null)}
+        isLoading={approve.isPending}
+      />
 
       <ConfirmModal
         open={rejectTarget !== null}

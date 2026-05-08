@@ -15,6 +15,7 @@ export default function Approval() {
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [approveTarget, setApproveTarget] = useState<{ order_id: string; isbn13: string; qty: number } | null>(null);
   const { nameOf } = useLocations(role);
 
   // PUBLISHER_ORDER 만 필터 (HQ 가 처리할 외부 발주)
@@ -90,7 +91,7 @@ export default function Approval() {
                     <button
                       className="btn-primary btn-sm"
                       disabled={busy === o.order_id}
-                      onClick={() => act.mutate({ order_id: o.order_id, action: 'approve' })}
+                      onClick={() => setApproveTarget({ order_id: o.order_id, isbn13: o.isbn13, qty: o.qty })}
                     >
                       승인
                     </button>
@@ -111,6 +112,21 @@ export default function Approval() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={approveTarget !== null}
+        title="외부 발주 승인"
+        message={approveTarget ? `ISBN ${approveTarget.isbn13} · ${approveTarget.qty}권 외부 발주를 승인합니다.\n\n비용이 발생하는 결정이며, 승인 즉시 출판사에 발주 지시서가 전달됩니다.` : ''}
+        confirmText="승인 (비용 발생)"
+        onConfirm={() => {
+          if (approveTarget) {
+            act.mutate({ order_id: approveTarget.order_id, action: 'approve' });
+            setApproveTarget(null);
+          }
+        }}
+        onCancel={() => setApproveTarget(null)}
+        isLoading={act.isPending}
+      />
 
       <ConfirmModal
         open={rejectTarget !== null}

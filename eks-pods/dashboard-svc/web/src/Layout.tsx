@@ -23,7 +23,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: '물류센터 (자기 권역)',
     items: [
       { to: '/wh-dashboard',    label: '권역 대시보드',     desc: '내 권역 매장 매출과 재고 한눈에',        allow: 'WH' },
-      { to: '/wh-approve',      label: '처리 대기',         desc: '권역 내 재분배 · 외부 발주 승인 대기',    allow: 'WH' },
+      { to: '/wh-approve',      label: '처리 대기',         desc: '권역 내 재분배 · 외부 발주 (자기 권역분) 승인 대기', allow: 'WH' },
       { to: '/wh-transfer',     label: '권역 간 이동',      desc: '수도권 ↔ 영남 도서 이동 (양쪽 승인 필요)', allow: 'WH' },
       { to: '/wh-instructions', label: '출고/입고 지시',    desc: '오늘 처리할 출고와 입고 (신간 별도 표시)', allow: 'WH' },
       { to: '/wh-manual',       label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'WH' },
