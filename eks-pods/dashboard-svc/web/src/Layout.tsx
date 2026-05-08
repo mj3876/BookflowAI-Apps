@@ -35,7 +35,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/branch-inventory', label: '매장 재고',         desc: '내 매장 도서 재고와 부족 알림',          allow: 'BRANCH' },
       { to: '/branch-inbound',   label: '입고 확인',         desc: '오늘 들어오는 도서 수령 / 거부',         allow: 'BRANCH' },
       { to: '/branch-sales',     label: '매장 매출',         desc: '내 매장 실시간 판매 (POS)',              allow: 'BRANCH' },
-      { to: '/branch-curation',  label: '진열 추천',         desc: '화제 도서 중 우리 매장에 있는 책 우선 진열', allow: 'BRANCH' },
+      { to: '/branch-curation',  label: 'SNS 급등 도서',     desc: '최근 24시간 화제가 된 도서 중 매장 재고 보유분 (입고 요청 발의)', allow: 'BRANCH' },
       { to: '/branch-manual',    label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'BRANCH' },
     ],
   },
@@ -73,7 +73,7 @@ const PAGE_LABEL: Record<string, string> = {
   'branch-inventory': '매장 재고',
   'branch-inbound': '입고 확인',
   'branch-sales': '매장 매출',
-  'branch-curation': '큐레이션',
+  'branch-curation': 'SNS 급등 도서',
   'branch-manual': '매장 수동 조정',
   notifications: '알림 로그',
   live: '실시간 이벤트',
@@ -94,7 +94,12 @@ export default function Layout() {
     items: s.items.filter((i) => i.allow === 'ALL' || i.allow === group),
   })).filter((s) => s.items.length > 0);
 
-  const onLogout = () => { setRole(null); nav('/login', { replace: true }); };
+  const onLogout = () => {
+    // mock localStorage role + Entra OIDC httpOnly cookie 둘 다 정리.
+    // /auth/logout 가 cookie 삭제 + Entra end_session redirect 처리 → 새로고침 시 자동 재로그인 방지.
+    setRole(null);
+    window.location.href = '/auth/logout';
+  };
   const seg = loc.pathname.split('/').filter(Boolean)[0] ?? 'home';
   const pageTitle = PAGE_LABEL[seg] ?? seg;
   const groupLabel = group === 'HQ' ? '본사' : group === 'WH' ? '물류센터' : '매장';

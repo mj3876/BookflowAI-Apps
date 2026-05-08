@@ -22,10 +22,10 @@ export default function BranchCuration() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h1 className="h1">{nameOf(my_store)} · 진열 추천</h1>
+        <h1 className="h1">{nameOf(my_store)} · SNS 급등 도서</h1>
         <p className="text-bf-muted text-xs mt-1">
-          최근 24시간 SNS 에서 급등한 도서 중 우리 매장에 재고가 있는 책을 우선 진열하세요.
-          재고 부족 시 "입고 요청" 으로 물류센터에 알릴 수 있어요. <span className="text-bf-muted/70">30초마다 갱신.</span>
+          최근 24시간 SNS 에서 화제가 된 도서 중 우리 매장 재고 보유분을 우선 노출합니다.
+          재고가 부족하면 "입고 요청" 으로 물류센터에 알릴 수 있어요. <span className="text-bf-muted/70">30초마다 갱신.</span>
         </p>
       </div>
 
