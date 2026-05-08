@@ -69,7 +69,7 @@ function TransferTable({
   return (
     <table className="data-table">
       <thead>
-        <tr><th></th><th>긴급도</th><th>ISBN</th><th>출발 → 도착</th><th className="text-right">수량</th><th>상태</th></tr>
+        <tr><th></th><th>긴급도</th><th>도서</th><th>출발 → 도착</th><th className="text-right">수량</th><th>상태</th></tr>
       </thead>
       <tbody>
         {rows.slice(0, 20).map((o) => {
@@ -85,8 +85,17 @@ function TransferTable({
                     o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
                   }>{ko(URGENCY_KO, o.urgency_level)}</span>
                 </td>
-                <td className="font-mono text-[11px]">{o.isbn13}</td>
-                <td>{nameOf(o.source_location_id)} → {nameOf(o.target_location_id)}</td>
+                <td>
+                  <div className="text-xs">{o.title ?? o.isbn13}</div>
+                  <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
+                </td>
+                <td>
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30">{nameOf(o.source_location_id)}</span>
+                    <span className="text-bf-primary font-bold">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30">{nameOf(o.target_location_id)}</span>
+                  </div>
+                </td>
                 <td className="text-right">{o.qty}권</td>
                 <td>
                   <span className={
@@ -131,9 +140,56 @@ export default function WhTransfer() {
       <div>
         <h1 className="h1">권역 이동 · {whName(wh)} 권역</h1>
         <p className="text-bf-muted text-xs mt-1">
-          창고 간 재고 이동 — 출고측 창고가 먼저 발의하고 입고측 창고가 수락해야 운송됩니다 (양쪽 승인 필요).
-          행을 클릭하면 의사결정 근거 (출발 권역의 여유분 계산 내역) 가 펼쳐집니다.
+          권역 간 재고 이동 — 출고측 권역이 먼저 발의하고 입고측 권역이 수락해야 운송 시작 (양쪽 승인 필요).
+          행 클릭 시 의사결정 근거 (여유분 계산) 펼침.
         </p>
+      </div>
+
+      {/* 권역 흐름 다이어그램 */}
+      <div className="card">
+        <div className="flex items-center justify-center gap-4 py-4">
+          {/* 좌측 권역 */}
+          <div className={`flex flex-col items-center px-5 py-3 rounded-lg border-2 ${wh === 1 ? 'border-bf-primary bg-bf-primary/10' : 'border-bf-border bg-bf-panel2'}`}>
+            <div className="text-base font-bold mb-1">수도권</div>
+            <div className="text-[10px] text-bf-muted text-center leading-tight">강남·광화문·잠실<br/>홍대·신촌·용산</div>
+            <div className="mt-2 text-xs">
+              {wh === 1 ? (
+                <span className="pill-info">내 권역</span>
+              ) : (
+                <span className="text-bf-muted">상대 권역</span>
+              )}
+            </div>
+          </div>
+
+          {/* 화살표 (양방향) */}
+          <div className="flex flex-col items-center text-bf-muted">
+            <div className="flex items-center gap-1 text-xs">
+              <span>→</span>
+              <span className="text-[10px]">출고 {outbound.length}건</span>
+            </div>
+            <div className="my-1 text-[10px] text-bf-muted">{transfers.length} 건</div>
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-[10px]">입고 {inbound.length}건</span>
+              <span>←</span>
+            </div>
+          </div>
+
+          {/* 우측 권역 */}
+          <div className={`flex flex-col items-center px-5 py-3 rounded-lg border-2 ${wh === 2 ? 'border-bf-primary bg-bf-primary/10' : 'border-bf-border bg-bf-panel2'}`}>
+            <div className="text-base font-bold mb-1">영남</div>
+            <div className="text-[10px] text-bf-muted text-center leading-tight">부산서면·대구동성<br/>울산삼산·대구교대<br/>부산센텀·포항양덕</div>
+            <div className="mt-2 text-xs">
+              {wh === 2 ? (
+                <span className="pill-info">내 권역</span>
+              ) : (
+                <span className="text-bf-muted">상대 권역</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="text-[11px] text-bf-muted text-center">
+          내 권역(파랑) 입장 — 출고는 상대 권역으로 보내고, 입고는 상대 권역에서 받습니다.
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
