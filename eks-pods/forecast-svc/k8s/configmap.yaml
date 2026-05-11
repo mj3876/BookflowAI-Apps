@@ -4,7 +4,7 @@ metadata:
   name: forecast-svc-env
   namespace: bookflow
 data:
-  FORECAST_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  FORECAST_RDS_HOST: "${RDS_HOST}"
   FORECAST_RDS_PORT: "5432"
   FORECAST_RDS_DB: "bookflow"
   FORECAST_RDS_USER: "forecast_svc"

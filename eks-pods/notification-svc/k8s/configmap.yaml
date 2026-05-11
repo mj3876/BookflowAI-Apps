@@ -4,7 +4,7 @@ metadata:
   name: notification-svc-env
   namespace: bookflow
 data:
-  NOTIFICATION_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  NOTIFICATION_RDS_HOST: "${RDS_HOST}"
   NOTIFICATION_RDS_PORT: "5432"
   NOTIFICATION_RDS_DB: "bookflow"
   NOTIFICATION_RDS_USER: "notification_svc"

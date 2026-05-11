@@ -11,7 +11,7 @@ data:
   DASHBOARD_INTERVENTION_SVC_URL: "http://intervention-svc.bookflow.svc.cluster.local"
   DASHBOARD_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
   DASHBOARD_REDIS_PORT: "6379"
-  DASHBOARD_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  DASHBOARD_RDS_HOST: "${RDS_HOST}"
   DASHBOARD_RDS_PORT: "5432"
   DASHBOARD_RDS_DB: "bookflow"
   DASHBOARD_RDS_USER: "dashboard_svc"

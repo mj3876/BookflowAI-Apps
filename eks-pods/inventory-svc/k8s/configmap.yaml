@@ -4,7 +4,7 @@ metadata:
   name: inventory-svc-env
   namespace: bookflow
 data:
-  INVENTORY_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  INVENTORY_RDS_HOST: "${RDS_HOST}"
   INVENTORY_RDS_PORT: "5432"
   INVENTORY_RDS_DB: "bookflow"
   INVENTORY_RDS_USER: "inventory_svc"

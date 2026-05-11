@@ -1,6 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: bookflow
   name: auth-pod-config
 data:
   AUTH_ENTRA_TENANT_ID: "c21d48ef-bedf-4987-a1ba-84aeab7ea76a"
@@ -10,7 +11,7 @@ data:
   AUTH_JWT_ISSUER: "bookflow-auth-pod"
   AUTH_JWT_AUDIENCE: "bookflow-services"
   AUTH_JWT_TTL_SECONDS: "28800"
-  AUTH_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  AUTH_RDS_HOST: "${RDS_HOST}"
   AUTH_RDS_DB: "bookflow"
   AUTH_RDS_USER: "auth_pod"
   AUTH_DEFAULT_ROLE: "branch-clerk"
