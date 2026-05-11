@@ -2,8 +2,19 @@ version: 0.0
 os: linux
 
 files:
+  # 프론트엔드 정적 파일 (index.html) → nginx root
   - source: src/
     destination: /var/www/publisher
+    overwrite: true
+
+  # FastAPI 백엔드 패키지 → uvicorn 이 backend.main:app 으로 실행
+  - source: backend/
+    destination: /var/www/publisher/backend
+    overwrite: true
+
+  # CodeDeploy 훅 스크립트 (실행 권한은 after-install.sh 에서 부여)
+  - source: scripts/
+    destination: /var/www/publisher/scripts
     overwrite: true
 
 hooks:
@@ -11,10 +22,12 @@ hooks:
     - location: scripts/before-install.sh
       timeout: 300
       runas: root
+
   AfterInstall:
     - location: scripts/after-install.sh
-      timeout: 300
+      timeout: 600   # venv pip install + Secrets Manager 응답 대기
       runas: root
+
   ValidateService:
     - location: scripts/validate-service.sh
       timeout: 120

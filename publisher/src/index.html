@@ -1,14 +1,899 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BookFlow Publisher</title>
+  <title>BookFlow — 출판사 신간 요청 포털</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --success: #16a34a;
+      --error: #dc2626;
+      --warn: #d97706;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --muted: #64748b;
+      --radius: 8px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── 헤더 ── */
+    header {
+      background: var(--primary);
+      color: #fff;
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 1px 3px rgba(0,0,0,.2);
+    }
+    header h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: -.3px; }
+    header .badge {
+      font-size: .7rem;
+      background: rgba(255,255,255,.2);
+      border-radius: 4px;
+      padding: 2px 8px;
+    }
+
+    /* ── 탭 ── */
+    .tabs {
+      display: flex;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    .tab-btn {
+      padding: 14px 20px;
+      font-size: .9rem;
+      font-weight: 500;
+      color: var(--muted);
+      border: none;
+      background: none;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all .15s;
+    }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .tab-btn:hover:not(.active) { color: var(--text); }
+
+    /* ── 메인 레이아웃 ── */
+    main { max-width: 760px; margin: 32px auto; padding: 0 16px 80px; }
+
+    /* ── 카드 ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      margin-bottom: 20px;
+    }
+    .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 18px; }
+
+    /* ── 폼 요소 ── */
+    .field { margin-bottom: 18px; }
+    label {
+      display: block;
+      font-size: .83rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 5px;
+    }
+    label .req { color: var(--error); margin-left: 2px; }
+    label .opt { color: var(--muted); font-weight: 400; font-size: .78rem; margin-left: 4px; }
+
+    input[type=text], input[type=date], input[type=number],
+    input[type=password], textarea, select {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: .88rem;
+      color: var(--text);
+      background: #fff;
+      transition: border-color .15s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+    }
+    input.error, textarea.error { border-color: var(--error); }
+    textarea { min-height: 90px; resize: vertical; }
+
+    .hint { font-size: .77rem; color: var(--muted); margin-top: 4px; }
+
+    /* ── 체크박스 그룹 ── */
+    .check-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .check-group label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 400;
+      font-size: .85rem;
+      cursor: pointer;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 12px;
+      transition: all .15s;
+    }
+    .check-group label:has(input:checked) {
+      background: #eff6ff;
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .check-group input[type=checkbox] { width: auto; }
+
+    /* ── 유사도서 동적 입력 ── */
+    .tag-input-wrap { display: flex; gap: 8px; }
+    .tag-input-wrap input { flex: 1; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .tag {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: var(--primary);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: .8rem;
+    }
+    .tag button {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: .9rem;
+      line-height: 1;
+      padding: 0;
+    }
+    .tag button:hover { color: var(--error); }
+
+    /* ── 파일 업로드 ── */
+    .file-drop {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all .15s;
+      position: relative;
+    }
+    .file-drop:hover, .file-drop.drag-over {
+      border-color: var(--primary);
+      background: #eff6ff;
+    }
+    .file-drop input[type=file] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+    }
+    .file-drop .file-icon { font-size: 2rem; margin-bottom: 8px; }
+    .file-drop p { font-size: .85rem; color: var(--muted); }
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      background: var(--bg);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: .83rem;
+    }
+    .file-info .remove-file {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1.1rem;
+    }
+
+    /* ── 버튼 ── */
+    .btn {
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all .15s;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      width: 100%;
+      padding: 13px;
+      margin-top: 8px;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-sm {
+      padding: 7px 14px;
+      font-size: .83rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-sm:hover { background: var(--border); }
+
+    /* ── 알림 배너 ── */
+    .alert {
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      font-size: .88rem;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .alert.show { display: block; }
+    .alert-success { background: #f0fdf4; border: 1px solid #86efac; color: #166534; }
+    .alert-error   { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+    .alert-warn    { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
+
+    /* ── 인증 섹션 ── */
+    .auth-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+    }
+    .auth-row .field { flex: 1; margin-bottom: 0; }
+    .auth-status {
+      font-size: .8rem;
+      margin-top: 6px;
+    }
+    .auth-status.ok  { color: var(--success); }
+    .auth-status.err { color: var(--error); }
+
+    /* ── 상태 조회 결과 ── */
+    .status-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      margin-top: 14px;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: .78rem;
+      font-weight: 700;
+    }
+    .status-NEW      { background: #dbeafe; color: #1d4ed8; }
+    .status-REVIEWING{ background: #fef3c7; color: #92400e; }
+    .status-ACCEPTED { background: #dcfce7; color: #166534; }
+    .status-REJECTED { background: #fee2e2; color: #991b1b; }
+
+    /* ── 구분선 ── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    /* ── 스피너 ── */
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── 탭 패널 ── */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── 반응형 ── */
+    @media (max-width: 480px) {
+      main { margin: 16px auto; }
+      .card { padding: 18px; }
+    }
+  </style>
 </head>
 <body>
-  <main>
-    <h1>BookFlow Publisher</h1>
-    <p>Publisher v2 is running.</p>
-  </main>
+
+<header>
+  <h1>📚 BookFlow — 출판사 신간 요청 포털</h1>
+  <span class="badge">Publisher Channel</span>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" onclick="switchTab('submit', this)">신간 요청서 제출</button>
+  <button class="tab-btn" onclick="switchTab('status', this)">처리 상태 조회</button>
+  <button class="tab-btn" onclick="switchTab('guide', this)">이용 안내</button>
+</nav>
+
+<main>
+
+  <!-- ══════════════════ 탭 1: 신간 요청서 제출 ══════════════════ -->
+  <div id="tab-submit" class="tab-panel active">
+
+    <!-- 인증 -->
+    <div class="card">
+      <h2>🔑 API 인증</h2>
+      <div id="auth-alert" class="alert"></div>
+      <div class="auth-row">
+        <div class="field">
+          <label for="apiKey">발급받은 API 키 <span class="req">*</span></label>
+          <!-- 키는 sessionStorage 에만 저장 (탭/창 닫으면 소멸) -->
+          <input type="password" id="apiKey" placeholder="발급받은 키를 입력하세요" autocomplete="off">
+        </div>
+        <button class="btn btn-sm" onclick="saveApiKey()">저장</button>
+      </div>
+      <p id="authStatus" class="auth-status"></p>
+      <p class="hint">API 키는 이 세션(탭) 에만 저장되며 서버로 전송 시 HTTPS 암호화됩니다. 키 발급 문의: bookflow-publisher@example.com</p>
+    </div>
+
+    <!-- 신간 요청서 폼 -->
+    <div class="card">
+      <h2>📋 신간 요청서</h2>
+
+      <div id="submit-alert" class="alert"></div>
+
+      <form id="requestForm" novalidate>
+
+        <!-- ISBN-13 + 출판사 코드 (필수) -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <div class="field">
+            <label for="isbn13">ISBN-13 <span class="req">*</span></label>
+            <input type="text" id="isbn13" name="isbn13" maxlength="13"
+                   placeholder="9791234567890" pattern="\d{13}">
+            <p class="hint">하이픈 없이 13자리 숫자</p>
+          </div>
+          <div class="field">
+            <label for="publisherId">출판사 코드 <span class="req">*</span></label>
+            <input type="text" id="publisherId" name="publisher_id"
+                   placeholder="PUB-001">
+          </div>
+        </div>
+
+        <!-- 도서명 + 저자 -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <div class="field">
+            <label for="title">도서명 <span class="req">*</span></label>
+            <input type="text" id="title" name="title" maxlength="500"
+                   placeholder="도서 제목 입력">
+          </div>
+          <div class="field">
+            <label for="author">저자 <span class="req">*</span></label>
+            <input type="text" id="author" name="author" maxlength="500"
+                   placeholder="저자명 (공저는 쉼표 구분)">
+          </div>
+        </div>
+
+        <!-- 장르 + 출판 예정일 -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <div class="field">
+            <label for="genre">장르/카테고리 <span class="opt">(선택)</span></label>
+            <select id="genre" name="genre">
+              <option value="">── 선택 ──</option>
+              <option>소설/문학</option>
+              <option>경제/경영</option>
+              <option>자기계발</option>
+              <option>과학/기술</option>
+              <option>역사/문화</option>
+              <option>아동/청소년</option>
+              <option>예술/디자인</option>
+              <option>만화/그래픽</option>
+              <option>학습/참고서</option>
+              <option>기타</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="pubDate">출판 예정일 <span class="opt">(선택)</span></label>
+            <input type="date" id="pubDate" name="expected_pub_date">
+          </div>
+        </div>
+
+        <!-- 예상 판매량 -->
+        <div class="field">
+          <label for="sales">예상 초판 판매량 <span class="opt">(선택)</span></label>
+          <input type="number" id="sales" name="estimated_initial_sales"
+                 min="0" step="100" placeholder="0" style="width:180px">
+          <p class="hint">초판 발행 후 3개월 이내 예상 판매 부수</p>
+        </div>
+
+        <!-- 마케팅 계획 -->
+        <div class="field">
+          <label for="marketing">마케팅 계획 <span class="opt">(선택)</span></label>
+          <textarea id="marketing" name="marketing_plan" maxlength="5000"
+            placeholder="온라인 광고, SNS 캠페인, 강연, 독자 이벤트 등 계획을 간략히 기술해 주세요."></textarea>
+        </div>
+
+        <!-- 독자 타겟 세그먼트 -->
+        <div class="field">
+          <label>타겟 독자층 <span class="opt">(선택 · 복수 가능)</span></label>
+          <div class="check-group">
+            <label><input type="checkbox" value="10대"> 10대</label>
+            <label><input type="checkbox" value="20대"> 20대</label>
+            <label><input type="checkbox" value="30-40대"> 30-40대</label>
+            <label><input type="checkbox" value="직장인"> 직장인</label>
+            <label><input type="checkbox" value="학부모"> 학부모</label>
+            <label><input type="checkbox" value="학생"> 학생</label>
+            <label><input type="checkbox" value="전문직"> 전문직</label>
+            <label><input type="checkbox" value="시니어"> 시니어</label>
+          </div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- 유사 도서 -->
+        <div class="field">
+          <label>유사 도서 ISBN-13 <span class="opt">(선택 · 최대 5개)</span></label>
+          <div class="tag-input-wrap">
+            <input type="text" id="similarInput" maxlength="13" placeholder="978xxxxxxxxxx"
+                   oninput="this.value=this.value.replace(/\D/,'')">
+            <button type="button" class="btn btn-sm" onclick="addSimilar()">추가</button>
+          </div>
+          <div id="similarTags" class="tag-list"></div>
+          <!-- hidden: JSON 배열로 직렬화하여 전송 -->
+          <input type="hidden" id="similarBooksHidden" name="similar_books" value="[]">
+          <p class="hint">수요 예측 AI 가 유사 도서의 판매 패턴을 참고합니다</p>
+        </div>
+
+        <hr class="divider">
+
+        <!-- 첨부파일 -->
+        <div class="field">
+          <label>첨부파일 <span class="opt">(선택 · PDF·Word·이미지, 최대 10MB)</span></label>
+          <div class="file-drop" id="fileDrop"
+               ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+            <!-- 실제 파일 input — 드롭존 전체를 클릭 가능하게 absolute 배치 -->
+            <input type="file" id="attachFile" name="attachment"
+                   accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                   onchange="onFileSelect(this)">
+            <div id="fileDropContent">
+              <div class="file-icon">📄</div>
+              <p>클릭하거나 파일을 여기에 드래그</p>
+              <p style="font-size:.75rem;margin-top:4px">PDF, Word(.doc/.docx), JPG, PNG</p>
+            </div>
+          </div>
+          <div id="fileInfo" class="file-info" style="display:none">
+            <span>📎</span>
+            <span id="fileName"></span>
+            <span id="fileSize" style="color:var(--muted)"></span>
+            <button type="button" class="remove-file" onclick="removeFile()" title="파일 제거">✕</button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="submitBtn">
+          신간 요청서 제출
+        </button>
+
+      </form>
+    </div>
+  </div><!-- /tab-submit -->
+
+
+  <!-- ══════════════════ 탭 2: 상태 조회 ══════════════════ -->
+  <div id="tab-status" class="tab-panel">
+    <div class="card">
+      <h2>🔍 신간 요청 처리 상태 조회</h2>
+      <div id="status-alert" class="alert"></div>
+
+      <div class="field">
+        <label for="queryIsbn">ISBN-13 <span class="req">*</span></label>
+        <input type="text" id="queryIsbn" maxlength="13" placeholder="9791234567890"
+               oninput="this.value=this.value.replace(/\D/,'')">
+      </div>
+      <button class="btn btn-primary" style="width:auto;padding:10px 28px" onclick="queryStatus()">
+        조회
+      </button>
+
+      <div id="statusResult" style="display:none" class="status-card">
+        <table style="width:100%;border-collapse:collapse;font-size:.88rem">
+          <tr>
+            <td style="padding:7px 0;color:var(--muted);width:110px">ISBN-13</td>
+            <td id="res-isbn" style="font-weight:600"></td>
+          </tr>
+          <tr>
+            <td style="padding:7px 0;color:var(--muted)">도서명</td>
+            <td id="res-title"></td>
+          </tr>
+          <tr>
+            <td style="padding:7px 0;color:var(--muted)">출판사</td>
+            <td id="res-pub"></td>
+          </tr>
+          <tr>
+            <td style="padding:7px 0;color:var(--muted)">처리 상태</td>
+            <td id="res-status"></td>
+          </tr>
+          <tr>
+            <td style="padding:7px 0;color:var(--muted)">접수일시</td>
+            <td id="res-created"></td>
+          </tr>
+          <tr id="res-att-row" style="display:none">
+            <td style="padding:7px 0;color:var(--muted)">첨부파일</td>
+            <td id="res-att"></td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </div><!-- /tab-status -->
+
+
+  <!-- ══════════════════ 탭 3: 이용 안내 ══════════════════ -->
+  <div id="tab-guide" class="tab-panel">
+    <div class="card">
+      <h2>📖 이용 안내</h2>
+
+      <h3 style="font-size:.9rem;margin:16px 0 8px">신간 요청 절차</h3>
+      <ol style="font-size:.87rem;line-height:1.9;padding-left:20px">
+        <li>담당자에게 <strong>API 키</strong>를 발급받습니다.</li>
+        <li><strong>신간 요청서 제출</strong> 탭에서 필수 정보를 입력하고 제출합니다.</li>
+        <li>제출 즉시 BookFlow 시스템에 접수되어 본사 요청함에 표시됩니다.</li>
+        <li>본사 담당자가 검토 후 <strong>편입/거절</strong>을 결정합니다.</li>
+        <li><strong>처리 상태 조회</strong> 탭에서 ISBN-13 으로 진행 상황을 확인할 수 있습니다.</li>
+      </ol>
+
+      <hr class="divider">
+
+      <h3 style="font-size:.9rem;margin:0 0 8px">상태 코드 안내</h3>
+      <table style="width:100%;font-size:.85rem;border-collapse:collapse">
+        <tr>
+          <td style="padding:7px 0;width:110px"><span class="status-badge status-NEW">NEW</span></td>
+          <td>접수 완료 — 본사 검토 대기 중</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 0"><span class="status-badge status-REVIEWING">REVIEWING</span></td>
+          <td>본사 담당자 검토 중</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 0"><span class="status-badge status-ACCEPTED">ACCEPTED</span></td>
+          <td>편입 결정 — 권역별 배분 계획 수립 중</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 0"><span class="status-badge status-REJECTED">REJECTED</span></td>
+          <td>이번 심사에서 편입 보류 (개별 통보)</td>
+        </tr>
+      </table>
+
+      <hr class="divider">
+
+      <h3 style="font-size:.9rem;margin:0 0 8px">첨부파일 안내</h3>
+      <ul style="font-size:.87rem;line-height:1.9;padding-left:20px">
+        <li>지원 형식: PDF, Word (.doc/.docx), JPG, PNG</li>
+        <li>최대 크기: 10MB</li>
+        <li>권장 내용: 마케팅 계획서, 원고 샘플, 저자 약력</li>
+      </ul>
+
+      <hr class="divider">
+
+      <h3 style="font-size:.9rem;margin:0 0 8px">문의</h3>
+      <p style="font-size:.87rem">API 키 발급 및 기술 문의: <strong>bookflow-publisher@example.com</strong></p>
+    </div>
+  </div><!-- /tab-guide -->
+
+</main>
+
+<script>
+/* ── 상수 ──────────────────────────────────────────────────────────────────── */
+// API 베이스: nginx 가 /api/ 를 uvicorn :8000 으로 프록시
+// 프론트엔드(index.html)와 백엔드(uvicorn)가 동일 호스트에 있으므로 상대 경로 사용
+const API_BASE = "/api/v1";
+
+const SESSION_KEY = "bf_publisher_api_key";  // sessionStorage 키명
+
+/* ── 탭 전환 ────────────────────────────────────────────────────────────────── */
+function switchTab(name, btn) {
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  btn.classList.add("active");
+}
+
+/* ── API 키 관리 ─────────────────────────────────────────────────────────────
+   키는 sessionStorage 에만 저장. 탭·창 닫으면 소멸 (localStorage 사용 금지).
+   서버 전송 시 X-Api-Key 헤더로 전달 (fetch 의 Authorization 와 달리 CORS preflight 주의).
+*/
+function saveApiKey() {
+  const key = document.getElementById("apiKey").value.trim();
+  if (!key) { showAuthStatus("키를 입력해 주세요.", false); return; }
+  sessionStorage.setItem(SESSION_KEY, key);
+  showAuthStatus("✓ 세션에 저장되었습니다. 제출 시 자동으로 사용됩니다.", true);
+  document.getElementById("apiKey").value = "";   // 화면에서 즉시 지움
+}
+
+function getApiKey() {
+  return sessionStorage.getItem(SESSION_KEY) || "";
+}
+
+function showAuthStatus(msg, ok) {
+  const el = document.getElementById("authStatus");
+  el.textContent = msg;
+  el.className = "auth-status " + (ok ? "ok" : "err");
+}
+
+/* ── 페이지 로드 시 키 저장 여부 표시 ──────────────────────────────────────── */
+window.addEventListener("DOMContentLoaded", () => {
+  if (getApiKey()) showAuthStatus("✓ API 키가 세션에 저장되어 있습니다.", true);
+});
+
+/* ── 유사 도서 태그 ─────────────────────────────────────────────────────────── */
+const similarIsbns = [];
+
+function addSimilar() {
+  const input = document.getElementById("similarInput");
+  const val = input.value.trim();
+  if (!val) return;
+  if (!/^\d{13}$/.test(val)) { alert("ISBN-13 은 13자리 숫자여야 합니다."); return; }
+  if (similarIsbns.includes(val)) { alert("이미 추가된 ISBN입니다."); return; }
+  if (similarIsbns.length >= 5) { alert("유사 도서는 최대 5개까지 추가할 수 있습니다."); return; }
+  similarIsbns.push(val);
+  renderSimilarTags();
+  input.value = "";
+}
+
+function removeSimilar(isbn) {
+  const idx = similarIsbns.indexOf(isbn);
+  if (idx >= 0) similarIsbns.splice(idx, 1);
+  renderSimilarTags();
+}
+
+function renderSimilarTags() {
+  const container = document.getElementById("similarTags");
+  container.innerHTML = similarIsbns.map(isbn =>
+    `<span class="tag">${isbn}
+       <button type="button" onclick="removeSimilar('${isbn}')" title="제거">✕</button>
+     </span>`
+  ).join("");
+  // hidden input 에 JSON 배열로 직렬화
+  document.getElementById("similarBooksHidden").value = JSON.stringify(similarIsbns);
+}
+
+// Enter 키로 유사 도서 추가
+document.getElementById("similarInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); addSimilar(); }
+});
+
+/* ── 파일 업로드 ─────────────────────────────────────────────────────────────
+   드래그&드롭 또는 클릭으로 파일 선택.
+   실제 전송은 FormData 에 포함하여 multipart/form-data 로 백엔드에 전달.
+*/
+function onFileSelect(input) {
+  if (input.files && input.files[0]) showFileInfo(input.files[0]);
+}
+
+function showFileInfo(file) {
+  document.getElementById("fileDropContent").style.display = "none";
+  document.getElementById("fileInfo").style.display = "flex";
+  document.getElementById("fileName").textContent = file.name;
+  document.getElementById("fileSize").textContent = formatBytes(file.size);
+}
+
+function removeFile() {
+  document.getElementById("attachFile").value = "";
+  document.getElementById("fileDropContent").style.display = "";
+  document.getElementById("fileInfo").style.display = "none";
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  document.getElementById("fileDrop").classList.add("drag-over");
+}
+
+function onDragLeave(e) {
+  document.getElementById("fileDrop").classList.remove("drag-over");
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById("fileDrop").classList.remove("drag-over");
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    const input = document.getElementById("attachFile");
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    showFileInfo(file);
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+/* ── 폼 유효성 검사 ──────────────────────────────────────────────────────────── */
+function validateForm() {
+  let ok = true;
+  const fields = [
+    { id: "isbn13",      check: v => /^\d{13}$/.test(v), msg: "ISBN-13 은 13자리 숫자여야 합니다." },
+    { id: "publisherId", check: v => v.length > 0,        msg: "출판사 코드를 입력해 주세요." },
+    { id: "title",       check: v => v.length > 0,        msg: "도서명을 입력해 주세요." },
+    { id: "author",      check: v => v.length > 0,        msg: "저자명을 입력해 주세요." },
+  ];
+  const errors = [];
+  fields.forEach(f => {
+    const el = document.getElementById(f.id);
+    const val = el.value.trim();
+    if (!f.check(val)) {
+      el.classList.add("error");
+      errors.push(f.msg);
+      ok = false;
+    } else {
+      el.classList.remove("error");
+    }
+  });
+  return { ok, errors };
+}
+
+/* ── 폼 제출 ─────────────────────────────────────────────────────────────────
+   multipart/form-data 로 전송 (첨부파일 포함 가능).
+   X-Api-Key 헤더에 sessionStorage 의 키 포함.
+
+   백엔드 처리 흐름:
+     POST /api/v1/new-book-requests
+       → nginx proxy_pass → uvicorn :8000 → FastAPI main.py
+       → S3 첨부파일 업로드 (storage.py)
+       → RDS INSERT (db.py)
+       → 응답 { id, isbn13, status, created_at }
+
+   publisher-watcher (EKS CronJob) 가 1분 이내에 GET /api/v1/new-book-requests 를 폴링하여
+   new_book_requests 를 books 마스터 + Redis pub/sub 으로 전파.
+*/
+document.getElementById("requestForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const { ok, errors } = validateForm();
+  if (!ok) {
+    showAlert("submit-alert", errors.join("<br>"), "error");
+    return;
+  }
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showAlert("submit-alert", "먼저 API 키를 입력하고 저장해 주세요.", "error");
+    return;
+  }
+
+  // 파일 크기 사전 검사 (백엔드 도달 전 차단)
+  const fileInput = document.getElementById("attachFile");
+  if (fileInput.files[0] && fileInput.files[0].size > 10 * 1024 * 1024) {
+    showAlert("submit-alert", "첨부파일 크기가 10MB 를 초과합니다.", "error");
+    return;
+  }
+
+  // FormData 구성
+  const form = document.getElementById("requestForm");
+  const fd = new FormData(form);
+
+  // 타겟 세그먼트: 체크된 항목을 JSON 배열로
+  const checked = [...form.querySelectorAll(".check-group input:checked")].map(el => el.value);
+  fd.set("target_segments", JSON.stringify(checked));
+
+  // similar_books 는 hidden input 에서 이미 직렬화됨
+
+  // 제출 버튼 상태 변경
+  const btn = document.getElementById("submitBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>제출 중...';
+  hideAlert("submit-alert");
+
+  try {
+    const res = await fetch(`${API_BASE}/new-book-requests`, {
+      method: "POST",
+      headers: {
+        // X-Api-Key 로 인증 (auth.py verify_api_key 가 SHA-256 비교)
+        "X-Api-Key": apiKey,
+      },
+      body: fd,   // multipart/form-data (Content-Type 은 fetch 가 자동 설정)
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      showAlert(
+        "submit-alert",
+        `✅ 접수 완료! 요청 번호: <strong>${data.id}</strong> | ISBN: ${data.isbn13} | 상태: ${data.status}` +
+        (data.attachment_s3_key ? `<br>📎 첨부파일 업로드 완료` : ""),
+        "success"
+      );
+      form.reset();
+      similarIsbns.length = 0;
+      renderSimilarTags();
+      removeFile();
+    } else {
+      const msg = data.detail || "서버 오류가 발생했습니다.";
+      showAlert("submit-alert", `❌ ${msg}`, "error");
+    }
+  } catch (err) {
+    showAlert("submit-alert", `❌ 네트워크 오류: ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "신간 요청서 제출";
+  }
+});
+
+/* ── 상태 조회 ────────────────────────────────────────────────────────────────
+   GET /api/v1/new-book-requests/{isbn13}/status
+   → nginx proxy_pass → uvicorn → FastAPI main.py get_request_status()
+   → RDS SELECT → { id, isbn13, publisher_id, title, status, created_at }
+*/
+async function queryStatus() {
+  const isbn = document.getElementById("queryIsbn").value.trim();
+  if (!/^\d{13}$/.test(isbn)) {
+    showAlert("status-alert", "ISBN-13 은 13자리 숫자여야 합니다.", "error");
+    return;
+  }
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showAlert("status-alert", "먼저 '신간 요청서 제출' 탭에서 API 키를 저장해 주세요.", "error");
+    return;
+  }
+
+  hideAlert("status-alert");
+  document.getElementById("statusResult").style.display = "none";
+
+  try {
+    const res = await fetch(`${API_BASE}/new-book-requests/${isbn}/status`, {
+      headers: { "X-Api-Key": apiKey },
+    });
+    const data = await res.json();
+
+    if (res.ok) {
+      document.getElementById("res-isbn").textContent = data.isbn13;
+      document.getElementById("res-title").textContent = data.title;
+      document.getElementById("res-pub").textContent = data.publisher_id;
+      document.getElementById("res-status").innerHTML =
+        `<span class="status-badge status-${data.status}">${data.status}</span>`;
+      document.getElementById("res-created").textContent =
+        new Date(data.created_at).toLocaleString("ko-KR");
+
+      const attRow = document.getElementById("res-att-row");
+      if (data.attachment_s3_key) {
+        attRow.style.display = "";
+        document.getElementById("res-att").textContent = data.attachment_s3_key.split("/").pop();
+      } else {
+        attRow.style.display = "none";
+      }
+
+      document.getElementById("statusResult").style.display = "block";
+    } else if (res.status === 404) {
+      showAlert("status-alert", "해당 ISBN 으로 접수된 요청이 없습니다.", "warn");
+    } else {
+      showAlert("status-alert", `오류: ${data.detail || res.status}`, "error");
+    }
+  } catch (err) {
+    showAlert("status-alert", `네트워크 오류: ${err.message}`, "error");
+  }
+}
+
+/* ── 알림 헬퍼 ──────────────────────────────────────────────────────────────── */
+function showAlert(id, msg, type) {
+  const el = document.getElementById(id);
+  el.innerHTML = msg;
+  el.className = `alert alert-${type} show`;
+  el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function hideAlert(id) {
+  document.getElementById(id).classList.remove("show");
+}
+</script>
+
 </body>
 </html>
