@@ -44,9 +44,8 @@ export default function HqHome() {
   const returnsPending = (returns.data?.items ?? []).filter((r) => r.status === 'PENDING').length;
   const requestsPending = (requests.data?.items ?? []).filter((r) => r.status === 'NEW' || r.status === 'FETCHED').length;
 
-  const todaysRevenue = sales.data?.today_revenue ?? 0;
-  const yesterdayRevenue = sales.data?.yesterday_revenue ?? 0;
-  const revenueGrowth = yesterdayRevenue > 0 ? ((todaysRevenue - yesterdayRevenue) / yesterdayRevenue) * 100 : 0;
+  const todaysRevenue = sales.data?.total_revenue ?? 0;
+  const totalTransactions = sales.data?.transactions ?? 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -120,8 +119,8 @@ export default function HqHome() {
           <div className="text-3xl font-bold text-bf-text">
             ₩{todaysRevenue.toLocaleString()}
           </div>
-          <div className={`text-xs mt-1 ${revenueGrowth >= 0 ? 'text-bf-success' : 'text-bf-danger'}`}>
-            {revenueGrowth >= 0 ? '▲' : '▼'} {Math.abs(revenueGrowth).toFixed(1)}% (전일比)
+          <div className="text-xs mt-1 text-bf-muted">
+            거래 {totalTransactions.toLocaleString()}건
           </div>
         </Link>
         <Link to="/spikes" className="card hover:border-bf-primary transition">

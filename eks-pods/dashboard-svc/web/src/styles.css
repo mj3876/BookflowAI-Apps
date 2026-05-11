@@ -48,6 +48,14 @@ body {
   .data-table tbody tr:hover { @apply bg-bf-panel2; }
 }
 
+/* Redis stock.changed 실시간 cell flash (BranchInventory · WhDashboard · Home) */
+@keyframes stock-flash {
+  0%   { background-color: #FEF3C7; }
+  60%  { background-color: #FEF9C3; }
+  100% { background-color: transparent; }
+}
+.animate-flash { animation: stock-flash 1.6s ease-out 1; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #CED4DA; border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: #ADB5BD; }

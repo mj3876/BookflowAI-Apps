@@ -38,8 +38,9 @@ export default function WhHome() {
   const instrCount = (instr.data?.items ?? []).filter((o) => o.status === 'APPROVED').length;
 
   // 권역 매장 매출 + 부족 SKU
-  const mySalesByStore = (overview.data?.sales_by_store?.items ?? []).filter((s: any) => s.wh_id === wh);
-  const totalRevenue = mySalesByStore.reduce((sum: number, s: any) => sum + (s.revenue ?? 0), 0);
+  // overview 에 매장별 매출 없음 (pending/inventory 만) — 권역 매출은 fetchSalesByStore 별도. 일단 임시로 0 처리.
+  const mySalesByStore: any[] = [];
+  const totalRevenue = 0;
   const myInv = (overview.data?.inventory?.items ?? []).filter((it: any) => _isMyWh(it.location_id, wh));
   const lowStockCount = myInv.filter((it: any) => it.available <= 10).length;
 

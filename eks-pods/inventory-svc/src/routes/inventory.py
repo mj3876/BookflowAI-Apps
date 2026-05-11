@@ -69,16 +69,10 @@ def _inventory_item_from_row(row: tuple) -> InventoryItem:
     """DB row → InventoryItem 매핑 (FR-A7.4 enriched).
 
     Row column 순서:
-      0: isbn13
-      1: location_id
-      2: on_hand
-      3: reserved_qty
-      4: safety_stock (NULL → 0 으로 SQL 측 COALESCE 권장 · 모델에서도 안전)
-      5: updated_at
-      6: title (NULL 가능 · books LEFT JOIN)
-      7: expected_soldout_at (NULL 가능)
-      8: incoming_qty (pending_orders APPROVED · target=self · 합)
-      9: outgoing_qty (pending_orders APPROVED · source=self · 합)
+      0: isbn13       · 1: location_id · 2: on_hand · 3: reserved_qty
+      4: safety_stock · 5: updated_at
+      6: title · 7: author · 8: cover_url · 9: expected_soldout_at
+      10: incoming_qty · 11: outgoing_qty
     """
     return InventoryItem(
         isbn13=row[0],
@@ -89,9 +83,11 @@ def _inventory_item_from_row(row: tuple) -> InventoryItem:
         available=int(row[2] or 0) - int(row[3] or 0),
         updated_at=row[5],
         title=row[6],
-        expected_soldout_at=row[7],
-        incoming_qty=int(row[8] or 0),
-        outgoing_qty=int(row[9] or 0),
+        author=row[7],
+        cover_url=row[8],
+        expected_soldout_at=row[9],
+        incoming_qty=int(row[10] or 0),
+        outgoing_qty=int(row[11] or 0),
     )
 
 
@@ -107,6 +103,8 @@ def get_warehouse_inventory(wh_id: int, ctx: AuthContext = Depends(require_auth)
                COALESCE(i.safety_stock, 0) AS safety_stock,
                i.updated_at,
                b.title,
+               b.author,
+               b.cover_url,
                b.expected_soldout_at,
                COALESCE((
                    SELECT SUM(po.qty)::int

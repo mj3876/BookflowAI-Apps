@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useOutletContext } from 'react-router-dom';
 import { fetchPendingGrouped, fetchInventoryByStore, fetchCuration, type Role } from '../api';
+import { useStockUpdates } from '../useStockUpdates';
 
 const STORE_NAMES: Record<number, string> = {
   1: '강남점', 2: '광화문점', 3: '잠실점', 4: '홍대점', 5: '신촌점', 6: '용산점',
@@ -41,6 +42,9 @@ export default function BranchHome() {
     queryFn: () => fetchCuration(role, storeId),
     refetchInterval: 60000,
   });
+
+  // Redis 실시간 (POS 결제 시 부족 도서 list 색 flash)
+  const { flashed, availableOf } = useStockUpdates(role);
 
   const data = grouped.data;
   const items = data?.items ?? [];
@@ -133,17 +137,22 @@ export default function BranchHome() {
               </tr>
             </thead>
             <tbody>
-              {lowStock.map((it) => (
-                <tr key={it.isbn13} className="border-t border-bf-border2">
-                  <td className="py-1.5 font-medium">{it.title ?? it.isbn13}</td>
-                  <td className="py-1.5 text-bf-muted">{it.author ?? '-'}</td>
-                  <td className="py-1.5 text-right">{it.on_hand}</td>
-                  <td className="py-1.5 text-right">{it.safety_stock}</td>
-                  <td className="py-1.5 text-right">
-                    <span className="text-bf-danger font-bold">{it.available}</span>
-                  </td>
-                </tr>
-              ))}
+              {lowStock.map((it) => {
+                const liveAv = availableOf(it.isbn13, storeId);
+                const av = liveAv ?? it.available;
+                const flash = flashed(it.isbn13, storeId);
+                return (
+                  <tr key={it.isbn13} className="border-t border-bf-border2">
+                    <td className="py-1.5 font-medium">{it.title ?? it.isbn13}</td>
+                    <td className="py-1.5 text-bf-muted">{it.author ?? '-'}</td>
+                    <td className="py-1.5 text-right">{it.on_hand}</td>
+                    <td className="py-1.5 text-right">{it.safety_stock}</td>
+                    <td className={`py-1.5 text-right ${flash ? 'animate-flash' : ''}`}>
+                      <span className="text-bf-danger font-bold">{av}</span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

@@ -16,6 +16,8 @@ class InventoryItem(BaseModel):
     updated_at: datetime
     # FR-A7.4 enrichment
     title: str | None = None                  # books.title (LEFT JOIN · NULL 가능)
+    author: str | None = None                 # books.author (display 용)
+    cover_url: str | None = None              # books.cover_url (책 표지 이미지)
     expected_soldout_at: date | None = None   # books.expected_soldout_at
     incoming_qty: int = 0                     # pending_orders APPROVED · target=self · in-transit
     outgoing_qty: int = 0                     # pending_orders APPROVED · source=self · in-transit

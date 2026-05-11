@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchInventoryHeatmap, fetchOverview, fetchSalesByStore, type LocationCell, type Role } from '../api';
+import { useStockUpdates } from '../useStockUpdates';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import { useLocations } from '../useLocations';
 
@@ -29,6 +30,9 @@ export default function WhDashboard() {
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
   const byStore = useQuery({ queryKey: ['byStore', role], queryFn: () => fetchSalesByStore(role), refetchInterval: 5000 });
   const heat = useQuery({ queryKey: ['heatmap', role], queryFn: () => fetchInventoryHeatmap(role), refetchInterval: 30000 });
+
+  // Redis 실시간 (cell flash)
+  const { flashed, availableOf } = useStockUpdates(role);
 
   // 권역 (wh_id) 기준 동적 필터 — 시드 데이터의 wh_id 신뢰 (locations.wh_id)
   const myCells = (heat.data?.items ?? []).filter((c) => c.wh_id === wh_id);
@@ -120,6 +124,65 @@ export default function WhDashboard() {
           })}
         </div>
       </div>
+
+      {/* 권역 6 매장 × 부족 도서 top 20 책 단위 heatmap (Redis 실시간 cell flash) */}
+      {(() => {
+        const invItems = (ov.data?.inventory?.items ?? []) as any[];
+        const myInv = invItems.filter((it) => myStoreIds.has(it.location_id));
+        // 가용 ≤ 안전재고 인 (isbn, store) 만 추출 → isbn 별 group → 부족 매장 많은 순 top 20
+        const lowByIsbn = new Map<string, { title?: string; perStore: Record<number, any> }>();
+        for (const it of myInv) {
+          const av = availableOf(it.isbn13, it.location_id) ?? it.available;
+          if (av > (it.safety_stock ?? 10) * 2) continue;
+          if (!lowByIsbn.has(it.isbn13)) lowByIsbn.set(it.isbn13, { title: it.title, perStore: {} });
+          lowByIsbn.get(it.isbn13)!.perStore[it.location_id] = it;
+        }
+        const sorted = [...lowByIsbn.entries()]
+          .sort((a, b) => Object.keys(b[1].perStore).length - Object.keys(a[1].perStore).length)
+          .slice(0, 20);
+        if (sorted.length === 0) return null;
+        return (
+          <div className="card">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="h2">권역 부족 도서 × 매장 (책 단위 실시간)</h2>
+              <div className="text-[11px] text-bf-muted">
+                POS 결제 시 cell <span className="px-1 bg-yellow-100">flash</span> · 가용 ≤ 2× 안전재고 만 표시
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-bf-muted">
+                    <th className="text-left py-1 px-2">도서</th>
+                    {stores.map((s) => (
+                      <th key={s.location_id} className="text-right py-1 px-2 whitespace-nowrap">{s.name ?? `매장 ${s.location_id}`}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map(([isbn, info]) => (
+                    <tr key={isbn} className="border-t border-bf-border2">
+                      <td className="py-1.5 px-2 font-medium">{info.title ?? isbn}</td>
+                      {stores.map((s) => {
+                        const it = info.perStore[s.location_id];
+                        if (!it) return <td key={s.location_id} className="py-1.5 px-2 text-right text-bf-muted">-</td>;
+                        const av = availableOf(isbn, s.location_id) ?? it.available;
+                        const safety = it.safety_stock ?? 10;
+                        const cls = av === 0 ? 'text-red-600 font-bold' : av <= safety ? 'text-orange-600 font-bold' : 'text-yellow-700';
+                        return (
+                          <td key={s.location_id} className={`py-1.5 px-2 text-right ${cls} ${flashed(isbn, s.location_id) ? 'animate-flash' : ''}`}>
+                            {av}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="card">
         <h2 className="h2 mb-3">관할 매장 매출 (최근 1시간)</h2>
