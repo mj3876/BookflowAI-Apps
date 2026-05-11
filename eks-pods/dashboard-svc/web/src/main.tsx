@@ -12,6 +12,9 @@ import Approval from './pages/Approval';
 import Returns from './pages/Returns';
 import Requests from './pages/Requests';
 import Spikes from './pages/Spikes';
+import HqHome from './pages/HqHome';
+import WhHome from './pages/WhHome';
+import BranchHome from './pages/BranchHome';
 import WhDashboard from './pages/WhDashboard';
 import WhApprove from './pages/WhApprove';
 import WhTransfer from './pages/WhTransfer';
@@ -41,7 +44,7 @@ function HomeRedirect() {
   const role = getRole();
   if (!role) return <Navigate to="/login" replace />;
   const group = roleGroup(role);
-  const home = group === 'HQ' ? '/kpi' : group === 'WH' ? '/wh-dashboard' : '/branch-inventory';
+  const home = group === 'HQ' ? '/home/hq' : group === 'WH' ? '/home/wh' : '/home/branch';
   return <Navigate to={home} replace />;
 }
 
@@ -53,6 +56,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/login" element={<Login />} />
           <Route element={<RequireRole><Layout /></RequireRole>}>
             <Route path="/" element={<HomeRedirect />} />
+
+            {/* 홈 3 페이지 (role 별 진입) */}
+            <Route path="/home/hq"     element={<HqHome />} />
+            <Route path="/home/wh"     element={<WhHome />} />
+            <Route path="/home/branch" element={<BranchHome />} />
 
             {/* HQ */}
             <Route path="/kpi"        element={<KPI />} />

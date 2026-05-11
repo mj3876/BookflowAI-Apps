@@ -52,6 +52,22 @@ async def forecast(store_id: int, snapshot_date: date, ctx: AuthContext = Depend
     return data
 
 
+@router.get("/pending/grouped")
+async def pending_grouped(
+    ctx: AuthContext = Depends(require_auth),
+    date: str | None = None,
+) -> Any:
+    """D2 Home 메인 카드 — 오늘 batch 처리 현황 + 사용자 검토 필요.
+
+    intervention-svc 의 /intervention/grouped proxy. role-scope 자동.
+    """
+    from ..clients import get_intervention_grouped
+    data = await get_intervention_grouped(ctx.token, date=date)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="intervention-svc unavailable")
+    return data
+
+
 @router.get("/pending")
 async def pending(
     ctx: AuthContext = Depends(require_auth),

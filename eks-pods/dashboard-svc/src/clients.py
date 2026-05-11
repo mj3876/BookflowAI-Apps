@@ -70,6 +70,12 @@ async def get_intervention_queue(token: str, order_type: str | None = None, wh_i
     return await _safe_get(f"{settings.intervention_svc_url}/intervention/queue{qstr}", token)
 
 
+async def get_intervention_grouped(token: str, date: str | None = None) -> dict | None:
+    """오늘 batch 처리 현황 + 사용자 검토 필요 건수 (role-scope 자동 · D2 Home 카드용)."""
+    qstr = f"?date={date}" if date else ""
+    return await _safe_get(f"{settings.intervention_svc_url}/intervention/grouped{qstr}", token)
+
+
 async def get_notifications_recent(token: str, limit: int = 50) -> dict | None:
     """notification-svc 의 최근 알림 (`notifications_log`). Phase 3 까지 None."""
     return await _safe_get(f"{settings.notification_svc_url}/notification/recent?limit={limit}", token)

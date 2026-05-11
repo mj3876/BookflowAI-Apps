@@ -7,6 +7,14 @@ type NavItem = { to: string; label: string; desc: string; allow: 'HQ' | 'WH' | '
 
 const NAV: { section: string; items: NavItem[] }[] = [
   {
+    section: '🏠 오늘 한눈에',
+    items: [
+      { to: '/home/hq',     label: '본사 홈',           desc: '오늘 batch 처리 현황 + 검토 필요 한 화면', allow: 'HQ' },
+      { to: '/home/wh',     label: '권역 홈',           desc: '내 권역 batch 결과 + 협의 필요 한 화면',   allow: 'WH' },
+      { to: '/home/branch', label: '매장 홈',           desc: '오늘 입고 + 부족 도서 + SNS 급등 매칭',     allow: 'BRANCH' },
+    ],
+  },
+  {
     section: '본사 (전사 관제)',
     items: [
       { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
@@ -57,6 +65,9 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const PAGE_LABEL: Record<string, string> = {
+  'home/hq': '본사 홈',
+  'home/wh': '권역 홈',
+  'home/branch': '매장 홈',
   kpi: '실시간 KPI',
   inventory: '전사 재고',
   books: '도서 카탈로그',

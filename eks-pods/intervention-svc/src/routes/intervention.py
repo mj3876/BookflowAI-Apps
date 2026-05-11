@@ -167,6 +167,129 @@ def _validate_authority(cur, ctx: AuthContext, order_id: str, side: str) -> tupl
     return order_type, source_wh, target_wh
 
 
+@router.get("/grouped")
+def grouped(
+    ctx: AuthContext = Depends(require_auth),
+    date: str | None = Query(default=None, description="YYYY-MM-DD (default = today KST)"),
+):
+    """오늘 (또는 지정 날짜) 의 batch 처리 현황 + 사용자 검토 필요 건수.
+
+    role-scope 자동 적용:
+      - hq-admin: 전사
+      - wh-manager: 자기 권역 (source 또는 target 매장이 자기 wh)
+      - branch-clerk: 자기 매장 (source 또는 target)
+
+    응답:
+      - auto_executed_at_07: 오늘 07:00 batch 가 자동 승인한 건수
+      - manual_review: 사용자가 처리해야 할 PENDING 건수
+      - auto_reject_at_18_pending: 18:00 batch 가 거절할 예정 (NORMAL · D-1 이전)
+      - by_type: order_type 별 PENDING 분포
+      - items: PENDING list (사용자가 처리할 것 우선 정렬)
+    """
+    from datetime import date as _date
+    target_date = date or _date.today().isoformat()
+
+    # role-scope WHERE
+    scope_clauses = []
+    scope_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        scope_clauses.append(
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+        )
+        scope_params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        scope_clauses.append(
+            "(po.source_location_id = %s OR po.target_location_id = %s)"
+        )
+        scope_params.extend([ctx.scope_store_id, ctx.scope_store_id])
+
+    scope_sql = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
+
+    with db_cursor() as cur:
+        # 1. 07:00 batch 가 오늘 자동 승인한 건수 (URGENT/CRITICAL + auto_execute_eligible + approved_at::date = target)
+        cur.execute(
+            f"""
+            SELECT COUNT(*) FROM pending_orders po
+            WHERE po.status = 'APPROVED' AND po.urgency_level IN ('URGENT','CRITICAL')
+              AND po.auto_execute_eligible = TRUE AND po.approved_at::date = %s
+              {scope_sql}
+            """,
+            [target_date] + scope_params,
+        )
+        auto_executed = cur.fetchone()[0]
+
+        # 2. 사용자가 처리할 PENDING (시점 무관 · scope 내)
+        cur.execute(
+            f"""
+            SELECT COUNT(*) FROM pending_orders po
+            WHERE po.status = 'PENDING'
+              {scope_sql}
+            """,
+            scope_params,
+        )
+        manual_review = cur.fetchone()[0]
+
+        # 3. 18:00 batch reject 예정 (NORMAL · created_at::date < today · 아직 PENDING)
+        cur.execute(
+            f"""
+            SELECT COUNT(*) FROM pending_orders po
+            WHERE po.status = 'PENDING' AND po.urgency_level = 'NORMAL'
+              AND po.created_at::date < %s
+              {scope_sql}
+            """,
+            [target_date] + scope_params,
+        )
+        auto_reject_pending = cur.fetchone()[0]
+
+        # 4. PENDING by_type
+        cur.execute(
+            f"""
+            SELECT po.order_type, COUNT(*) FROM pending_orders po
+            WHERE po.status = 'PENDING'
+              {scope_sql}
+            GROUP BY po.order_type
+            """,
+            scope_params,
+        )
+        by_type = {row[0]: row[1] for row in cur.fetchall()}
+
+        # 5. items (top 50 · urgency desc + created_at asc — 긴급 먼저)
+        cur.execute(
+            f"""
+            SELECT po.order_id, po.order_type, po.isbn13, b.title,
+                   po.source_location_id, po.target_location_id, po.qty,
+                   po.urgency_level, po.created_at, po.forecast_rationale, po.auto_execute_eligible
+            FROM pending_orders po LEFT JOIN books b USING (isbn13)
+            WHERE po.status = 'PENDING'
+              {scope_sql}
+            ORDER BY
+              CASE po.urgency_level WHEN 'CRITICAL' THEN 0 WHEN 'URGENT' THEN 1 WHEN 'NEWBOOK' THEN 2 ELSE 3 END,
+              po.created_at ASC
+            LIMIT 50
+            """,
+            scope_params,
+        )
+        items = [
+            {
+                "order_id": str(r[0]), "order_type": r[1], "isbn13": r[2], "title": r[3],
+                "source_location_id": r[4], "target_location_id": r[5], "qty": r[6],
+                "urgency_level": r[7], "created_at": r[8].isoformat() if r[8] else None,
+                "forecast_rationale": r[9], "auto_execute_eligible": r[10],
+            }
+            for r in cur.fetchall()
+        ]
+
+    return {
+        "date": target_date,
+        "auto_executed_at_07": auto_executed,
+        "manual_review": manual_review,
+        "auto_reject_at_18_pending": auto_reject_pending,
+        "by_type": by_type,
+        "items": items,
+    }
+
+
 @router.get("/queue", response_model=QueueResponse)
 def queue(
     ctx: AuthContext = Depends(require_auth),

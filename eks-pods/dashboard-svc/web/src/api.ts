@@ -66,6 +66,20 @@ export const fetchPending = (
   return getJson<{ items: PendingOrder[] }>(`/dashboard/pending?${qs.toString()}`, role);
 };
 
+// D2 Home 메인 카드 — batch 처리 현황 + 검토 필요 건수
+export type PendingGrouped = {
+  date: string;
+  auto_executed_at_07: number;       // 오늘 07:00 batch 자동 승인
+  manual_review: number;             // 사용자가 처리할 PENDING (시점 무관 · scope)
+  auto_reject_at_18_pending: number; // 18:00 batch 거절 예정 (NORMAL · D-1 이전)
+  by_type: Record<string, number>;   // 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER' → count
+  items: PendingOrder[];             // 사용자 직접 처리할 list (urgency desc + created asc)
+};
+export const fetchPendingGrouped = (role: Role, date?: string) => {
+  const qs = date ? `?date=${date}` : '';
+  return getJson<PendingGrouped>(`/dashboard/pending/grouped${qs}`, role);
+};
+
 // ─── Recent POS sales (direct RDS) ──────────────────────────────────
 export type SaleRow = {
   txn_id: string;
