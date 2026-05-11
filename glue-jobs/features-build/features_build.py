@@ -1,11 +1,13 @@
 """
 features_build · Glue ETL Job
 Mart 4 (sales_daily · sns_mentions · aladin_books · calendar_events) JOIN
-→ Vertex AI  feature vector  → S3 Mart features/
+→ feature vector → S3 Mart features/ (primary) + GCS features/ (VPN dual-write)
 Step Functions ETL3
 """
+import json
 import sys
 
+import boto3
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
@@ -15,7 +17,7 @@ from pyspark.sql import Window
 
 args = getResolvedOptions(
     sys.argv,
-    ["JOB_NAME", "MART_BUCKET", "catalog_database"],
+    ["JOB_NAME", "MART_BUCKET", "catalog_database", "gcp_secret_arn", "GCS_BUCKET"],
 )
 
 sc    = SparkContext()
@@ -23,6 +25,19 @@ glue  = GlueContext(sc)
 spark = glue.spark_session
 job   = Job(glue)
 job.init(args["JOB_NAME"], args)
+
+# GCS connector: SA key → /tmp/sa-key.json → Spark conf
+_sa_key_json = json.loads(
+    boto3.client("secretsmanager").get_secret_value(
+        SecretId=args["gcp_secret_arn"]
+    )["SecretString"]
+)
+_sa_key_path = "/tmp/sa-key.json"
+with open(_sa_key_path, "w") as _f:
+    json.dump(_sa_key_json, _f)
+
+spark.conf.set("spark.hadoop.google.cloud.auth.service.account.enable", "true")
+spark.conf.set("spark.hadoop.google.cloud.auth.service.account.json.keyfile", _sa_key_path)
 
 # non-vectorized reader avoids SchemaColumnConvertNotSupportedException
 spark.conf.set("spark.sql.parquet.enableVectorizedReader",        "false")
@@ -163,11 +178,17 @@ features = (
 )
 
 TARGET = f"{MART}/mart/features/{_batch_id}/"
-(
-    features.write
-    .mode("overwrite")
-    .parquet(TARGET)
-)
+features.write.mode("overwrite").parquet(TARGET)
+print(f"[features_build] s3 target={TARGET}")
 
-print(f"[features_build] target={TARGET} rows={features.count()}")
+# GCS dual-write: bookflow-ai private subnet ENI → TGW → VPN → GCP PSC → GCS
+_gcs_bucket = args.get("GCS_BUCKET", "")
+if _gcs_bucket:
+    GCS_TARGET = f"gs://{_gcs_bucket}/features/{_batch_id}/"
+    features.write.mode("overwrite").parquet(GCS_TARGET)
+    print(f"[features_build] gcs target={GCS_TARGET}")
+else:
+    print("[features_build] GCS_BUCKET 미설정 · GCS write skip")
+
+print(f"[features_build] rows={features.count()}")
 job.commit()
