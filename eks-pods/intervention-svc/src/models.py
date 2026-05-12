@@ -53,6 +53,25 @@ class ApprovalResponse(BaseModel):
     decided_at: datetime
 
 
+class PendingOrderEditRequest(BaseModel):
+    """D5-7 Notion 2.6 · WH AI 추천 수정 (수량/대상 매장/사유).
+
+    wh-manager 가 PENDING pending_order 의 qty/target_location_id/note 를 수정.
+    audit_log 에 before/after 기록.
+    """
+    qty: int | None = Field(default=None, gt=0, description="새 수량 (양수)")
+    target_location_id: int | None = Field(default=None, description="대상 매장 변경")
+    note: str | None = Field(default=None, max_length=200, description="수정 사유")
+
+
+class PendingOrderEditResponse(BaseModel):
+    order_id: UUID
+    qty: int
+    target_location_id: int
+    edited_at: datetime
+    edited_by: str
+
+
 class ReturnApproveRequest(BaseModel):
     return_id: UUID
     note: str | None = None

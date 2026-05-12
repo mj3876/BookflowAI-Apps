@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchPending, postIntervene, type Role } from '../api';
+import { ApiError, fetchPending, patchPendingOrder, postIntervene, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
 import { useLocations } from '../useLocations';
+import { useToast } from '../components/Toast';
 
 /**
  * 창고 승인 큐 - 자기 wh 의 Stage 1 (REBALANCE) + Stage 2 (WH_TRANSFER SOURCE/TARGET) 분리.
@@ -22,7 +23,26 @@ export default function WhApprove() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
   const [approveTarget, setApproveTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET'; isbn13: string; qty: number; isPublisher: boolean } | null>(null);
-  const { nameOf } = useLocations(role);
+  // D5-7 AI 추천 수정 modal state (qty + target_location_id)
+  const [editTarget, setEditTarget] = useState<{ order_id: string; isbn13: string; qty: number; target_location_id: number | null; note: string } | null>(null);
+  const { nameOf, items: locItems } = useLocations(role);
+  const { showToast } = useToast();
+
+  const editMu = useMutation({
+    mutationFn: (body: { qty?: number; target_location_id?: number; note?: string }) => {
+      if (!editTarget) throw new Error('대상 없음');
+      return patchPendingOrder(role, editTarget.order_id, body);
+    },
+    onSuccess: (r) => {
+      showToast({ type: 'success', message: `수정 완료 — 수량 ${r.qty}권 · 매장 ${nameOf(r.target_location_id)}` });
+      setEditTarget(null);
+      qc.invalidateQueries({ queryKey: ['pending'] });
+    },
+    onError: (e) => {
+      const err = e as ApiError | Error;
+      showToast({ type: 'error', message: `수정 실패: ${err.message}`, details: err instanceof ApiError ? err.code : undefined });
+    },
+  });
 
   const pending = useQuery({
     queryKey: ['pending', tab, role],
@@ -170,6 +190,15 @@ export default function WhApprove() {
                         >
                           거절
                         </button>
+                        {/* D5-7 AI 추천 수정 */}
+                        <button
+                          className="btn-outline btn-sm"
+                          disabled={busy === o.order_id}
+                          onClick={() => setEditTarget({ order_id: o.order_id, isbn13: o.isbn13, qty: o.qty, target_location_id: o.target_location_id ?? null, note: '' })}
+                          title="추천 수정 — 수량/대상 매장 변경"
+                        >
+                          수정
+                        </button>
                       </div>
                     ) : (
                       <span className="text-[10px] text-bf-muted">권한 없음</span>
@@ -225,6 +254,70 @@ export default function WhApprove() {
         onCancel={() => setRejectTarget(null)}
         isLoading={act.isPending}
       />
+
+      {/* D5-7 AI 추천 수정 modal */}
+      {editTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000]" role="dialog" aria-modal="true">
+          <div className="bg-bf-panel border border-bf-border rounded-lg p-5 w-[480px] shadow-xl">
+            <h2 className="h2 mb-3">추천 수정</h2>
+            <div className="text-xs text-bf-muted mb-3">
+              ISBN <span className="font-mono">{editTarget.isbn13}</span> · 자기 권역 PENDING 만 수정 가능. 변경 후 audit_log 자동 기록.
+            </div>
+            <div className="space-y-3 mb-4">
+              <div className="flex justify-between items-center text-xs">
+                <label className="text-bf-muted">수량</label>
+                <input
+                  type="number"
+                  className="ipt w-24 text-right"
+                  value={editTarget.qty}
+                  onChange={(e) => setEditTarget({ ...editTarget, qty: parseInt(e.target.value, 10) || 0 })}
+                  min={1}
+                />
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <label className="text-bf-muted">대상 매장</label>
+                <select
+                  className="ipt w-56"
+                  value={editTarget.target_location_id ?? ''}
+                  onChange={(e) => setEditTarget({ ...editTarget, target_location_id: e.target.value ? parseInt(e.target.value, 10) : null })}
+                >
+                  <option value="">변경 없음</option>
+                  {locItems.filter((l) => l.location_type !== 'WH' && l.wh_id === my_wh).map((l) => (
+                    <option key={l.location_id} value={l.location_id}>{l.name ?? `매장 ${l.location_id}`}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-between items-start text-xs">
+                <label className="text-bf-muted pt-1">사유</label>
+                <input
+                  type="text"
+                  className="ipt w-56"
+                  value={editTarget.note}
+                  onChange={(e) => setEditTarget({ ...editTarget, note: e.target.value })}
+                  placeholder="예: 매장 사정 변경 / 재고 부족"
+                  maxLength={200}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setEditTarget(null)}>취소</button>
+              <button
+                className="btn-primary"
+                disabled={editMu.isPending || editTarget.qty <= 0}
+                onClick={() => {
+                  const body: { qty?: number; target_location_id?: number; note?: string } = {};
+                  if (editTarget.qty > 0) body.qty = editTarget.qty;
+                  if (editTarget.target_location_id != null) body.target_location_id = editTarget.target_location_id;
+                  if (editTarget.note) body.note = editTarget.note;
+                  editMu.mutate(body);
+                }}
+              >
+                {editMu.isPending ? '처리 중…' : '수정'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

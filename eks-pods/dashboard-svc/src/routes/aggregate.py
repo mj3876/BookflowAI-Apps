@@ -16,6 +16,8 @@ from ..clients import (
     get_pending_orders,
     get_warehouse_inventory,
     post_decision_decide,
+    patch_intervention_pending_order,
+    post_branch_feedback,
     post_intervention_approve,
     post_intervention_book_status,
     post_intervention_new_book_approve,
@@ -114,6 +116,20 @@ async def intervene_approve(body: dict = Body(...), ctx: AuthContext = Depends(r
 async def intervene_reject(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
     sc, data = await post_intervention_reject(body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.patch("/pending-orders/{order_id}")
+async def edit_pending_order(order_id: str, body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """D5-7 WH AI 추천 수정 (수량/대상 매장 · Notion 2.6) — intervention-svc PATCH 프록시."""
+    sc, data = await patch_intervention_pending_order(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/branch-feedback")
+async def branch_feedback(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """D5-8 Branch → 본사/물류 의견 제출 (Notion 3.5) — notification-svc 프록시."""
+    sc, data = await post_branch_feedback(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "notification-svc unavailable"})
 
 
 @router.post("/notify/send")

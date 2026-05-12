@@ -3,9 +3,51 @@ import { token, type Role } from './auth';
 
 export type { Role } from './auth';
 
+// D5-3 P1-6 ErrorResponse 표준 (intervention-svc pilot · main.py)
+export type ApiErrorBody = {
+  error_code: string;
+  message: string;
+  details?: Record<string, unknown> | null;
+  request_id?: string | null;
+};
+
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  details?: Record<string, unknown> | null;
+  requestId?: string | null;
+  constructor(status: number, body: ApiErrorBody | string) {
+    if (typeof body === 'string') {
+      super(body);
+      this.status = status;
+      this.code = `HTTP_${status}`;
+    } else {
+      super(body.message || `${status} error`);
+      this.status = status;
+      this.code = body.error_code;
+      this.details = body.details ?? null;
+      this.requestId = body.request_id ?? null;
+    }
+  }
+}
+
+async function _throwApiError(r: Response): Promise<never> {
+  const text = await r.text().catch(() => '');
+  try {
+    const j = JSON.parse(text);
+    if (j && typeof j === 'object' && typeof j.error_code === 'string' && typeof j.message === 'string') {
+      throw new ApiError(r.status, j as ApiErrorBody);
+    }
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    // JSON parse 실패 — fallthrough
+  }
+  throw new ApiError(r.status, text || `${r.status} ${r.statusText}`);
+}
+
 async function getJson<T>(path: string, role: Role): Promise<T> {
   const r = await fetch(path, { headers: { Authorization: token(role) } });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  if (!r.ok) await _throwApiError(r);
   return r.json();
 }
 
@@ -15,11 +57,32 @@ async function postJson<T>(path: string, role: Role, body: unknown): Promise<T> 
     headers: { Authorization: token(role), 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`${r.status} ${r.statusText}: ${text}`);
-  }
+  if (!r.ok) await _throwApiError(r);
   return r.json();
+}
+
+async function patchJson<T>(path: string, role: Role, body: unknown): Promise<T> {
+  const r = await fetch(path, {
+    method: 'PATCH',
+    headers: { Authorization: token(role), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) await _throwApiError(r);
+  return r.json();
+}
+
+// D5-7 WH AI 추천 수정 (qty / target_location_id)
+export function patchPendingOrder(role: Role, order_id: string, body: { qty?: number; target_location_id?: number; note?: string }) {
+  return patchJson<{ order_id: string; qty: number; target_location_id: number; edited_at: string; edited_by: string }>(
+    `/dashboard/pending-orders/${order_id}`, role, body,
+  );
+}
+
+// D5-8 Branch 의견 제출 (Notion 3.5)
+export function postBranchFeedback(role: Role, body: { feedback_type: 'SLOW_SELLER' | 'STOCK_REQUEST' | 'OTHER'; isbn13?: string; message: string }) {
+  return postJson<{ notification_id: string; feedback_type: string; submitted_at: string }>(
+    '/dashboard/branch-feedback', role, body,
+  );
 }
 
 // ─── Overview / fan-in ──────────────────────────────────────────────

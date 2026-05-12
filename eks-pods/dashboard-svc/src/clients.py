@@ -91,6 +91,28 @@ async def _safe_post(url: str, body: dict, token: str) -> tuple[int, Any]:
         return 503, None
 
 
+async def _safe_patch(url: str, body: dict, token: str) -> tuple[int, Any]:
+    """PATCH 프록시. D5-7 pending order 수정 proxy 용."""
+    try:
+        r = await _client.patch(url, json=body, headers={"Authorization": token})
+        return r.status_code, r.json() if r.content else None
+    except Exception as e:
+        log.warning("fan-in PATCH %s failed: %s", url, e)
+        return 503, None
+
+
+async def patch_intervention_pending_order(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    """D5-7 WH AI 추천 수정 — intervention-svc PATCH /pending-orders/{id} 프록시."""
+    return await _safe_patch(
+        f"{settings.intervention_svc_url}/intervention/pending-orders/{order_id}", body, token
+    )
+
+
+async def post_branch_feedback(body: dict, token: str) -> tuple[int, Any]:
+    """D5-8 Branch → 본사/물류 의견 제출 — notification-svc POST /branch-feedback 프록시."""
+    return await _safe_post(f"{settings.notification_svc_url}/notification/branch-feedback", body, token)
+
+
 async def post_inventory_adjust(body: dict, token: str) -> tuple[int, Any]:
     """UX-6 Manual 재고 수동 조정 — inventory-svc /inventory/adjust 프록시.
 

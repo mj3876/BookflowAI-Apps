@@ -6,7 +6,7 @@ import { useLocations } from '../useLocations';
 export default function KPI() {
   const { role } = useOutletContext<{ role: Role }>();
   const wh_id = 1;
-  const { nameOf } = useLocations(role);
+  const { nameOf, byId } = useLocations(role);
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
   const summ = useQuery({ queryKey: ['summ', role], queryFn: () => fetchSalesSummary(role), refetchInterval: 5000 });
@@ -54,6 +54,50 @@ export default function KPI() {
           )}
         </div>
       </div>
+
+      {/* D5-9 Notion 1.3 · 권역별 비교 (WH-1 수도권 vs WH-2 영남) */}
+      {(() => {
+        const items = byStore.data?.items ?? [];
+        if (items.length === 0) return null;
+        const agg: Record<number, { stores: number; revenue: number; tx: number; online: number }> = {
+          1: { stores: 0, revenue: 0, tx: 0, online: 0 },
+          2: { stores: 0, revenue: 0, tx: 0, online: 0 },
+        };
+        for (const s of items) {
+          const wh = byId.get(s.store_id)?.wh_id;
+          if (wh !== 1 && wh !== 2) continue;
+          agg[wh].stores += 1;
+          agg[wh].revenue += s.revenue;
+          agg[wh].tx += s.transactions;
+          agg[wh].online += s.online_count;
+        }
+        const Card = ({ wh, name, color }: { wh: 1 | 2; name: string; color: string }) => {
+          const a = agg[wh];
+          const onlinePct = a.tx > 0 ? Math.round((a.online / a.tx) * 100) : 0;
+          const total = agg[1].revenue + agg[2].revenue;
+          const share = total > 0 ? Math.round((a.revenue / total) * 100) : 0;
+          return (
+            <div className={`card border-2 ${color}`}>
+              <div className="flex items-baseline justify-between mb-2">
+                <h2 className="h2">{name} 권역 (WH-{wh})</h2>
+                <span className="text-xs text-bf-muted">매출 점유 {share}%</span>
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                <div><div className="text-bf-muted text-[10px]">관할 매장</div><div className="text-lg font-mono">{a.stores}</div></div>
+                <div><div className="text-bf-muted text-[10px]">매출 (1h)</div><div className="text-lg font-mono">₩{(a.revenue / 1000).toFixed(0)}K</div></div>
+                <div><div className="text-bf-muted text-[10px]">거래 수</div><div className="text-lg font-mono">{a.tx}</div></div>
+                <div><div className="text-bf-muted text-[10px]">온라인 비중</div><div className="text-lg font-mono">{onlinePct}%</div></div>
+              </div>
+            </div>
+          );
+        };
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Card wh={1} name="수도권" color="border-blue-300" />
+            <Card wh={2} name="영남"   color="border-rose-300" />
+          </div>
+        );
+      })()}
 
       {/* 매장별 매출 차트 */}
       <div className="card">

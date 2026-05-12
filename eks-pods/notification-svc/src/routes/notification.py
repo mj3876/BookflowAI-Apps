@@ -14,7 +14,17 @@ from fastapi import APIRouter, Depends, Query
 
 from ..auth import AuthContext, require_auth
 from ..db import db_conn, redis_client
-from ..models import NotificationRow, RecentResponse, SendRequest, SendResponse
+from datetime import datetime, timezone
+from fastapi import HTTPException, status
+
+from ..models import (
+    BranchFeedbackRequest,
+    BranchFeedbackResponse,
+    NotificationRow,
+    RecentResponse,
+    SendRequest,
+    SendResponse,
+)
 from ..settings import settings
 
 log = logging.getLogger(__name__)
@@ -119,6 +129,51 @@ async def send(req: SendRequest, ctx: AuthContext = Depends(require_auth)) -> Se
         event_type=req.event_type,
         status=new_status,
         sent_at=sent_at,
+    )
+
+
+@router.post("/branch-feedback", response_model=BranchFeedbackResponse)
+def branch_feedback(req: BranchFeedbackRequest, ctx: AuthContext = Depends(require_auth)):
+    """D5-8 Notion 3.5 · 매장 → 본사/물류 의견 제출.
+
+    권한: branch-clerk 만. notifications_log INSERT (event_type='BranchFeedback')
+    + 본사/물류센터 알림 + audit_log.
+    """
+    if ctx.role != "branch-clerk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="branch-clerk 만 의견 제출 가능")
+    if ctx.scope_store_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="scope_store_id 부재 (토큰 손상)")
+
+    notification_id = uuid4()
+    payload = {
+        "feedback_type": req.feedback_type,
+        "isbn13": req.isbn13,
+        "message": req.message,
+        "from_store_id": ctx.scope_store_id,
+        "from_user": ctx.user_id,
+    }
+    insert_sql = """
+        INSERT INTO notifications_log
+            (notification_id, event_type, correlation_id, severity,
+             recipients, channels, payload_summary, status)
+        VALUES (%s, 'BranchFeedback', NULL, 'INFO',
+                %s, NULL, %s, 'SENT')
+        RETURNING sent_at
+    """
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(insert_sql, (
+                str(notification_id),
+                json.dumps(["hq-admin", f"wh-manager-store-{ctx.scope_store_id}"]),
+                json.dumps(payload),
+            ))
+            sent_at = cur.fetchone()[0]
+        conn.commit()
+
+    return BranchFeedbackResponse(
+        notification_id=notification_id,
+        feedback_type=req.feedback_type,
+        submitted_at=sent_at if isinstance(sent_at, datetime) else datetime.now(timezone.utc),
     )
 
 

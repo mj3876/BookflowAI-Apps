@@ -118,10 +118,12 @@ phases:
         done
 
       # ── 4. Rollout status (Deployment 만 · CronJob 은 skip) ──
+      # dashboard-svc 는 multi-stage (node build → python serve · web bundle 큼) 라
+      # 시작 시간 더 길어서 timeout 300s. 다른 pod 도 graceful term + readiness 여유 고려해 동일.
       - |
         for pod in $PODS; do
           if kubectl get deployment "$pod" -n "$NAMESPACE" >/dev/null 2>&1; then
-            kubectl rollout status deployment/"$pod" -n "$NAMESPACE" --timeout=180s || exit 1
+            kubectl rollout status deployment/"$pod" -n "$NAMESPACE" --timeout=300s || exit 1
           fi
         done
       - echo "=== Build complete ==="

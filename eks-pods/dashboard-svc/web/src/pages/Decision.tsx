@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useOutletContext } from 'react-router-dom';
-import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, type InsufficientStockItem, type Role } from '../api';
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
+import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, ApiError, type InsufficientStockItem, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
 import { useLocations } from '../useLocations';
+import { useToast } from '../components/Toast';
 
 /**
  * 본사 의사결정 모니터링 + escalation.
@@ -30,7 +31,13 @@ const STAGE_LABEL: Record<number, { name: string; color: string; desc: string }>
 export default function Decision() {
   const { role } = useOutletContext<{ role: Role }>();
   const qc = useQueryClient();
-  const { nameOf } = useLocations(role);
+  const { nameOf, items: locItems } = useLocations(role);
+  const { showToast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // D5-6 Spike → Decision pre-fill (?isbn=...&qty=...&note=...)
+  const prefillIsbn = searchParams.get('isbn');
+  const prefillQty = parseInt(searchParams.get('qty') ?? '50', 10) || 50;
+  const prefillNote = searchParams.get('note') ?? '';
 
   const pending = useQuery({
     queryKey: ['pending-all', role],
@@ -48,8 +55,44 @@ export default function Decision() {
   const escalate = useMutation({
     mutationFn: (order_id: string) =>
       postIntervene(role, 'approve', { order_id, approval_side: 'FINAL', note: 'HQ escalation' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['pending-all'] }),
-    onError: (e) => alert(`강제 승인 실패: ${String(e)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pending-all'] });
+      showToast({ type: 'success', message: '강제 승인 완료' });
+    },
+    onError: (e) => {
+      const err = e as ApiError | Error;
+      showToast({ type: 'error', message: `강제 승인 실패: ${err.message}`, details: err instanceof ApiError ? err.requestId ?? undefined : undefined });
+    },
+  });
+
+  // D5-6 prefill 발의 modal state
+  const [prefillTarget, setPrefillTarget] = useState<{ isbn: string; qty: number; note: string; storeId: number | null } | null>(null);
+  useEffect(() => {
+    if (prefillIsbn && role === 'hq-admin') {
+      setPrefillTarget({ isbn: prefillIsbn, qty: prefillQty, note: prefillNote, storeId: null });
+    }
+  }, [prefillIsbn, prefillQty, prefillNote, role]);
+
+  const prefillMu = useMutation({
+    mutationFn: () => {
+      if (!prefillTarget || !prefillTarget.storeId) throw new Error('대상 매장 선택 필요');
+      return postDecide(role, {
+        isbn13: prefillTarget.isbn,
+        target_location_id: prefillTarget.storeId,
+        qty: prefillTarget.qty,
+        note: prefillTarget.note || 'Spike 발의',
+      });
+    },
+    onSuccess: (r) => {
+      showToast({ type: 'success', message: `발의 성공 — ${r.stage}단계 (${r.order_type})` });
+      qc.invalidateQueries({ queryKey: ['pending-all'] });
+      setPrefillTarget(null);
+      setSearchParams({});
+    },
+    onError: (e) => {
+      const err = e as ApiError | Error;
+      showToast({ type: 'error', message: `발의 실패: ${err.message}`, details: err instanceof ApiError ? err.code : undefined });
+    },
   });
 
   // P1-4b 시연 trigger — 예측 부족 도서 자동 cascade 일괄 발의 (HQ 만)
@@ -97,6 +140,11 @@ export default function Decision() {
             현재 진행 중인 모든 발주 결정의 단계와 처리 상황. 자동 cascade (수요 예측·SNS 급등·매장 요청)로 발의되며,
             {role === 'hq-admin' ? ' 본사는 필요 시 다른 역할의 승인을 기다리지 않고 강제 승인 (escalation) 할 수 있어요.' : ' 권한이 있는 행만 처리 가능합니다.'}
           </p>
+          {/* D5-4 workflow link */}
+          <div className="text-[11px] text-bf-muted mt-1">
+            발의 후 → <Link to="/wh-approve" className="text-bf-primary hover:underline">권역 물류센터 승인</Link>
+            {' · '}양쪽 협의 → <Link to="/wh-transfer" className="text-bf-primary hover:underline">권역 이동</Link>
+          </div>
         </div>
         {role === 'hq-admin' && (
           <button
@@ -267,6 +315,61 @@ export default function Decision() {
         onCancel={() => setEscalateTarget(null)}
         isLoading={escalate.isPending}
       />
+
+      {/* D5-6 Spike → Decision pre-fill modal */}
+      {prefillTarget && role === 'hq-admin' && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000]" role="dialog" aria-modal="true">
+          <div className="bg-bf-panel border border-bf-border rounded-lg p-5 w-[480px] shadow-xl">
+            <h2 className="h2 mb-3">발의 (Spike 자동 prefill)</h2>
+            <div className="text-xs text-bf-muted mb-3">
+              SNS 급등으로 자동 입력된 ISBN · 수량 · 사유. 대상 매장만 선택 후 발의하세요. 발의 후 cascade (1→2→3) 가 자동 진행됩니다.
+            </div>
+            <div className="space-y-2 mb-4">
+              <div className="flex justify-between text-xs">
+                <span className="text-bf-muted">ISBN</span>
+                <span className="font-mono">{prefillTarget.isbn}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <label className="text-bf-muted">수량</label>
+                <input
+                  type="number"
+                  className="ipt w-24 text-right"
+                  value={prefillTarget.qty}
+                  onChange={(e) => setPrefillTarget({ ...prefillTarget, qty: parseInt(e.target.value, 10) || 0 })}
+                  min={1}
+                />
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <label className="text-bf-muted">대상 매장</label>
+                <select
+                  className="ipt w-56"
+                  value={prefillTarget.storeId ?? ''}
+                  onChange={(e) => setPrefillTarget({ ...prefillTarget, storeId: e.target.value ? parseInt(e.target.value, 10) : null })}
+                >
+                  <option value="">매장 선택…</option>
+                  {locItems.filter((l) => l.location_type !== 'WH').map((l) => (
+                    <option key={l.location_id} value={l.location_id}>{l.name ?? `매장 ${l.location_id}`}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-bf-muted">사유</span>
+                <span className="text-right max-w-[280px]">{prefillTarget.note || '-'}</span>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => { setPrefillTarget(null); setSearchParams({}); }}>취소</button>
+              <button
+                className="btn-primary"
+                disabled={prefillMu.isPending || !prefillTarget.storeId || prefillTarget.qty <= 0}
+                onClick={() => prefillMu.mutate()}
+              >
+                {prefillMu.isPending ? '처리 중…' : '발의'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

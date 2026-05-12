@@ -73,7 +73,7 @@ function TransferTable({
   return (
     <table className="data-table">
       <thead>
-        <tr><th></th><th>긴급도</th><th>도서</th><th>출발 → 도착</th><th className="text-right">수량</th><th>상태</th></tr>
+        <tr><th></th><th>긴급도</th><th>도서</th><th>출발 → 도착</th><th>발의</th><th className="text-right">수량</th><th>상태</th></tr>
       </thead>
       <tbody>
         {rows.slice(0, 20).map((o) => {
@@ -108,6 +108,14 @@ function TransferTable({
                     );
                   })()}
                 </td>
+                <td>
+                  {/* D1-7: WH_TRANSFER 발의자 = source 권역. source 가 내 권역이면 우리 발의 */}
+                  {whIdOf(o.source_location_id) === myWh ? (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/15 text-blue-300 border border-blue-500/40">🟦 우리 발의</span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-500/15 text-orange-300 border border-orange-500/40">🟧 상대 발의</span>
+                  )}
+                </td>
                 <td className="text-right">{o.qty}권</td>
                 <td>
                   <span className={
@@ -118,7 +126,7 @@ function TransferTable({
               </tr>
               {isOpen && hasR && (
                 <tr key={`${o.order_id}-detail`}>
-                  <td colSpan={6} className="!p-2">
+                  <td colSpan={7} className="!p-2">
                     <RationaleDetail r={o.forecast_rationale as Rationale} qty={o.qty} />
                   </td>
                 </tr>
@@ -127,7 +135,7 @@ function TransferTable({
           );
         })}
         {rows.length === 0 && (
-          <tr><td colSpan={6} className="text-center py-6 text-bf-muted">{emptyText}</td></tr>
+          <tr><td colSpan={7} className="text-center py-6 text-bf-muted">{emptyText}</td></tr>
         )}
       </tbody>
     </table>

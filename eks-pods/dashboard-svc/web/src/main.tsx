@@ -27,6 +27,7 @@ import BranchCuration from './pages/BranchCuration';
 import Notifications from './pages/Notifications';
 import LiveEvents from './pages/LiveEvents';
 import { getRole, roleGroup } from './auth';
+import { ToastProvider } from './components/Toast';
 import './styles.css';
 
 const qc = new QueryClient({
@@ -51,6 +52,7 @@ function HomeRedirect() {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={qc}>
+      <ToastProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -94,6 +96,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </Route>
         </Routes>
       </BrowserRouter>
+      </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

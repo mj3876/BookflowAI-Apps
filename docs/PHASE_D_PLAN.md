@@ -357,9 +357,9 @@
 | **α** | Platform | D0-1~5 운영 정합 + D4 시드 진화 | configmap envsubst · RDS_HOST · auto-restart · jwt · utf-8 · column-aware · generate.py 7d · ECS sim 정합 | L | ✅ done |
 | **β** | Apps | D2 일괄 승인 + Home 3 페이지 + D1-1/2/3 UX 충돌 | pending grouped + bulk-approve · HqHome/WhHome/BranchHome + routing · WhHome 카드 · 신간 마킹 · WhTransfer tab · auth-pod ns | L | 진행 중 |
 | **γ** | Apps | D3 재고 책 단위 + Redis 실시간 | BranchInventory/WhDashboard/HqInventory 책 단위 · Redis WS flash | L | ✅ done |
-| **🔥 P0** | Platform + Apps | **D0-6 POS 흐름 fix** | ECS sim → Kinesis publish 복구 · pos-ingestor Invocations 살리기 · sales_realtime 실시간 갱신 검증 | M | 🔲 진행 |
-| **δ** | Apps | D5-1 + D5-3 + D1-3a + D1-4 + D1-5 + D1-7 (크게 묶음) | returns request · ErrorResponse · **WhTransfer 권역 버그 fix** · 매장 출처 UI · 타센터 재고 조회 · 발의자 추적 | L | 🔲 |
-| **ε** | Apps | D5-4 + D5-5 + D5-6 + D5-2 + D5-7 + D5-8 + D5-9 + D1-6 (크게 묶음) | EmptyState 17 · workflow link · Spike pre-fill · R&R 문서 · WH AI 추천 수정 · Branch 의견 채널 · KPI 권역별 비교 · 신간 권역별 수량 | L | 🔲 |
+| **🔥 P0** | Platform + Apps | **D0-6 POS 흐름 fix** | ECS sim → Kinesis publish 복구 · pos-ingestor Invocations 살리기 · sales_realtime 실시간 갱신 검증 | M | ✅ done (Platform aws b3d403b · 검증: Kinesis 11:19~21 1/5/15 · Lambda 6/19/19) |
+| **δ+ε** | Apps | 통합 PR (D1-3a~7 · D5-1/3/4/6/7/8/9 · D1-6 · buildspec) | WhTransfer 권역 fix · 매장 출처/타센터/발의자 · Toast 인프라 · KPI 권역별 비교 · Spike→Decision prefill · workflow link · WH AI 추천 수정 · Branch 의견 채널 · buildspec timeout 300s | L | ✅ done (push 대기 — 사용자 PR 생성) |
+| **후속** | Apps | D5-2 + D5-5 (시연 후) | EmptyState 17 page · R&R 문서 정정 | M | 🔲 시연 후 |
 
 각 PR 후 cicd 트리거 (deploy 계정 자동) + admin 로컬 build/apply → 시연 검증 → 다음.
 
