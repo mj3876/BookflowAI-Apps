@@ -96,6 +96,10 @@ phases:
       - kubectl get ns "$NAMESPACE" 2>/dev/null || kubectl create namespace "$NAMESPACE"
 
       # ── 3. K8s manifest envsubst → apply ──
+      # RDS endpoint · DuckDNS FQDN 동적 fetch (매일 redeploy 시 stale 방지)
+      - export RDS_HOST=$(aws rds describe-db-instances --region "$AWS_REGION" --db-instance-identifier bookflow-postgres --query "DBInstances[0].Endpoint.Address" --output text)
+      - export DOMAIN="${DOMAIN:-bookflow.duckdns.org}"
+      - echo "RDS_HOST=$RDS_HOST  DOMAIN=$DOMAIN"
       - |
         for pod in $PODS; do
           if [ ! -d "$pod/k8s" ]; then
