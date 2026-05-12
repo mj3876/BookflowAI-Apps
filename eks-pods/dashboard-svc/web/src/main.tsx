@@ -16,6 +16,7 @@ import HqHome from './pages/HqHome';
 import WhHome from './pages/WhHome';
 import BranchHome from './pages/BranchHome';
 import WhDashboard from './pages/WhDashboard';
+import WhInventory from './pages/WhInventory';
 import WhApprove from './pages/WhApprove';
 import WhTransfer from './pages/WhTransfer';
 import WhInstructions from './pages/WhInstructions';
@@ -76,6 +77,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* WH */}
             <Route path="/wh-dashboard"    element={<WhDashboard />} />
+            <Route path="/wh-inventory"    element={<WhInventory />} />
             <Route path="/wh-approve"      element={<WhApprove />} />
             <Route path="/wh-transfer"     element={<WhTransfer />} />
             <Route path="/wh-instructions" element={<WhInstructions />} />

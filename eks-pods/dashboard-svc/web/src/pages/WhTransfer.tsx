@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchPending, type PendingOrder, type Role } from '../api';
 import { ko, ORDER_STATUS_KO, URGENCY_KO, whName } from '../labels';
 import { useLocations } from '../useLocations';
+import { groupByDate, dateGroupTone } from '../dateGroup';
 
 /**
  * 권역 이동 - 2단계 SOURCE/TARGET 이중 승인 시나리오 (.pen C-1~C-4).
@@ -76,12 +77,26 @@ function TransferTable({
         <tr><th></th><th>긴급도</th><th>도서</th><th>출발 → 도착</th><th>발의</th><th className="text-right">수량</th><th>상태</th></tr>
       </thead>
       <tbody>
-        {rows.slice(0, 20).map((o) => {
+        {groupByDate(rows.slice(0, 50)).map((g) => {
+          const tone = dateGroupTone(g.label);
+          return (
+        <Fragment key={g.key}>
+          <tr className="bg-bf-panel2"><td colSpan={7} className={`py-1.5 px-3 ${tone.wrap}`}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{g.label}</span>
+              <span className="text-[11px] text-bf-muted">{g.total}건 · 처리완료 {g.done}/{g.total} ({g.progressPct}%)</span>
+              {g.approved > 0 && <span className="text-[10px] text-green-700">✓ {g.approved}</span>}
+              {g.rejected > 0 && <span className="text-[10px] text-red-700">✗ {g.rejected}</span>}
+              {g.pending > 0 && <span className="text-[10px] text-orange-600">⏳ {g.pending}</span>}
+              {g.allDone && <span className="ml-1 px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-semibold border border-green-500/40">✅ 완료 · 최종 계획안</span>}
+            </div>
+          </td></tr>
+        {g.rows.map((o) => {
           const isOpen = expandedId === o.order_id;
           const hasR = !!o.forecast_rationale;
           return (
-            <>
-              <tr key={o.order_id} className={hasR ? 'cursor-pointer hover:bg-bf-card/50' : ''} onClick={() => hasR && onToggle(o.order_id)}>
+            <Fragment key={o.order_id}>
+              <tr className={hasR ? 'cursor-pointer hover:bg-bf-card/50' : ''} onClick={() => hasR && onToggle(o.order_id)}>
                 <td className="text-bf-muted text-xs">{hasR ? (isOpen ? '▼' : '▶') : ''}</td>
                 <td>
                   <span className={
@@ -125,13 +140,16 @@ function TransferTable({
                 </td>
               </tr>
               {isOpen && hasR && (
-                <tr key={`${o.order_id}-detail`}>
+                <tr>
                   <td colSpan={7} className="!p-2">
                     <RationaleDetail r={o.forecast_rationale as Rationale} qty={o.qty} />
                   </td>
                 </tr>
               )}
-            </>
+            </Fragment>
+          );
+        })}
+        </Fragment>
           );
         })}
         {rows.length === 0 && (

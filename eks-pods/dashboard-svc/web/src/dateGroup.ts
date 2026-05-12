@@ -5,8 +5,24 @@
  * = 모든 처리 페이지의 PENDING 은 "오늘" 안에서 끝나는 것이 정상.
  */
 
-/** items 를 created_at 의 YYYY-MM-DD (KST) 별로 그룹. 최신 날짜 먼저. */
-export function groupByDate<T extends { created_at?: string | null }>(items: T[]): { key: string; label: string; rows: T[] }[] {
+export type DateGroup<T> = {
+  key: string;
+  label: string;
+  rows: T[];
+  /** 그룹 stats — 그룹 헤더 progress 표시 + 최종 계획안 트리거에 사용 */
+  total: number;
+  approved: number;
+  rejected: number;
+  pending: number;
+  done: number;       // approved + rejected
+  progressPct: number; // 0~100
+  allDone: boolean;    // total>0 && pending===0
+};
+
+/** items 를 created_at 의 YYYY-MM-DD (KST) 별로 그룹. 최신 날짜 먼저.
+ *  사용자 요구 (2026-05-12): 승인 전부 완료되면 최종 계획안 표시 → progress stats 동봉.
+ */
+export function groupByDate<T extends { created_at?: string | null; status?: string | null }>(items: T[]): DateGroup<T>[] {
   const m = new Map<string, T[]>();
   for (const it of items) {
     const key = it.created_at ? dateKey(it.created_at) : '미지정';
@@ -15,8 +31,30 @@ export function groupByDate<T extends { created_at?: string | null }>(items: T[]
   }
   return [...m.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
-    .map(([key, rows]) => ({ key, label: dateLabel(key), rows }));
+    .map(([key, rows]) => {
+      const total = rows.length;
+      const approved = rows.filter((r) => r.status === 'APPROVED').length;
+      const rejected = rows.filter((r) => r.status === 'REJECTED').length;
+      const pending = total - approved - rejected;
+      const done = approved + rejected;
+      const progressPct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const allDone = total > 0 && pending === 0;
+      return { key, label: dateLabel(key), rows, total, approved, rejected, pending, done, progressPct, allDone };
+    });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TODO(notification · D5 ε 후속): 그룹 완료 시 매장별 알림
+//   - 사용자 요구 (2026-05-12): "notification 도 각각 지점별로 다 가야됨"
+//   - 그룹의 allDone === true 가 처음 trigger 되는 순간:
+//     1) 그룹 내 row 들의 target_location_id (또는 source_location_id) distinct 매장 list 추출
+//     2) 매장별로 notification-svc 호출:
+//        - 본사: GroupCompleted 알림 (전체 요약)
+//        - 매장: OrderApproved/OrderRejected 알림 (자기 매장 row 만)
+//        - WH: TransferReady 알림 (자기 권역 row 만)
+//   - 현재는 frontend rendering 단계라 미구현. backend (intervention-svc 또는 별도 cron) 에서
+//     status transition watch 가 더 적합 — D5 ε 후속 PR 에서 결정.
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** Date|ISO string → 'YYYY-MM-DD' (KST 시간대 기준) */
 function dateKey(iso: string): string {

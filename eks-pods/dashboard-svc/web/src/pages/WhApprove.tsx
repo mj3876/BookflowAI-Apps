@@ -152,8 +152,19 @@ export default function WhApprove() {
                 <Fragment key={group.key}>
                   <tr className="bg-bf-panel2">
                     <td colSpan={ncols} className={`py-1.5 px-3 ${tone.wrap}`}>
-                      <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{group.label}</span>
-                      <span className="ml-2 text-[11px] text-bf-muted">{group.rows.length}건 · 매일 cycle (07:00 자동 승인 / 18:00 자동 거절)</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{group.label}</span>
+                        <span className="text-[11px] text-bf-muted">{group.total}건 · 처리완료 {group.done}/{group.total} ({group.progressPct}%)</span>
+                        {group.approved > 0 && <span className="text-[10px] text-green-700">✓ {group.approved}</span>}
+                        {group.rejected > 0 && <span className="text-[10px] text-red-700">✗ {group.rejected}</span>}
+                        {group.pending > 0 && <span className="text-[10px] text-orange-600">⏳ {group.pending}</span>}
+                        {group.allDone && (
+                          <span className="ml-1 px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-semibold border border-green-500/40">
+                            ✅ 완료 · 최종 계획안
+                          </span>
+                        )}
+                        <span className="text-[10px] text-bf-muted ml-auto">매일 cycle (07:00 자동 승인 · 18:00 자동 거절)</span>
+                      </div>
                     </td>
                   </tr>
                   {group.rows.map((o) => {

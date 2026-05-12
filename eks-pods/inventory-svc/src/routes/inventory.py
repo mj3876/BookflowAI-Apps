@@ -96,11 +96,11 @@ def get_warehouse_inventory(wh_id: int, ctx: AuthContext = Depends(require_auth)
     """FR-A7.4 실시간 재고 조회 — 현재고 + 안전재고 + 예상소진일 + 입출고 in-transit 합산.
 
     Notion 2.1: WH-1↔WH-2 서로 read 가능 (2단계 의사결정용 · 상대 여유분 파악). mutate (/adjust /reserve) 만 자기 wh 제한.
-    branch-clerk 만 자기 매장 외 차단.
+    BranchInventory 도 wh_id 단위 호출 후 frontend 에서 scope_store_id 필터 — branch-clerk read 도 OK.
     """
-    if ctx.role == "branch-clerk":
-        # branch-clerk 는 본인 매장 외 wh 단위 조회 불가
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="branch-clerk 는 wh 단위 조회 불가")
+    # read: 모든 role 허용 (wh-manager cross-wh OK / branch-clerk frontend filter / hq-admin 전권)
+    # mutate (adjust/reserve) 만 _check_inventory_write_perm 에서 자기 매장/wh 제한
+    _ = ctx
 
     # Notion 명세: 온라인 매장 재고 출처 = WH 본체 (is_virtual STORE_ONLINE 은 inventory row 없음)
     # → online 매장도 응답에 포함시키되 quantity 는 WH 본체 inventory 를 substitute (UNION)
