@@ -105,6 +105,10 @@ export default function BranchInbound() {
           물류센터에서 발송된 도서가 매장에 도착했을 때 처리하는 화면입니다.
           정상이면 <b>수령</b>, 수량/품질 문제가 있으면 <b>거부</b> 후 사유를 입력하면 물류센터에 즉시 통보됩니다.
         </p>
+        {/* D5-4 workflow link */}
+        <div className="text-[11px] text-bf-muted mt-1">
+          수령 처리 → 매장 재고 자동 갱신 → <a href="/branch-inventory" className="text-bf-primary hover:underline">매장 재고</a> 확인
+        </div>
       </div>
 
       {feedback && (

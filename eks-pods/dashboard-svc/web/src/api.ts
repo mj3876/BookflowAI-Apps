@@ -71,6 +71,20 @@ async function patchJson<T>(path: string, role: Role, body: unknown): Promise<T>
   return r.json();
 }
 
+// D5-7 WH AI 추천 수정 (qty / target_location_id)
+export function patchPendingOrder(role: Role, order_id: string, body: { qty?: number; target_location_id?: number; note?: string }) {
+  return patchJson<{ order_id: string; qty: number; target_location_id: number; edited_at: string; edited_by: string }>(
+    `/dashboard/pending-orders/${order_id}`, role, body,
+  );
+}
+
+// D5-8 Branch 의견 제출 (Notion 3.5)
+export function postBranchFeedback(role: Role, body: { feedback_type: 'SLOW_SELLER' | 'STOCK_REQUEST' | 'OTHER'; isbn13?: string; message: string }) {
+  return postJson<{ notification_id: string; feedback_type: string; submitted_at: string }>(
+    '/dashboard/branch-feedback', role, body,
+  );
+}
+
 // ─── Overview / fan-in ──────────────────────────────────────────────
 export type Overview = {
   wh_id: number;

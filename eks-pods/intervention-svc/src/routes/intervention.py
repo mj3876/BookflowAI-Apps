@@ -31,6 +31,8 @@ from ..db import db_conn
 from ..models import (
     ApprovalResponse,
     ApproveRequest,
+    PendingOrderEditRequest,
+    PendingOrderEditResponse,
     QueueItem,
     QueueResponse,
     RejectRequest,
@@ -495,6 +497,94 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
         correlation_id=str(req.order_id),
     )
     return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at)
+
+
+@router.patch("/pending-orders/{order_id}", response_model=PendingOrderEditResponse)
+def edit_pending_order(order_id: UUID, req: PendingOrderEditRequest, ctx: AuthContext = Depends(require_auth)):
+    """D5-7 Notion 2.6 · WH AI 추천 수정 (수량/대상 매장).
+
+    권한:
+      - hq-admin: 전권
+      - wh-manager: 자기 권역 (source 또는 target 매장이 자기 wh) 의 PENDING 만
+      - branch-clerk: 차단
+
+    제약:
+      - status='PENDING' 만 수정 (APPROVED/REJECTED/EXECUTED 차단)
+      - qty 또는 target_location_id 중 1개 이상 필수
+    """
+    if ctx.role == "branch-clerk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="branch-clerk 는 발주 수정 권한 없음")
+    if req.qty is None and req.target_location_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="qty 또는 target_location_id 중 1개 이상 필수")
+
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            # 현재 row + 권한 확인
+            cur.execute(
+                """
+                SELECT po.qty, po.target_location_id, po.source_location_id, po.status, po.order_type,
+                       tl.wh_id AS target_wh, sl.wh_id AS source_wh
+                  FROM pending_orders po
+                  LEFT JOIN locations tl ON tl.location_id = po.target_location_id
+                  LEFT JOIN locations sl ON sl.location_id = po.source_location_id
+                 WHERE po.order_id = %s
+                """,
+                (str(order_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+            cur_qty, cur_target, cur_source, cur_status, order_type, target_wh, source_wh = row
+            if cur_status != "PENDING":
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail=f"수정은 PENDING 상태만 가능 (현재 {cur_status})")
+            if ctx.role == "wh-manager":
+                if ctx.scope_wh_id is None:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="wh-manager scope_wh_id 부재")
+                if target_wh != ctx.scope_wh_id and source_wh != ctx.scope_wh_id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                        detail="자기 권역 (source or target) 의 발주만 수정 가능")
+
+            # target_location_id 변경 시 같은 권역 매장인지 검증
+            new_target = req.target_location_id if req.target_location_id is not None else cur_target
+            if req.target_location_id is not None and ctx.role == "wh-manager":
+                cur.execute("SELECT wh_id FROM locations WHERE location_id = %s", (req.target_location_id,))
+                r2 = cur.fetchone()
+                if r2 is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"target_location_id {req.target_location_id} 없음")
+                if r2[0] != ctx.scope_wh_id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                        detail="대상 매장이 자기 권역 외 — 변경 불가")
+
+            new_qty = req.qty if req.qty is not None else cur_qty
+            before = {"qty": cur_qty, "target_location_id": cur_target}
+            after  = {"qty": new_qty, "target_location_id": new_target, "note": req.note}
+
+            cur.execute(
+                """
+                UPDATE pending_orders
+                   SET qty = %s, target_location_id = %s, updated_at = NOW()
+                 WHERE order_id = %s
+                """,
+                (new_qty, new_target, str(order_id)),
+            )
+            edited_at = datetime.utcnow()
+            cur.execute(
+                """
+                INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, before_state, after_state)
+                VALUES ('user', %s, 'pending_order.edit', 'pending_order', %s, %s, %s)
+                """,
+                (ctx.user_id, str(order_id), json.dumps(before), json.dumps(after)),
+            )
+        conn.commit()
+
+    return PendingOrderEditResponse(
+        order_id=order_id,
+        qty=new_qty,
+        target_location_id=new_target,
+        edited_at=edited_at,
+        edited_by=ctx.user_id,
+    )
 
 
 @router.post("/returns/request", response_model=ReturnRequestResponse)

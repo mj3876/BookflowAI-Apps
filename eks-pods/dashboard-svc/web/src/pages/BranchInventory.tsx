@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchOverview, postReturnsRequest, type Role } from '../api';
+import { ApiError, fetchOverview, postBranchFeedback, postReturnsRequest, type Role } from '../api';
+import { useToast } from '../components/Toast';
 import { useLocations } from '../useLocations';
 import { useScope } from '../auth';
 import { useStockUpdates } from '../useStockUpdates';
@@ -63,6 +64,28 @@ export default function BranchInventory() {
   const [qty, setQty] = useState(1);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
+  // D5-8 의견 제출 modal state
+  const { showToast } = useToast();
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [fbType, setFbType] = useState<'SLOW_SELLER' | 'STOCK_REQUEST' | 'OTHER'>('SLOW_SELLER');
+  const [fbIsbn, setFbIsbn] = useState('');
+  const [fbMessage, setFbMessage] = useState('');
+  const fbMu = useMutation({
+    mutationFn: () => postBranchFeedback(role, {
+      feedback_type: fbType,
+      isbn13: fbIsbn.length === 13 ? fbIsbn : undefined,
+      message: fbMessage,
+    }),
+    onSuccess: () => {
+      showToast({ type: 'success', message: '본사/물류에 의견 제출됨 — 검토 후 회신됩니다' });
+      setFeedbackOpen(false); setFbIsbn(''); setFbMessage('');
+    },
+    onError: (e) => {
+      const err = e as ApiError | Error;
+      showToast({ type: 'error', message: `제출 실패: ${err.message}`, details: err instanceof ApiError ? err.code : undefined });
+    },
+  });
+
   const reqMu = useMutation({
     mutationFn: (body: { isbn13: string; location_id: number; qty: number; reason: string }) =>
       postReturnsRequest(role, body),
@@ -103,6 +126,12 @@ export default function BranchInventory() {
             온라인 주문 결제 시 거점창고에서 직접 출하되며, 별도 매장 재고는 운영하지 않습니다.
           </div>
         )}
+        {/* D5-8 본사/물류 의견 제출 (Notion 3.5) */}
+        <div className="mt-2">
+          <button className="btn-outline btn-sm" onClick={() => setFeedbackOpen(true)} title="이 책이 안 팔린다 / 재고가 더 필요하다 등 본사·물류센터에 직접 의견 전달">
+            💬 본사·물류에 의견 제출
+          </button>
+        </div>
       </div>
 
       {feedback && (
@@ -266,6 +295,50 @@ export default function BranchInventory() {
                 onClick={onSubmit}
               >
                 {reqMu.isPending ? '신청 중…' : '신청'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* D5-8 본사·물류 의견 제출 modal */}
+      {feedbackOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000]" role="dialog" aria-modal="true">
+          <div className="bg-bf-panel border border-bf-border rounded-lg p-5 w-[460px] shadow-xl">
+            <h2 className="h2 mb-3">본사·물류에 의견 제출</h2>
+            <div className="text-xs text-bf-muted mb-3">
+              "이 책 안 팔린다" / "재고 더 필요" / 기타 매장 사정 의견을 본사·권역 물류센터에 직접 전달합니다.
+            </div>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="text-xs text-bf-muted">유형</label>
+                <select className="ipt w-full" value={fbType} onChange={(e) => setFbType(e.target.value as any)}>
+                  <option value="SLOW_SELLER">잘 안 팔림 (SLOW_SELLER)</option>
+                  <option value="STOCK_REQUEST">재고 추가 요청 (STOCK_REQUEST)</option>
+                  <option value="OTHER">기타 (OTHER)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-bf-muted">ISBN (선택 · 13자리)</label>
+                <input className="ipt w-full font-mono" value={fbIsbn} onChange={(e) => setFbIsbn(e.target.value)} placeholder="9788..." maxLength={13} />
+              </div>
+              <div>
+                <label className="text-xs text-bf-muted">의견 *</label>
+                <textarea
+                  className="ipt w-full"
+                  rows={4}
+                  maxLength={500}
+                  value={fbMessage}
+                  onChange={(e) => setFbMessage(e.target.value)}
+                  placeholder="예: 이 책은 신간이지만 한 달째 1권도 안 팔립니다 — 다른 매장으로 재분배 검토 부탁드립니다"
+                />
+                <div className="text-[10px] text-bf-muted text-right mt-1">{fbMessage.length}/500</div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setFeedbackOpen(false)}>취소</button>
+              <button className="btn-primary" disabled={fbMu.isPending || fbMessage.trim().length === 0} onClick={() => fbMu.mutate()}>
+                {fbMu.isPending ? '제출 중…' : '제출'}
               </button>
             </div>
           </div>

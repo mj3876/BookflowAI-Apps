@@ -56,6 +56,10 @@ export default function Approval() {
         <p className="text-bf-muted text-xs mt-1">
           출판사에 발주하는 건은 비용이 발생하므로 본사 단독 최종 승인 단계입니다. 권역 간 이동은 물류센터 (창고 매니저) 영역이에요.
         </p>
+        {/* D5-4 workflow link */}
+        <div className="text-[11px] text-bf-muted mt-1">
+          승인 → publisher API 발주 → <a href="/wh-instructions" className="text-bf-primary hover:underline">권역 입고 지시서</a> → <a href="/branch-inbound" className="text-bf-primary hover:underline">매장 입고</a>
+        </div>
       </div>
 
       {feedback && (

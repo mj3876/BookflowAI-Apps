@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useOutletContext, useSearchParams } from 'react-router-dom';
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, ApiError, type InsufficientStockItem, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
@@ -140,6 +140,11 @@ export default function Decision() {
             현재 진행 중인 모든 발주 결정의 단계와 처리 상황. 자동 cascade (수요 예측·SNS 급등·매장 요청)로 발의되며,
             {role === 'hq-admin' ? ' 본사는 필요 시 다른 역할의 승인을 기다리지 않고 강제 승인 (escalation) 할 수 있어요.' : ' 권한이 있는 행만 처리 가능합니다.'}
           </p>
+          {/* D5-4 workflow link */}
+          <div className="text-[11px] text-bf-muted mt-1">
+            발의 후 → <Link to="/wh-approve" className="text-bf-primary hover:underline">권역 물류센터 승인</Link>
+            {' · '}양쪽 협의 → <Link to="/wh-transfer" className="text-bf-primary hover:underline">권역 이동</Link>
+          </div>
         </div>
         {role === 'hq-admin' && (
           <button
