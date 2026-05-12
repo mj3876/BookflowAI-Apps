@@ -147,7 +147,10 @@ export default function WhTransfer() {
   const wh = role === 'wh-manager-2' ? 2 : 1;
   const [expanded, setExpanded] = useState<string | null>(null);
   const { byId, labelOf } = useLocations(role);
-  const whIdOf = (id: number | null | undefined) => (id == null ? undefined : byId.get(id)?.wh_id);
+  const whIdOf = (id: number | null | undefined): number | undefined => {
+    if (id == null) return undefined;
+    return byId.get(id)?.wh_id ?? undefined;
+  };
 
   const q = useQuery({ queryKey: ['pending-transfer', role], queryFn: () => fetchPending(role, { order_type: 'WH_TRANSFER', limit: 100 }), refetchInterval: 5000 });
 
