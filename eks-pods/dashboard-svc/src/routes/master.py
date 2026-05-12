@@ -20,9 +20,11 @@ def recent_sales(
 
     pos-ingestor Lambda 가 INSERT 한 row 가 그대로 보임.
     """
+    # 안전망: seed 데이터의 미래 시각 row 가 ORDER BY DESC top 에 잡혀 sim 새 INSERT 가 가려지는 것 방지
     sql = """
         SELECT txn_id, event_ts, isbn13, store_id, channel, qty, revenue
           FROM sales_realtime
+         WHERE event_ts <= NOW()
          ORDER BY event_ts DESC
          LIMIT %s
     """

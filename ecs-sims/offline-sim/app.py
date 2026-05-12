@@ -45,18 +45,23 @@ INTERVAL_SEC      = (int(os.environ.get("INTERVAL_MIN", "30")),
 CATALOG_TTL       = 600
 STOCK_CACHE_TTL   = 45
 
-# 오프라인 매장 마스터 (location_id → 메타)
+# 오프라인 매장 마스터 (location_id → 메타) — RDS locations 정합 (2026-05-12 fix)
+# DB: 1=강남 · 2=광화문 · 3=잠실 · 4=홍대 · 5=신촌 · 6=용산 (수도권 wh_id=1)
+#     7=부산서면 · 8=대구동성 · 9=울산삼산 · 10=대구교대 · 11=부산센텀 · 12=포항양덕 (영남 wh_id=2)
+# (13=수도권온라인 STORE_ONLINE · 14=영남온라인 STORE_ONLINE · 15/16=거점창고 WH 는 제외)
 OFFLINE_STORES = {
-    3:  {"name": "강남점",  "wh_id": 1, "region": "서울 강남구",  "size": "L"},
-    4:  {"name": "홍대점",  "wh_id": 1, "region": "서울 마포구",  "size": "M"},
-    5:  {"name": "잠실점",  "wh_id": 1, "region": "서울 송파구",  "size": "M"},
-    6:  {"name": "신촌점",  "wh_id": 1, "region": "서울 서대문구","size": "S"},
-    7:  {"name": "수원점",  "wh_id": 1, "region": "경기 수원시",  "size": "S"},
-    9:  {"name": "부산점",  "wh_id": 2, "region": "부산 해운대구","size": "L"},
-    10: {"name": "대구점",  "wh_id": 2, "region": "대구 중구",    "size": "M"},
-    11: {"name": "광주점",  "wh_id": 2, "region": "광주 동구",    "size": "M"},
-    12: {"name": "대전점",  "wh_id": 2, "region": "대전 서구",    "size": "S"},
-    13: {"name": "울산점",  "wh_id": 2, "region": "울산 남구",    "size": "S"},
+    1:  {"name": "강남점",      "wh_id": 1, "region": "서울 강남구",   "size": "L"},
+    2:  {"name": "광화문점",    "wh_id": 1, "region": "서울 종로구",   "size": "L"},
+    3:  {"name": "잠실점",      "wh_id": 1, "region": "서울 송파구",   "size": "M"},
+    4:  {"name": "홍대점",      "wh_id": 1, "region": "서울 마포구",   "size": "M"},
+    5:  {"name": "신촌점",      "wh_id": 1, "region": "서울 서대문구", "size": "S"},
+    6:  {"name": "용산점",      "wh_id": 1, "region": "서울 용산구",   "size": "M"},
+    7:  {"name": "부산 서면점", "wh_id": 2, "region": "부산 부산진구", "size": "L"},
+    8:  {"name": "대구 동성점", "wh_id": 2, "region": "대구 중구",     "size": "M"},
+    9:  {"name": "울산 삼산점", "wh_id": 2, "region": "울산 남구",     "size": "S"},
+    10: {"name": "대구 교대점", "wh_id": 2, "region": "대구 남구",     "size": "S"},
+    11: {"name": "부산 센텀점", "wh_id": 2, "region": "부산 해운대구", "size": "M"},
+    12: {"name": "포항 양덕점", "wh_id": 2, "region": "경북 포항시",   "size": "S"},
 }
 
 # 매장 크기별 거래 건수 범위 (한 배치)

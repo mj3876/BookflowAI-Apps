@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { ApiError, fetchPending, patchPendingOrder, postIntervene, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
+import { groupByDate, dateGroupTone } from '../dateGroup';
 
 /**
  * 창고 승인 큐 - 자기 wh 의 Stage 1 (REBALANCE) + Stage 2 (WH_TRANSFER SOURCE/TARGET) 분리.
@@ -144,11 +145,21 @@ export default function WhApprove() {
             </tr>
           </thead>
           <tbody>
-            {pending.data?.items.map((o) => {
-              // REBALANCE/PUBLISHER_ORDER 는 'FINAL' (단독 승인) · WH_TRANSFER 는 sideForOrder() 로 자기 측 (SOURCE/TARGET)
-              const side = tab === 'WH_TRANSFER' ? sideForOrder(o) : 'FINAL' as const;
-              const isPublisher = tab === 'PUBLISHER_ORDER';
+            {groupByDate(pending.data?.items ?? []).map((group) => {
+              const ncols = tab === 'WH_TRANSFER' ? 8 : 7;
+              const tone = dateGroupTone(group.label);
               return (
+                <Fragment key={group.key}>
+                  <tr className="bg-bf-panel2">
+                    <td colSpan={ncols} className={`py-1.5 px-3 ${tone.wrap}`}>
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{group.label}</span>
+                      <span className="ml-2 text-[11px] text-bf-muted">{group.rows.length}건 · 매일 cycle (07:00 자동 승인 / 18:00 자동 거절)</span>
+                    </td>
+                  </tr>
+                  {group.rows.map((o) => {
+                    const side = tab === 'WH_TRANSFER' ? sideForOrder(o) : 'FINAL' as const;
+                    const isPublisher = tab === 'PUBLISHER_ORDER';
+                    return (
                 <tr key={o.order_id}>
                   <td>
                     <span className={
@@ -205,9 +216,12 @@ export default function WhApprove() {
                     )}
                   </td>
                 </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
-            {pending.data?.items.length === 0 && (
+            {(pending.data?.items.length ?? 0) === 0 && (
               <tr><td colSpan={tab === 'WH_TRANSFER' ? 8 : 7} className="text-center py-6 text-bf-muted">대기 중인 주문 없음</td></tr>
             )}
           </tbody>
