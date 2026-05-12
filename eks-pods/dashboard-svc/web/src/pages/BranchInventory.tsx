@@ -15,7 +15,11 @@ export default function BranchInventory() {
   const { scope_store_id } = useScope();
   const wh_id = 1;
   const my_store = scope_store_id ?? 1;
-  const { nameOf } = useLocations(role);
+  const { nameOf, byId } = useLocations(role);
+  // D1-4 Notion 1.1: 온라인 매장 = WH 본체 재고 출처 (별도 inventory row 없음 · backend UNION ALL 으로 노출)
+  const myLoc = byId.get(my_store);
+  const isOnlineStore = myLoc?.location_type === 'STORE_ONLINE';
+  const sourceWhId = myLoc?.wh_id;
   const qc = useQueryClient();
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
@@ -92,6 +96,13 @@ export default function BranchInventory() {
           현재 보유한 도서 SKU와 가용량 — POS 판매 시 자동 감소 (pos-ingestor Lambda).
           파손/불량/누락 등이 발견되면 SKU 우측 "반품 신청" 으로 본사에 신청할 수 있어요.
         </p>
+        {isOnlineStore && (
+          <div className="mt-2 p-3 rounded-md bg-blue-50 border border-blue-300 text-xs text-blue-900">
+            <span className="font-semibold">ℹ️ 온라인 매장 재고 안내</span> — 표시되는 재고는
+            <span className="font-semibold"> {sourceWhId === 2 ? '영남' : '수도권'} 권역 거점창고 본체</span> 의 보유량입니다.
+            온라인 주문 결제 시 거점창고에서 직접 출하되며, 별도 매장 재고는 운영하지 않습니다.
+          </div>
+        )}
       </div>
 
       {feedback && (

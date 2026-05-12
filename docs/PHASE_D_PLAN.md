@@ -55,6 +55,27 @@
 - **검증**: users.csv (last_login_at 빠진 컬럼) seed 성공
 - **작업량**: 완료
 
+### D0-6. 🔥 POS 흐름 fix (2026-05-12 발견 · 시연 critical)
+- **현상**: ECS online-sim → Kinesis `bookflow-pos-events` publish 안 됨.
+  - Kinesis `IncomingRecords` 15분 = 0 Datapoints
+  - pos-ingestor Lambda `Invocations` 15분 = 0 Datapoints · 마지막 호출 2026-05-07 (5일 전)
+  - online-sim CW Log `Connect timeout on endpoint URL: ecs.ap-northeast-1.amazonaws.com`
+- **진단 후보** (순서대로):
+  1. ECS sim app.py 의 `kinesis.put_record` 코드 path 실제 실행 여부 (sim 로직 분기)
+  2. ECS task IAM role 의 `kinesis:PutRecord` 권한
+  3. sales-data VPC 의 Kinesis endpoint `PrivateDnsEnabled` 여부
+  4. sim 코드가 `boto3.client('ecs')` 호출 (불필요 discovery) → endpoint 누락 timeout → 전체 sim hang
+- **fix**: 원인 별
+  - 코드 분기 문제 → ecs-sims/online-sim/app.py 수정 · cicd-ecs rebuild
+  - IAM 누락 → ECS task role yaml 갱신 · CFN stack redeploy
+  - VPC endpoint PrivateDns disabled → endpoints-sales-data.yaml fix · redeploy
+- **검증**:
+  - Kinesis `IncomingRecords` 5분 sum > 0
+  - pos-ingestor `Invocations` 5분 sum > 0
+  - sales_realtime row 가 `created_at > now() - interval '5 min'` 으로 증가
+  - inventory `on_hand` 차감 + Redis `stock.changed` publish 흔적 (CW Log)
+- **작업량**: M
+
 ---
 
 ## D1 — UX 충돌 해소 (사용자 핵심 인사이트 3건)
@@ -90,6 +111,53 @@
   - row 마다 "[내 권역 매장명] → [상대 권역 매장명]" 화살표 + 양쪽 매장명 한글 + 내 권역 매장명 파란색 강조
 - **시각화 보강**: 권역 박스 다이어그램 (이미 일부 구현 · Task #41 의 WhTransfer rationale + 매장명 한글 · #76) — 폴리시 → 시드 정합 후 UI 확인
 - **작업량**: S (이미 부분 구현 · 분리만)
+
+### D1-3a. 🔴 WhTransfer 권역 분리 버그 + 물류센터 라벨 (2026-05-12 발견)
+- **현상**: `WhTransfer.tsx` line 134-135
+  ```typescript
+  const inbound = transfers.filter((o) => o.target_location_id !== null);
+  const outbound = transfers.filter((o) => o.source_location_id !== null);
+  ```
+  → WH_TRANSFER 의 source/target 은 둘 다 not-null 이라 **모든 row 가 양쪽 list 에 중복 표시**. wh_id 기준 권역 분리 X.
+- **fix**:
+  1. `useLocations` 또는 별도 hook 으로 `location_id → wh_id` 매핑 확보
+  2. `outbound = transfers.filter(o => locWhId(o.source_location_id) === myWh)` (내 권역 매장이 출고측)
+  3. `inbound = transfers.filter(o => locWhId(o.target_location_id) === myWh)` (내 권역 매장이 입고측)
+  4. row 의 "출발 → 도착" cell 에 **권역 배지** 추가 — `[수도권 · 강남교보] → [영남 · 부산서면]` 형식
+  5. `nameOf` 강화: `nameOf(locId) → "강남교보 (수도권)"` 또는 row 셀에 권역명 prefix
+- **검증**: WhTransfer 진입 → outbound 와 inbound 가 disjoint (중복 0건) · 각 row 에 권역명 배지
+- **작업량**: S
+
+### D1-4. 🆕 매장 출처 UI (online 매장 = WH 본체 재고 출처 · Notion 1.1)
+- **현재**: 백엔드 done — `inventory-svc /current` UNION ALL · `pos-ingestor` channel=ONLINE → WH 본체 차감
+- **UI 미완**:
+  1. `BranchInventory.tsx` — STORE_ONLINE location 진입 시 안내 메시지 ("권역 거점창고 재고에서 출하 — 실제 재고는 WH-{1,2} 본체")
+  2. `HqInventory.tsx` — 매장별 분포 drilldown 에서 STORE_ONLINE row 에 ⓘ 아이콘 + tooltip
+- **작업량**: S
+
+### D1-5. 🆕 WH 타센터 재고 실시간 조회 (Notion 2.1 · 2단계 의사결정용)
+- **현재**: `WhDashboard.tsx` 에 `otherOv` query 추가됨 · UI rendering 미완
+- **fix**:
+  1. WhDashboard 메인 카드 아래 "타 센터 재고 현황" 섹션 추가
+  2. 타 센터 (WH 1↔2) 의 합계 재고 + 도서별 top-N 여유분 + 안전재고 표시
+  3. row 클릭 → WhTransfer 페이지로 이동 (해당 ISBN 자동 발의 prefill)
+- **작업량**: S
+
+### D1-6. 🆕 신간 권역별 예측·수량 수정 (Notion 1.2)
+- **현재**: `Requests.tsx` 가 단일 수량 input 만 · 권역별 split X
+- **fix**:
+  1. AI 권역별 예측 결과 표시 — WH-1 (수도권) / WH-2 (영남) 별 예상 수요
+  2. 권역별 수량 input 2개 (총합 = 출판사 요청 수량 자동 검증)
+  3. publisher-watcher 가 pending_orders INSERT 시 권역별 분리 (wh_id 별 row 2개)
+- **작업량**: M
+
+### D1-7. 🆕 양쪽 승인 발의자 추적 (Notion 2.3)
+- **현재**: WhTransfer 가 "출고측이 먼저 발의" 가정만 · 실제 row 가 누가 발의 했는지 X
+- **fix**:
+  1. `pending_orders` 또는 `order_approvals` 에 `initiated_by_wh_id` 컬럼 (없으면 created_by user 의 wh_id 추출)
+  2. WhTransfer row 에 "🟦 우리가 발의" / "🟧 상대 발의" 배지 표시
+  3. inbound 중 "상대 발의 + 우리 수락 대기" 별도 강조 (red dot · 액션 필요)
+- **작업량**: M
 
 ---
 
@@ -254,19 +322,51 @@
 ### D5-6. P2-5 Spike → Decision pre-fill (S)
 - `<Link to={`/decision?isbn=${isbn13}&urgency=CRITICAL`}>` + Decision.tsx useSearchParams
 
+### D5-7. 🆕 WH AI 추천 수정 (수량/대상/시점 · Notion 2.6)
+- **현재**: intervention-svc reject 만 부분 구현 · 수정 X
+- **fix**:
+  1. `intervention-svc PATCH /pending-orders/{id}` (role=wh-manager · 자기 권역 only)
+     - 변경 가능: `qty` (수량 조정) · `target_location_id` (대상 매장 변경) · `scheduled_at` (시점 미루기)
+     - 수정 후 audit_log INSERT + Redis publish
+  2. WhApprove / WhInstructions row 의 [수정] 버튼 → 모달 (3 field input)
+- **작업량**: M
+
+### D5-8. 🆕 Branch → 본사/물류 의견 제출 채널 (Notion 3.5)
+- **현재**: 미구현
+- **fix**:
+  1. `notification-svc POST /branch-feedback` (role=branch-clerk · 자기 매장)
+     - body: `{type: 'SLOW_SELLER' | 'STOCK_REQUEST' | 'OTHER', isbn13?, message}`
+     - notifications_log INSERT (event_type=BranchFeedback) + Logic Apps notify
+  2. BranchInventory 도서별 [의견 제출] 버튼 + 모달
+  3. HqHome / WhHome 알림 영역에 의견 표시
+- **작업량**: M
+
+### D5-9. 🆕 KPI 권역별(WH-1 vs WH-2) 비교 대시보드 (Notion 1.3)
+- **현재**: KPI.tsx 가 전사 집계만
+- **fix**:
+  1. `dashboard-svc GET /kpi/by-wh?date=...` — 권역별 결품률/회전율/매출/반품률
+  2. KPI.tsx 에 2 column 비교 카드 추가 (수도권 vs 영남 · 강세 장르 표시)
+- **작업량**: S
+
 ---
 
-## PR 묶음 전략 (5개 · 진행 순서)
+## PR 묶음 전략 (재정비 2026-05-12 · Notion 갭 + POS fix 반영)
 
-| # | PR | 레포 | 내용 | 작업량 |
-|---|---|---|---|---|
-| **α** | Platform | D0 운영 정합 + D4 시드 진화 | configmap envsubst (D0-1) + RDS_HOST dynamic fetch · auto-restart 7 pod (D0-2) · jwt-signing-key commit (D0-3) · eks_addons utf-8 (D0-4) · rds_seed column-aware (D0-5) · generate.py 진화 (D4-1) · ECS sim 정합 (D4-2) | L |
-| **β** | Apps | D2 일괄 승인 + Home 3 페이지 + D1 UX 충돌 해소 | pending grouped API + bulk-approve (D2-1) · HqHome/WhHome 재설계 + BranchHome 신규 + routing (D2-2) · WhHome 카드 정리 (D1-1) · 신간 지시서 마킹 (D1-2) · WhTransfer 출고/입고 tab 분리 (D1-3) · auth-pod ns fix | L |
-| **γ** | Apps | D3 재고 책 단위 + Redis 실시간 | BranchInventory/WhDashboard/HqInventory 책 단위 (D3-1/2/3) · Redis WS flash (D3-4) | L |
-| **δ** | Apps | D5-1 + D5-3 (returns request + ErrorResponse) | P1-3 + P1-6 (D2-3 와 통합) | M |
-| **ε** | Apps | D5-4 + D5-5 + D5-6 + D5-2 (정합/UX 마무리) | EmptyState 17 · workflow link · Spike pre-fill · R&R 문서 | M |
+| # | PR | 레포 | 내용 | 작업량 | 상태 |
+|---|---|---|---|---|---|
+| **α** | Platform | D0-1~5 운영 정합 + D4 시드 진화 | configmap envsubst · RDS_HOST · auto-restart · jwt · utf-8 · column-aware · generate.py 7d · ECS sim 정합 | L | ✅ done |
+| **β** | Apps | D2 일괄 승인 + Home 3 페이지 + D1-1/2/3 UX 충돌 | pending grouped + bulk-approve · HqHome/WhHome/BranchHome + routing · WhHome 카드 · 신간 마킹 · WhTransfer tab · auth-pod ns | L | 진행 중 |
+| **γ** | Apps | D3 재고 책 단위 + Redis 실시간 | BranchInventory/WhDashboard/HqInventory 책 단위 · Redis WS flash | L | ✅ done |
+| **🔥 P0** | Platform + Apps | **D0-6 POS 흐름 fix** | ECS sim → Kinesis publish 복구 · pos-ingestor Invocations 살리기 · sales_realtime 실시간 갱신 검증 | M | 🔲 진행 |
+| **δ** | Apps | D5-1 + D5-3 + D1-3a + D1-4 + D1-5 + D1-7 (크게 묶음) | returns request · ErrorResponse · **WhTransfer 권역 버그 fix** · 매장 출처 UI · 타센터 재고 조회 · 발의자 추적 | L | 🔲 |
+| **ε** | Apps | D5-4 + D5-5 + D5-6 + D5-2 + D5-7 + D5-8 + D5-9 + D1-6 (크게 묶음) | EmptyState 17 · workflow link · Spike pre-fill · R&R 문서 · WH AI 추천 수정 · Branch 의견 채널 · KPI 권역별 비교 · 신간 권역별 수량 | L | 🔲 |
 
 각 PR 후 cicd 트리거 (deploy 계정 자동) + admin 로컬 build/apply → 시연 검증 → 다음.
+
+### 시연일 (2026-06-02) 까지 3주 일정
+- **Week 1 (05/12 ~ 05/18)**: 🔥 P0 (오늘) → PR δ (3일)
+- **Week 2 (05/19 ~ 05/25)**: PR ε (4일) → 통합 검증 6 시나리오
+- **Week 3 (05/26 ~ 06/01)**: 시연 리허설 + bug fix + 발표 자료
 
 ---
 

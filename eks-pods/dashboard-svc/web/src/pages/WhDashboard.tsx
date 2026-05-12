@@ -28,6 +28,13 @@ export default function WhDashboard() {
   const { nameOf } = useLocations(role);
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
+  // Notion 2.1: 타 센터 재고 조회 (수도권 ↔ 영남 상호 가시성 · 2단계 의사결정용)
+  const otherWh = wh_id === 1 ? 2 : 1;
+  const otherOv = useQuery({
+    queryKey: ['ov-other', otherWh, role],
+    queryFn: () => fetchOverview(otherWh, role).catch(() => null),
+    refetchInterval: 30000,
+  });
   const byStore = useQuery({ queryKey: ['byStore', role], queryFn: () => fetchSalesByStore(role), refetchInterval: 5000 });
   const heat = useQuery({ queryKey: ['heatmap', role], queryFn: () => fetchInventoryHeatmap(role), refetchInterval: 30000 });
 
@@ -75,6 +82,81 @@ export default function WhDashboard() {
           <div className="metric-value text-red-600">{totalZeroSku}</div>
         </div>
       </div>
+
+      {/* D1-5 Notion 2.1: 타 센터 재고 현황 (2단계 의사결정 — 상대 여유분 파악) */}
+      {(() => {
+        const other = otherOv.data;
+        if (otherOv.isLoading) {
+          return <div className="card text-xs text-bf-muted">타 센터 ({otherWh === 1 ? '수도권' : '영남'}) 재고 불러오는 중…</div>;
+        }
+        if (!other) return null;
+        const oCells = (heat.data?.items ?? []).filter((c) => c.wh_id === otherWh);
+        const oWh = oCells.find((c) => c.location_type === 'WH');
+        const oStores = oCells.filter((c) => c.location_type !== 'WH');
+        const oSku = oCells.reduce((s, c) => s + c.sku_count, 0);
+        const oQty = oCells.reduce((s, c) => s + c.total_qty, 0);
+        const oLow = oCells.reduce((s, c) => s + c.low_count, 0);
+        const oZero = oCells.reduce((s, c) => s + c.zero_count, 0);
+        // 부족 도서 top 8 (상대 권역 → 우리가 발의 가능한 후보)
+        const oInvItems = (other.inventory?.items ?? []) as any[];
+        const oWhStores = new Set(oCells.map((c) => c.location_id));
+        const oLowByIsbn = new Map<string, { title?: string; available: number; safety: number; on_hand: number }>();
+        for (const it of oInvItems) {
+          if (!oWhStores.has(it.location_id)) continue;
+          const av = it.available ?? 0;
+          const sf = it.safety_stock ?? 10;
+          // 상대 여유분 = available - safety (양수만 transfer 가능)
+          const surplus = av - sf;
+          if (surplus <= 0) continue;
+          const cur = oLowByIsbn.get(it.isbn13);
+          if (!cur || surplus > cur.available) {
+            oLowByIsbn.set(it.isbn13, { title: it.title, available: surplus, safety: sf, on_hand: it.on_hand ?? 0 });
+          }
+        }
+        const surplusTop = [...oLowByIsbn.entries()].sort((a, b) => b[1].available - a[1].available).slice(0, 8);
+        return (
+          <div className="card border-2 border-purple-200">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="h2">타 센터 ({otherWh === 1 ? '수도권' : '영남'}) 재고 현황</h2>
+              <div className="text-[11px] text-bf-muted">읽기 전용 · 권역 간 이동(Stage 2) 의사결정 참고</div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+              <div className="metric-card"><div className="metric-label">관할 매장</div><div className="metric-value">{oStores.length}</div></div>
+              <div className="metric-card"><div className="metric-label">SKU 합</div><div className="metric-value">{oSku.toLocaleString()}</div></div>
+              <div className="metric-card"><div className="metric-label">총 재고</div><div className="metric-value">{oQty.toLocaleString()}</div></div>
+              <div className="metric-card"><div className="metric-label">부족 SKU</div><div className="metric-value text-orange-600">{oLow}</div></div>
+              <div className="metric-card"><div className="metric-label">결품 SKU</div><div className="metric-value text-red-600">{oZero}</div></div>
+            </div>
+            {oWh && (
+              <div className="mb-3 p-3 rounded-md bg-purple-50 border border-purple-300 text-xs text-purple-900">
+                <span className="font-semibold">{locationLabel(oWh)}</span>
+                {' · '}SKU {oWh.sku_count} · 재고 {oWh.total_qty.toLocaleString()} · 부족 {oWh.low_count} · 결품 {oWh.zero_count}
+              </div>
+            )}
+            {surplusTop.length > 0 && (
+              <div>
+                <div className="text-xs text-bf-muted mb-1">📦 상대 권역 여유분 top {surplusTop.length} (안전재고 차감 후 가용)</div>
+                <table className="data-table">
+                  <thead><tr><th>도서</th><th className="text-right">상대 가용</th><th className="text-right">상대 안전재고</th><th className="text-right">여유분</th></tr></thead>
+                  <tbody>
+                    {surplusTop.map(([isbn, info]) => (
+                      <tr key={isbn}>
+                        <td><div className="text-xs">{info.title ?? isbn}</div><div className="font-mono text-[10px] text-bf-muted">{isbn}</div></td>
+                        <td className="text-right font-mono">{(info.available + info.safety).toLocaleString()}</td>
+                        <td className="text-right font-mono text-bf-muted">{info.safety}</td>
+                        <td className="text-right font-mono text-green-700 font-semibold">+{info.available.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {surplusTop.length === 0 && (
+              <div className="text-xs text-bf-muted text-center py-3">타 센터 여유분 없음 (Stage 2 발의 후보 0건)</div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* UX-3: 권역 재고 히트맵 — 부족률 색상 + WH 단독 카드 + 매장 grid */}
       <div className="card">

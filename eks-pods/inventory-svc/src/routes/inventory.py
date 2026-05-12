@@ -93,43 +93,58 @@ def _inventory_item_from_row(row: tuple) -> InventoryItem:
 
 @router.get("/current/{wh_id}", response_model=WarehouseInventoryResponse)
 def get_warehouse_inventory(wh_id: int, ctx: AuthContext = Depends(require_auth)):
-    """FR-A7.4 실시간 재고 조회 — 현재고 + 안전재고 + 예상소진일 + 입출고 in-transit 합산."""
-    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None and ctx.scope_wh_id != wh_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="out of warehouse scope")
+    """FR-A7.4 실시간 재고 조회 — 현재고 + 안전재고 + 예상소진일 + 입출고 in-transit 합산.
 
+    Notion 2.1: WH-1↔WH-2 서로 read 가능 (2단계 의사결정용 · 상대 여유분 파악). mutate (/adjust /reserve) 만 자기 wh 제한.
+    branch-clerk 만 자기 매장 외 차단.
+    """
+    if ctx.role == "branch-clerk":
+        # branch-clerk 는 본인 매장 외 wh 단위 조회 불가
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="branch-clerk 는 wh 단위 조회 불가")
+
+    # Notion 명세: 온라인 매장 재고 출처 = WH 본체 (is_virtual STORE_ONLINE 은 inventory row 없음)
+    # → online 매장도 응답에 포함시키되 quantity 는 WH 본체 inventory 를 substitute (UNION)
     sql = """
         SELECT i.isbn13, i.location_id,
                i.on_hand, i.reserved_qty,
                COALESCE(i.safety_stock, 0) AS safety_stock,
                i.updated_at,
-               b.title,
-               b.author,
-               b.cover_url,
-               b.expected_soldout_at,
-               COALESCE((
-                   SELECT SUM(po.qty)::int
-                     FROM pending_orders po
-                    WHERE po.target_location_id = i.location_id
-                      AND po.isbn13 = i.isbn13
-                      AND po.status = 'APPROVED'
-                      AND po.executed_at IS NULL
-               ), 0) AS incoming_qty,
-               COALESCE((
-                   SELECT SUM(po.qty)::int
-                     FROM pending_orders po
-                    WHERE po.source_location_id = i.location_id
-                      AND po.isbn13 = i.isbn13
-                      AND po.status = 'APPROVED'
-                      AND po.executed_at IS NULL
-               ), 0) AS outgoing_qty
+               b.title, b.author, b.cover_url, b.expected_soldout_at,
+               COALESCE((SELECT SUM(po.qty)::int FROM pending_orders po
+                   WHERE po.target_location_id = i.location_id AND po.isbn13 = i.isbn13
+                   AND po.status = 'APPROVED' AND po.executed_at IS NULL), 0) AS incoming_qty,
+               COALESCE((SELECT SUM(po.qty)::int FROM pending_orders po
+                   WHERE po.source_location_id = i.location_id AND po.isbn13 = i.isbn13
+                   AND po.status = 'APPROVED' AND po.executed_at IS NULL), 0) AS outgoing_qty
         FROM inventory i
         JOIN locations l ON l.location_id = i.location_id
         LEFT JOIN books b ON b.isbn13 = i.isbn13
         WHERE l.wh_id = %s
-        ORDER BY i.location_id, i.isbn13
+
+        UNION ALL
+
+        -- 온라인 매장: WH 본체 inventory 를 online location_id 로 노출 (출처 = WH)
+        SELECT i.isbn13, online.location_id AS location_id,
+               i.on_hand, i.reserved_qty,
+               COALESCE(i.safety_stock, 0) AS safety_stock,
+               i.updated_at,
+               b.title, b.author, b.cover_url, b.expected_soldout_at,
+               COALESCE((SELECT SUM(po.qty)::int FROM pending_orders po
+                   WHERE po.target_location_id = online.location_id AND po.isbn13 = i.isbn13
+                   AND po.status = 'APPROVED' AND po.executed_at IS NULL), 0) AS incoming_qty,
+               COALESCE((SELECT SUM(po.qty)::int FROM pending_orders po
+                   WHERE po.source_location_id = online.location_id AND po.isbn13 = i.isbn13
+                   AND po.status = 'APPROVED' AND po.executed_at IS NULL), 0) AS outgoing_qty
+        FROM locations online
+        JOIN locations wh ON wh.wh_id = online.wh_id AND wh.location_type = 'WH'
+        JOIN inventory i ON i.location_id = wh.location_id
+        LEFT JOIN books b ON b.isbn13 = i.isbn13
+        WHERE online.wh_id = %s AND online.location_type = 'STORE_ONLINE'
+
+        ORDER BY 2, 1
     """
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql, (wh_id,))
+        cur.execute(sql, (wh_id, wh_id))
         rows = cur.fetchall()
 
     items = [_inventory_item_from_row(r) for r in rows]

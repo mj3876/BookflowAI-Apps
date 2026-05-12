@@ -58,13 +58,17 @@ function TransferTable({
   emptyText,
   expandedId,
   onToggle,
-  nameOf,
+  labelOf,
+  myWh,
+  whIdOf,
 }: {
   rows: PendingOrder[];
   emptyText: string;
   expandedId: string | null;
   onToggle: (id: string) => void;
-  nameOf: (id: number | null | undefined) => string;
+  labelOf: (id: number | null | undefined) => string;
+  myWh: number;
+  whIdOf: (id: number | null | undefined) => number | undefined;
 }) {
   return (
     <table className="data-table">
@@ -90,11 +94,19 @@ function TransferTable({
                   <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
                 </td>
                 <td>
-                  <div className="flex items-center gap-1.5 text-[11px]">
-                    <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30">{nameOf(o.source_location_id)}</span>
-                    <span className="text-bf-primary font-bold">→</span>
-                    <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30">{nameOf(o.target_location_id)}</span>
-                  </div>
+                  {(() => {
+                    const sWh = whIdOf(o.source_location_id);
+                    const tWh = whIdOf(o.target_location_id);
+                    const sMine = sWh === myWh;
+                    const tMine = tWh === myWh;
+                    return (
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className={`px-1.5 py-0.5 rounded border ${sMine ? 'bg-blue-500/15 text-blue-300 border-blue-500/40 font-semibold' : 'bg-bf-panel2 text-bf-muted border-bf-border'}`}>{labelOf(o.source_location_id)}</span>
+                        <span className="text-bf-primary font-bold">→</span>
+                        <span className={`px-1.5 py-0.5 rounded border ${tMine ? 'bg-rose-500/15 text-rose-300 border-rose-500/40 font-semibold' : 'bg-bf-panel2 text-bf-muted border-bf-border'}`}>{labelOf(o.target_location_id)}</span>
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td className="text-right">{o.qty}권</td>
                 <td>
@@ -126,13 +138,15 @@ export default function WhTransfer() {
   const { role } = useOutletContext<{ role: Role }>();
   const wh = role === 'wh-manager-2' ? 2 : 1;
   const [expanded, setExpanded] = useState<string | null>(null);
-  const { nameOf } = useLocations(role);
+  const { byId, labelOf } = useLocations(role);
+  const whIdOf = (id: number | null | undefined) => (id == null ? undefined : byId.get(id)?.wh_id);
 
   const q = useQuery({ queryKey: ['pending-transfer', role], queryFn: () => fetchPending(role, { order_type: 'WH_TRANSFER', limit: 100 }), refetchInterval: 5000 });
 
   const transfers = q.data?.items.filter((o) => o.order_type === 'WH_TRANSFER') ?? [];
-  const inbound = transfers.filter((o) => o.target_location_id !== null);
-  const outbound = transfers.filter((o) => o.source_location_id !== null);
+  // D1-3a: locations.wh_id 기준 분리 (이전 not-null 비교는 모든 row 가 양쪽 list 에 중복으로 들어가 버그)
+  const outbound = transfers.filter((o) => whIdOf(o.source_location_id) === wh); // 내 권역 매장이 출고
+  const inbound  = transfers.filter((o) => whIdOf(o.target_location_id) === wh); // 내 권역 매장이 입고
   const toggle = (id: string) => setExpanded((cur) => (cur === id ? null : id));
 
   return (
@@ -198,7 +212,7 @@ export default function WhTransfer() {
             <h2 className="h2">우리 창고가 보낼 항목 ({outbound.length})</h2>
             <span className="text-[10px] text-bf-muted">상대 창고 수락 대기</span>
           </div>
-          <TransferTable rows={outbound} emptyText="발의 건 없음" expandedId={expanded} onToggle={toggle} nameOf={nameOf} />
+          <TransferTable rows={outbound} emptyText="발의 건 없음" expandedId={expanded} onToggle={toggle} labelOf={labelOf} myWh={wh} whIdOf={whIdOf} />
         </div>
 
         <div className="card">
@@ -206,7 +220,7 @@ export default function WhTransfer() {
             <h2 className="h2">우리 창고가 받을 항목 ({inbound.length})</h2>
             <span className="text-[10px] text-bf-muted">수락하면 운송 시작</span>
           </div>
-          <TransferTable rows={inbound} emptyText="수락 대기 없음" expandedId={expanded} onToggle={toggle} nameOf={nameOf} />
+          <TransferTable rows={inbound} emptyText="수락 대기 없음" expandedId={expanded} onToggle={toggle} labelOf={labelOf} myWh={wh} whIdOf={whIdOf} />
         </div>
       </div>
     </div>
