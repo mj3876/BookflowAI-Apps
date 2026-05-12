@@ -30,9 +30,13 @@ if ! dpkg -l | grep -q libpq-dev; then
   apt-get install -y --no-install-recommends libpq-dev gcc
 fi
 
-# AWS CLI (Secrets Manager 읽기용)
+# AWS CLI v2 (Secrets Manager 읽기용 · Ubuntu 24.04 는 apt 에 awscli 없음)
 if ! command -v aws >/dev/null 2>&1; then
-  apt-get install -y --no-install-recommends awscli
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  apt-get install -y --no-install-recommends unzip
+  unzip -q /tmp/awscliv2.zip -d /tmp/awscli-install
+  /tmp/awscli-install/aws/install
+  rm -rf /tmp/awscliv2.zip /tmp/awscli-install
 fi
 
 # ── 이전 배포본 백업 ───────────────────────────────────────────────────────────
