@@ -33,8 +33,9 @@ phases:
       - |
         for svc in $SVCS; do
           echo "=== Building $svc ==="
-          # Build context = ecs-sims root so Dockerfile can COPY sibling _shared module
-          docker build -t "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG" -f "$svc/Dockerfile" .
+          # Build context = $svc (Dockerfile COPY app.py/requirements.txt 단순 path)
+          # _shared 모듈은 실제 import 안 함 → context 좁혀도 됨
+          docker build -t "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG" "$svc"
           docker tag "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG" "$ECR_REGISTRY/$PROJECT_NAME/$svc:latest"
           docker push "$ECR_REGISTRY/$PROJECT_NAME/$svc:$IMAGE_TAG"
           docker push "$ECR_REGISTRY/$PROJECT_NAME/$svc:latest"
