@@ -33,6 +33,7 @@ export default function WhApprove() {
   }, [searchParams]);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
   const [approveTarget, setApproveTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET'; isbn13: string; qty: number; isPublisher: boolean } | null>(null);
   // D5-7 AI 추천 수정 modal state (qty + target_location_id)
@@ -85,6 +86,28 @@ export default function WhApprove() {
       </div>
     );
   }
+
+  // 일괄 승인 — 현재 탭의 PENDING 모두 단일 API 반복 호출 (sequential · 진행 표시)
+  const bulkApprove = async () => {
+    const items = (pending.data?.items ?? []) as any[];
+    const approvable = items.filter((o) => o.status === 'PENDING');
+    if (!approvable.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
+    if (!window.confirm(`현재 탭의 PENDING ${approvable.length}건을 모두 승인합니다. 진행할까요?`)) return;
+    setBulkBusy(true);
+    let ok = 0, ng = 0;
+    for (const o of approvable) {
+      const side: 'FINAL' | 'SOURCE' | 'TARGET' =
+        tab === 'WH_TRANSFER' ? (sideForOrder(o) ?? 'SOURCE') : 'FINAL';
+      try {
+        await act.mutateAsync({ order_id: o.order_id, action: 'approve', side });
+        ok++;
+      } catch { ng++; }
+      setFeedback(`일괄 승인 중… (${ok + ng}/${approvable.length}) · 성공 ${ok} 실패 ${ng}`);
+    }
+    setFeedback(`✓ 일괄 승인 완료 · 성공 ${ok} 실패 ${ng} (총 ${approvable.length}건)`);
+    setBulkBusy(false);
+    qc.invalidateQueries({ queryKey: ['pending'] });
+  };
 
   // Stage 2 의 source/target 어느 쪽이 내 wh 인지 표시
   const sideForOrder = (o: { source_location_id: number | null; target_location_id: number | null }) => {
@@ -172,7 +195,17 @@ export default function WhApprove() {
               : '외부 발주 (자기 권역분)'}
             <span className="text-bf-muted ml-2">({pending.data?.items.length ?? 0})</span>
           </h2>
-          <span className="label-tag">5초마다 자동 갱신</span>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-primary text-xs"
+              onClick={bulkApprove}
+              disabled={bulkBusy || (pending.data?.items ?? []).every((o: any) => o.status !== 'PENDING')}
+              title="현재 탭의 모든 PENDING 건을 일괄 승인"
+            >
+              {bulkBusy ? '진행 중…' : `전체 승인 (${(pending.data?.items ?? []).filter((o: any) => o.status === 'PENDING').length}건)`}
+            </button>
+            <span className="label-tag">5초마다 자동 갱신</span>
+          </div>
         </div>
         <table className="data-table">
           <thead>

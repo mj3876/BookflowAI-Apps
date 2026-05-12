@@ -20,6 +20,7 @@ export default function Returns() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const [approveTarget, setApproveTarget] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { nameOf } = useLocations(role);
 
   const q = useQuery({ queryKey: ['returns', role], queryFn: () => fetchReturns(role, 50), refetchInterval: 8000 });
@@ -48,11 +49,39 @@ export default function Returns() {
     onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
   });
 
+  const bulkApprove = async () => {
+    const items = (q.data?.items ?? []).filter((r) => r.status === 'PENDING');
+    if (!items.length) { setFeedback('승인할 PENDING 반품이 없습니다.'); return; }
+    if (!window.confirm(`반품 PENDING ${items.length}건을 모두 승인합니다. 진행할까요?`)) return;
+    setBulkBusy(true);
+    let ok = 0, ng = 0;
+    for (const r of items) {
+      try { await approve.mutateAsync(r.return_id); ok++; }
+      catch { ng++; }
+      setFeedback(`일괄 승인 중… (${ok + ng}/${items.length}) · 성공 ${ok} 실패 ${ng}`);
+    }
+    setFeedback(`✓ 일괄 승인 완료 · 성공 ${ok} 실패 ${ng}`);
+    setBulkBusy(false);
+    qc.invalidateQueries({ queryKey: ['returns'] });
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="h1">반품 처리</h1>
-        <p className="text-bf-muted text-xs mt-1">반품 신청 → 본사 승인 → 창고가 출판사로 반품 실행 (본사 단독 결정)</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="h1">반품 처리</h1>
+          <p className="text-bf-muted text-xs mt-1">반품 신청 → 본사 승인 → 창고가 출판사로 반품 실행 (본사 단독 결정)</p>
+        </div>
+        {role === 'hq-admin' && (
+          <button
+            className="btn-primary text-xs"
+            onClick={bulkApprove}
+            disabled={bulkBusy || (q.data?.items ?? []).every((r) => r.status !== 'PENDING')}
+            title="PENDING 반품 전건 일괄 승인"
+          >
+            {bulkBusy ? '진행 중…' : `전체 승인 (${(q.data?.items ?? []).filter((r) => r.status === 'PENDING').length}건)`}
+          </button>
+        )}
       </div>
 
       {feedback && (

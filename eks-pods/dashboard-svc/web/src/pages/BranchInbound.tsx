@@ -45,6 +45,7 @@ export default function BranchInbound() {
   const [note, setNote] = useState('');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [receiveTarget, setReceiveTarget] = useState<{ order_id: string; qty: number } | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // P1-2 입고 거부 — intervention-svc /inbound/{order_id}/reject 호출 (별도 endpoint).
   // 이전 postIntervene 'reject' 는 의사결정 큐 거부였어서 mismatch 였음 (Phase C 갭 list G4).
@@ -124,6 +125,25 @@ export default function BranchInbound() {
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="h2 flex items-center">입고 대기 ({myInbound.length})<HelpHint text="물류센터에서 발송된 도서. 정상이면 수령, 수량/품질 문제가 있으면 거부합니다. 거부 사유는 물류센터에 즉시 통보됩니다." /></h2>
+          <button
+            className="btn-primary text-xs"
+            onClick={async () => {
+              if (!myInbound.length) { setFeedback({ type:'error', msg:'입고 대기 항목이 없습니다.' }); return; }
+              if (!window.confirm(`입고 대기 ${myInbound.length}건을 모두 수령 처리합니다. 진행할까요?`)) return;
+              setBulkBusy(true);
+              let ok = 0, ng = 0;
+              for (const o of myInbound) {
+                try { await receiveMu.mutateAsync(o.order_id); ok++; }
+                catch { ng++; }
+              }
+              setFeedback({ type: ng ? 'error' : 'success', msg: `일괄 수령 완료 · 성공 ${ok} 실패 ${ng}` });
+              setBulkBusy(false);
+            }}
+            disabled={bulkBusy || !myInbound.length}
+            title="모든 입고 대기를 일괄 수령"
+          >
+            {bulkBusy ? '진행 중…' : `전체 수령 (${myInbound.length}건)`}
+          </button>
         </div>
         <table className="data-table">
           <thead>
