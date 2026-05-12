@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, ApiError, type InsufficientStockItem, type Role } from '../api';
@@ -8,6 +8,7 @@ import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
+import { groupByDate, dateGroupTone } from '../dateGroup';
 
 /**
  * 본사 의사결정 모니터링 + escalation.
@@ -203,7 +204,21 @@ export default function Decision() {
             </tr>
           </thead>
           <tbody>
-            {items.slice(0, 30).map((o) => {
+            {groupByDate(items.slice(0, 60)).map((g) => {
+              const tone = dateGroupTone(g.label);
+              const ncols = role === 'hq-admin' ? 7 : 6;
+              return (
+                <Fragment key={g.key}>
+                  <tr className="bg-bf-panel2"><td colSpan={ncols} className={`py-1.5 px-3 ${tone.wrap}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{g.label}</span>
+                      <span className="text-[11px] text-bf-muted">{g.total}건 · 처리완료 {g.done}/{g.total} ({g.progressPct}%)</span>
+                      {g.approved > 0 && <span className="text-[10px] text-green-700">✓ {g.approved}</span>}
+                      {g.rejected > 0 && <span className="text-[10px] text-red-700">✗ {g.rejected}</span>}
+                      {g.allDone && <span className="ml-1 px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-semibold border border-green-500/40">✅ 완료 · 최종 계획안</span>}
+                    </div>
+                  </td></tr>
+                  {g.rows.map((o) => {
               const stage = STAGE_FROM_TYPE(o.order_type);
               return (
                 <tr key={o.order_id}>
@@ -239,6 +254,9 @@ export default function Decision() {
                     </td>
                   )}
                 </tr>
+              );
+                  })}
+                </Fragment>
               );
             })}
             {items.length === 0 && !pending.isLoading && (

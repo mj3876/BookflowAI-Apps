@@ -98,27 +98,24 @@ export default function WhHome() {
         </div>
       </div>
 
-      {/* 2행: PENDING 4 카테고리 */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Link to="/wh-approve" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">권역 내 재분배</div>
+      {/* D1-1 disjoint 카테고리: 단독 승인 (REBALANCE + PUBLISHER_ORDER) vs 양측 협의 (WH_TRANSFER) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <Link to="/wh-approve?tab=REBALANCE" className="metric-card hover:border-bf-primary transition">
+          <div className="metric-label">🟢 권역 내 재분배 (단독 승인)</div>
           <div className="metric-value">{rebPending}건</div>
-          <div className="text-[11px] text-bf-muted mt-1">자기 권역 매장 간 · 단독 승인</div>
+          <div className="text-[11px] text-bf-muted mt-1">자기 권역 매장 간 이동 · 단독 즉시 승인</div>
         </Link>
-        <Link to="/wh-transfer" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">{partnerName}으로 출고</div>
-          <div className="metric-value">{trSource}건</div>
-          <div className="text-[11px] text-bf-muted mt-1">상대 수락 대기</div>
+        <Link to="/wh-approve?tab=WH_TRANSFER" className="metric-card hover:border-bf-primary transition border-orange-300/40">
+          <div className="metric-label">🟡 권역 간 이동 (양측 협의 필요)</div>
+          <div className="metric-value">{trSource + trTarget}건</div>
+          <div className="text-[11px] text-bf-muted mt-1">
+            출고 {trSource} · 입고 {trTarget} · 처리 대기에서 자기 측(SOURCE/TARGET) 승인
+          </div>
         </Link>
-        <Link to="/wh-transfer" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">{partnerName}에서 입고</div>
-          <div className="metric-value">{trTarget}건</div>
-          <div className="text-[11px] text-bf-muted mt-1">수락 시 운송 시작</div>
-        </Link>
-        <Link to="/wh-approve" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">외부 발주 (자기 권역)</div>
+        <Link to="/wh-approve?tab=PUBLISHER_ORDER" className="metric-card hover:border-bf-primary transition border-red-300/40">
+          <div className="metric-label">🔴 외부 발주 (단독 승인 · 비용 발생)</div>
           <div className="metric-value">{pubPending}건</div>
-          <div className="text-[11px] text-bf-muted mt-1">비용 발생 · 단독 승인</div>
+          <div className="text-[11px] text-bf-muted mt-1">자기 권역분 출판사 발주 · 1·2 단계 불가 시</div>
         </Link>
       </div>
 

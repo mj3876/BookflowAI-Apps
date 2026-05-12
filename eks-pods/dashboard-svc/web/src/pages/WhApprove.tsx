@@ -1,6 +1,6 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { ApiError, fetchPending, patchPendingOrder, postIntervene, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
 import { useLocations } from '../useLocations';
@@ -19,7 +19,18 @@ export default function WhApprove() {
   const { role } = useOutletContext<{ role: Role }>();
   const qc = useQueryClient();
   const my_wh = role === 'wh-manager-2' ? 2 : 1;
-  const [tab, setTab] = useState<'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER'>('REBALANCE');
+  // D1-1 (재정정): WhApprove 에 3 탭 모두 — REBALANCE (단독), WH_TRANSFER (양측 SOURCE/TARGET), PUBLISHER_ORDER (단독).
+  // WhTransfer 페이지는 시각화 + 발의자 추적 보조용 · 승인은 양쪽에서 가능.
+  const [searchParams] = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams.get('tab');
+    return (t === 'WH_TRANSFER' || t === 'PUBLISHER_ORDER') ? t : 'REBALANCE';
+  })() as 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+  const [tab, setTab] = useState<'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER'>(initialTab);
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t === 'REBALANCE' || t === 'WH_TRANSFER' || t === 'PUBLISHER_ORDER') setTab(t);
+  }, [searchParams]);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
@@ -100,25 +111,28 @@ export default function WhApprove() {
         </div>
       )}
 
-      <div className="flex gap-2 border-b border-bf-border">
+      <div className="flex gap-2 border-b border-bf-border flex-wrap">
         <button
           className={`px-4 py-2 text-xs font-medium border-b-2 ${tab === 'REBALANCE' ? 'border-bf-primary text-bf-primary' : 'border-transparent text-bf-muted'}`}
           onClick={() => setTab('REBALANCE')}
         >
-          권역 내 재분배 (단독 승인)
+          🟢 권역 내 재분배 (단독 승인)
         </button>
         <button
           className={`px-4 py-2 text-xs font-medium border-b-2 ${tab === 'WH_TRANSFER' ? 'border-bf-primary text-bf-primary' : 'border-transparent text-bf-muted'}`}
           onClick={() => setTab('WH_TRANSFER')}
         >
-          권역 간 이동 (양측 승인 필요)
+          🟡 권역 간 이동 (양측 협의)
         </button>
         <button
           className={`px-4 py-2 text-xs font-medium border-b-2 ${tab === 'PUBLISHER_ORDER' ? 'border-bf-primary text-bf-primary' : 'border-transparent text-bf-muted'}`}
           onClick={() => setTab('PUBLISHER_ORDER')}
         >
-          외부 발주 (자기 권역분 · 비용 발생)
+          🔴 외부 발주 (자기 권역분 · 비용 발생)
         </button>
+        <div className="ml-auto px-4 py-2 text-[11px] text-bf-muted">
+          시각화/발의자 추적은 <a href="/wh-transfer" className="text-bf-primary hover:underline">권역 간 이동</a> 페이지 (보조)
+        </div>
       </div>
 
       <div className="card">

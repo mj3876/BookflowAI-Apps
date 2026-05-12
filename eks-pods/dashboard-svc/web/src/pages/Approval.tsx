@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchPending, postIntervene, type Role } from '../api';
 import { useLocations } from '../useLocations';
 import ConfirmModal from '../components/ConfirmModal';
+import { groupByDate, dateGroupTone } from '../dateGroup';
 
 /**
  * HQ Approval - Stage 3 (PUBLISHER_ORDER) 단독 최종 승인.
@@ -78,7 +79,20 @@ export default function Approval() {
             <tr><th>긴급도</th><th>도서</th><th>도착</th><th>수량</th><th>생성</th><th className="text-right">액션</th></tr>
           </thead>
           <tbody>
-            {pending.data?.items.map((o) => (
+            {groupByDate(pending.data?.items ?? []).map((g) => {
+              const tone = dateGroupTone(g.label);
+              return (
+                <Fragment key={g.key}>
+                  <tr className="bg-bf-panel2"><td colSpan={6} className={`py-1.5 px-3 ${tone.wrap}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{g.label}</span>
+                      <span className="text-[11px] text-bf-muted">{g.total}건 · 처리완료 {g.done}/{g.total} ({g.progressPct}%)</span>
+                      {g.approved > 0 && <span className="text-[10px] text-green-700">✓ {g.approved}</span>}
+                      {g.rejected > 0 && <span className="text-[10px] text-red-700">✗ {g.rejected}</span>}
+                      {g.allDone && <span className="ml-1 px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-semibold border border-green-500/40">✅ 완료 · 최종 계획안</span>}
+                    </div>
+                  </td></tr>
+                  {g.rows.map((o) => (
               <tr key={o.order_id}>
                 <td>
                   <span className={
@@ -112,8 +126,11 @@ export default function Approval() {
                   </div>
                 </td>
               </tr>
-            ))}
-            {pending.data?.items.length === 0 && (
+                  ))}
+                </Fragment>
+              );
+            })}
+            {(pending.data?.items.length ?? 0) === 0 && (
               <tr><td colSpan={6} className="text-center py-6 text-bf-muted">대기 중인 외부 발주 없음</td></tr>
             )}
           </tbody>

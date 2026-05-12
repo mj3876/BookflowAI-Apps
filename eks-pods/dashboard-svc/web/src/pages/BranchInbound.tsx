@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchInstructions, postInboundReceive, postInboundReject, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
+import { groupByDate, dateGroupTone } from '../dateGroup';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
@@ -138,7 +139,17 @@ export default function BranchInbound() {
             </tr>
           </thead>
           <tbody>
-            {myInbound.map((o) => (
+            {groupByDate(myInbound).map((g) => {
+              const tone = dateGroupTone(g.label);
+              return (
+                <Fragment key={g.key}>
+                  <tr className="bg-bf-panel2"><td colSpan={8} className={`py-1.5 px-3 ${tone.wrap}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{g.label}</span>
+                      <span className="text-[11px] text-bf-muted">{g.total}건 입고 대기</span>
+                    </div>
+                  </td></tr>
+                  {g.rows.map((o) => (
               <tr key={o.order_id}>
                 <td className="text-bf-muted">{o.approved_at ? new Date(o.approved_at).toLocaleString('ko-KR') : '-'}</td>
                 <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
@@ -169,7 +180,10 @@ export default function BranchInbound() {
                   </div>
                 </td>
               </tr>
-            ))}
+                  ))}
+                </Fragment>
+              );
+            })}
             {myInbound.length === 0 && (
               <tr><td colSpan={8}>
                 <EmptyState icon="📦" message="입고 대기 없음" hint="모든 발송 건이 수령 또는 거부 처리되었습니다" />

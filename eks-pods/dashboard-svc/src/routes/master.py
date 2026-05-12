@@ -582,8 +582,16 @@ def instructions(
               LEFT JOIN locations tl ON tl.location_id = po.target_location_id
              WHERE po.status IN ('APPROVED', 'EXECUTED')
                AND (sl.wh_id = %s OR tl.wh_id = %s)
-             ORDER BY po.urgency_level DESC, po.approved_at DESC NULLS LAST
-             LIMIT 100
+             ORDER BY
+               CASE po.urgency_level
+                 WHEN 'NEWBOOK'  THEN 0
+                 WHEN 'CRITICAL' THEN 1
+                 WHEN 'URGENT'   THEN 2
+                 WHEN 'NORMAL'   THEN 3
+                 ELSE 4
+               END,
+               po.approved_at DESC NULLS LAST
+             LIMIT 200
         """
         params = (wh_id, wh_id)
     else:
@@ -593,8 +601,16 @@ def instructions(
               FROM pending_orders po
               LEFT JOIN books b ON b.isbn13 = po.isbn13
              WHERE po.status IN ('APPROVED', 'EXECUTED')
-             ORDER BY po.urgency_level DESC, po.approved_at DESC NULLS LAST
-             LIMIT 100
+             ORDER BY
+               CASE po.urgency_level
+                 WHEN 'NEWBOOK'  THEN 0
+                 WHEN 'CRITICAL' THEN 1
+                 WHEN 'URGENT'   THEN 2
+                 WHEN 'NORMAL'   THEN 3
+                 ELSE 4
+               END,
+               po.approved_at DESC NULLS LAST
+             LIMIT 200
         """
         params = ()
 

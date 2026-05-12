@@ -1,8 +1,10 @@
+import { Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import { fetchInstructions, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO, whName } from '../labels';
 import { useLocations } from '../useLocations';
+import { groupByDate, dateGroupTone } from '../dateGroup';
 
 /**
  * 출고/입고 지시서 — 승인된 pending_orders.
@@ -35,29 +37,48 @@ export default function WhInstructions() {
         </tr>
       </thead>
       <tbody>
-        {items.map((o) => (
-          <tr key={o.order_id}>
-            <td className="text-bf-muted">{o.approved_at ? new Date(o.approved_at).toLocaleString('ko-KR') : '-'}</td>
-            <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
-            {!hideUrgency && (
-              <td>
-                <span className={
-                  o.urgency_level === 'CRITICAL' ? 'pill-rejected' :
-                  o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
-                }>{ko(URGENCY_KO, o.urgency_level)}</span>
-              </td>
-            )}
-            <td className="font-mono text-[11px]">{o.isbn13}</td>
-            <td>{o.title ?? '-'}</td>
-            <td>{nameOf(o.source_location_id)} → {nameOf(o.target_location_id)}</td>
-            <td className="text-right">{o.qty}권</td>
-            <td>
-              <span className={o.status === 'EXECUTED' ? 'pill-info' : 'pill-approved'}>
-                {o.status === 'EXECUTED' ? '실행됨' : '대기 중'}
-              </span>
-            </td>
-          </tr>
-        ))}
+        {groupByDate(items).map((g) => {
+          const tone = dateGroupTone(g.label);
+          const ncols = hideUrgency ? 7 : 8;
+          return (
+          <Fragment key={g.key}>
+            <tr className="bg-bf-panel2"><td colSpan={ncols} className={`py-1.5 px-3 ${tone.wrap}`}>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{g.label}</span>
+                <span className="text-[11px] text-bf-muted">{g.total}건 · 실행 {g.rows.filter((r:any)=>r.status==='EXECUTED').length}/{g.total}</span>
+                {g.rows.every((r:any) => r.status === 'EXECUTED') && (
+                  <span className="ml-1 px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-semibold border border-green-500/40">
+                    ✅ 모두 실행 완료 · 최종 계획안
+                  </span>
+                )}
+              </div>
+            </td></tr>
+            {g.rows.map((o: any) => (
+              <tr key={o.order_id}>
+                <td className="text-bf-muted">{o.approved_at ? new Date(o.approved_at).toLocaleString('ko-KR') : '-'}</td>
+                <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
+                {!hideUrgency && (
+                  <td>
+                    <span className={
+                      o.urgency_level === 'CRITICAL' ? 'pill-rejected' :
+                      o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
+                    }>{ko(URGENCY_KO, o.urgency_level)}</span>
+                  </td>
+                )}
+                <td className="font-mono text-[11px]">{o.isbn13}</td>
+                <td>{o.title ?? '-'}</td>
+                <td>{nameOf(o.source_location_id)} → {nameOf(o.target_location_id)}</td>
+                <td className="text-right">{o.qty}권</td>
+                <td>
+                  <span className={o.status === 'EXECUTED' ? 'pill-info' : 'pill-approved'}>
+                    {o.status === 'EXECUTED' ? '실행됨' : '대기 중'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </Fragment>
+          );
+        })}
         {items.length === 0 && (
           <tr><td colSpan={hideUrgency ? 7 : 8} className="text-center py-6 text-bf-muted">{emptyText}</td></tr>
         )}
