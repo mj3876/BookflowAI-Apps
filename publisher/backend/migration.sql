@@ -4,11 +4,21 @@
 -- 연결: Ansible Control Node → Transit Gateway → RDS (Data VPC)
 
 -- new_book_requests 테이블에 첨부파일 S3 키 컬럼 추가
--- publisher-watcher 가 기존 스키마로 INSERT 하고 (attachment_s3_key 없이),
--- publisher-api 는 attachment_s3_key 를 포함하여 INSERT.
--- ON CONFLICT DO NOTHING 이므로 양쪽 모두 idempotent.
 ALTER TABLE new_book_requests
     ADD COLUMN IF NOT EXISTS attachment_s3_key TEXT;
+
+-- ON CONFLICT (isbn13) DO NOTHING 을 위한 UNIQUE 제약 추가
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'new_book_requests'::regclass
+          AND contype = 'u'
+          AND conname = 'new_book_requests_isbn13_key'
+    ) THEN
+        ALTER TABLE new_book_requests ADD CONSTRAINT new_book_requests_isbn13_key UNIQUE (isbn13);
+    END IF;
+END$$;
 
 COMMENT ON COLUMN new_book_requests.attachment_s3_key
     IS 'S3 키 (예: attachments/9791234567890/marketing.pdf). publisher-api 경유 제출 시만 존재.';
