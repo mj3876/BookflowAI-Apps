@@ -20,15 +20,11 @@ fi
 systemctl enable nginx
 
 # ── Python 3 + pip + venv 설치 (FastAPI 백엔드 런타임) ────────────────────────
-# publisher-asg.yaml UserData 에 python3 미설치 → 여기서 처리
-if ! command -v python3 >/dev/null 2>&1; then
-  apt-get update -y
-  apt-get install -y --no-install-recommends python3 python3-pip python3-venv
-fi
-# boto3, psycopg[binary] 등 C 확장 빌드용 gcc 필요 시 대비
-if ! dpkg -l | grep -q libpq-dev; then
-  apt-get install -y --no-install-recommends libpq-dev gcc
-fi
+# Ubuntu 24.04 는 python3 기본 설치되어 있으나 venv/pip 는 별도 설치 필요
+apt-get update -y
+apt-get install -y --no-install-recommends \
+  python3 python3-pip python3-venv python3.12-venv \
+  libpq-dev gcc unzip
 
 # AWS CLI v2 (Secrets Manager 읽기용 · Ubuntu 24.04 는 apt 에 awscli 없음)
 if ! command -v aws >/dev/null 2>&1; then
