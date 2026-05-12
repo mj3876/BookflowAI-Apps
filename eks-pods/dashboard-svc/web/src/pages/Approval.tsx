@@ -15,6 +15,7 @@ export default function Approval() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const [approveTarget, setApproveTarget] = useState<{ order_id: string; isbn13: string; qty: number } | null>(null);
   const { nameOf } = useLocations(role);
@@ -41,6 +42,23 @@ export default function Approval() {
     },
     onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
   });
+
+  const bulkApprove = async () => {
+    const items = (pending.data?.items ?? []) as any[];
+    const approvable = items.filter((o) => o.status === 'PENDING');
+    if (!approvable.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
+    if (!window.confirm(`외부 발주 PENDING ${approvable.length}건을 모두 승인합니다 (비용 발생). 진행할까요?`)) return;
+    setBulkBusy(true);
+    let ok = 0, ng = 0;
+    for (const o of approvable) {
+      try { await act.mutateAsync({ order_id: o.order_id, action: 'approve' }); ok++; }
+      catch { ng++; }
+      setFeedback(`일괄 승인 중… (${ok + ng}/${approvable.length}) · 성공 ${ok} 실패 ${ng}`);
+    }
+    setFeedback(`✓ 일괄 승인 완료 · 성공 ${ok} 실패 ${ng}`);
+    setBulkBusy(false);
+    qc.invalidateQueries({ queryKey: ['pending'] });
+  };
 
   if (role !== 'hq-admin') {
     return (
@@ -72,7 +90,17 @@ export default function Approval() {
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="h2">외부 발주 대기 ({pending.data?.items.length ?? 0})</h2>
-          <span className="label-tag">5초마다 자동 갱신</span>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-primary text-xs"
+              onClick={bulkApprove}
+              disabled={bulkBusy || (pending.data?.items ?? []).every((o: any) => o.status !== 'PENDING')}
+              title="외부 발주 PENDING 전건 일괄 최종 승인"
+            >
+              {bulkBusy ? '진행 중…' : `전체 승인 (${(pending.data?.items ?? []).filter((o: any) => o.status === 'PENDING').length}건)`}
+            </button>
+            <span className="label-tag">5초마다 자동 갱신</span>
+          </div>
         </div>
         <table className="data-table">
           <thead>
