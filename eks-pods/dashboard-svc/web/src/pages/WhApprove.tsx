@@ -130,16 +130,45 @@ export default function WhApprove() {
         >
           🔴 외부 발주 (자기 권역분 · 비용 발생)
         </button>
-        <div className="ml-auto px-4 py-2 text-[11px] text-bf-muted">
-          시각화/발의자 추적은 <a href="/wh-transfer" className="text-bf-primary hover:underline">권역 간 이동</a> 페이지 (보조)
-        </div>
       </div>
+
+      {/* WH_TRANSFER 탭 — 권역 다이어그램 (수도권 ↔ 영남 출고/입고 시각화) */}
+      {tab === 'WH_TRANSFER' && (() => {
+        const whIdOf = (id: number | null | undefined) => (id == null ? undefined : locItems.find((l) => l.location_id === id)?.wh_id);
+        const items = pending.data?.items ?? [];
+        const out = items.filter((o: any) => whIdOf(o.source_location_id) === my_wh).length;
+        const inb = items.filter((o: any) => whIdOf(o.target_location_id) === my_wh && whIdOf(o.source_location_id) !== my_wh).length;
+        const myName = my_wh === 1 ? '수도권' : '영남';
+        const partnerName = my_wh === 1 ? '영남' : '수도권';
+        return (
+          <div className="card">
+            <div className="flex items-center justify-center gap-4 py-3">
+              <div className="flex flex-col items-center px-5 py-3 rounded-lg border-2 border-bf-primary bg-bf-primary/10">
+                <div className="text-base font-bold mb-1">{myName}</div>
+                <span className="pill-info">내 권역</span>
+              </div>
+              <div className="flex flex-col items-center text-bf-muted text-xs">
+                <div className="flex items-center gap-1"><span>→</span><span className="text-[10px]">출고 {out}건</span></div>
+                <div className="my-1 text-[10px]">{items.length}건</div>
+                <div className="flex items-center gap-1"><span className="text-[10px]">입고 {inb}건</span><span>←</span></div>
+              </div>
+              <div className="flex flex-col items-center px-5 py-3 rounded-lg border-2 border-bf-border bg-bf-panel2">
+                <div className="text-base font-bold mb-1">{partnerName}</div>
+                <span className="text-bf-muted text-xs">상대 권역</span>
+              </div>
+            </div>
+            <div className="text-[11px] text-bf-muted text-center">
+              내 권역(파랑) 입장 — 아래 표의 "나의 사이드" = 출고(SOURCE) 또는 입고(TARGET) · 양측 모두 승인해야 운송 시작
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="h2">
             {tab === 'REBALANCE' ? '재분배 (자기 권역 내)'
-              : tab === 'WH_TRANSFER' ? '권역 이동 (수도권 ↔ 영남)'
+              : tab === 'WH_TRANSFER' ? '권역 이동 (수도권 ↔ 영남) — 양측 협의 필요'
               : '외부 발주 (자기 권역분)'}
             <span className="text-bf-muted ml-2">({pending.data?.items.length ?? 0})</span>
           </h2>
