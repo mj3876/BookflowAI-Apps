@@ -62,7 +62,8 @@ d = json.load(sys.stdin)
 for k, v in d.items():
     print(f'{k.upper()}={v}')
 " > "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
+  chown root:www-data "$ENV_FILE"
+  chmod 640 "$ENV_FILE"
   echo "Loaded secrets from Secrets Manager: $SECRET_NAME"
 else
   # Secrets Manager 미설정 시 개발용 기본값 (프로덕션 절대 사용 금지)
@@ -79,7 +80,8 @@ AWS_REGION=ap-northeast-1
 API_KEY_HASH=
 LOG_LEVEL=INFO
 ENVEOF
-  chmod 600 "$ENV_FILE"
+  chown root:www-data "$ENV_FILE"
+  chmod 640 "$ENV_FILE"
 fi
 
 # ── 4. DB 마이그레이션 (migration.sql — ADD COLUMN IF NOT EXISTS) ──────────────
