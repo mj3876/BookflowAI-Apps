@@ -25,7 +25,10 @@ type HistoryItem = {
 type Props<T extends HistoryItem> = {
   items: T[];
   days?: number;          // 과거 일자 수 (default 6 — 오늘 D-0 포함 시 7일치)
-  children: (filtered: T[], meta: { selectedKey: string; isToday: boolean; isAll: boolean }) => ReactNode;
+  children: (
+    filtered: T[],
+    meta: { selectedKey: string; isToday: boolean; isAll: boolean; viewMode: 'list' | 'map' },
+  ) => ReactNode;
   /** D-0 선택 시 children 위에 표시할 액션 영역 (전체 승인 버튼 등) */
   todayActions?: ReactNode;
   /** 페이지 제목 (헤더 우측 pill 옆) */
@@ -60,6 +63,8 @@ function dayLabel(key: string, offset: number): { primary: string; secondary: st
   if (offset === 0) return { primary: '오늘', secondary: 'D-0' };
   // YYYY-MM-DD → MM/DD
   const [, mm, dd] = key.split('-');
+  // 다른 달 일자 (offset === -1) — MM/DD 만 표시, secondary 없음
+  if (offset === -1) return { primary: `${parseInt(mm)}/${parseInt(dd)}`, secondary: '' };
   return { primary: `${parseInt(mm)}/${parseInt(dd)}`, secondary: `D-${offset}` };
 }
 
@@ -70,20 +75,46 @@ export default function DateHistoryTabs<T extends HistoryItem>({
   todayActions,
   pageLabel,
 }: Props<T>) {
-  // 오늘 (KST) 기준 일자 키 list — 오늘 + 과거 days 일
-  const dayKeys = useMemo(() => {
-    const todayKey = dateKey(new Date().toISOString())!;
-    const list: { key: string; offset: number }[] = [];
-    for (let i = 0; i <= days; i++) {
-      const d = new Date(Date.now() - i * 86400 * 1000);
-      list.push({ key: dateKey(d.toISOString())!, offset: i });
+  // 최근 12개월 list (월 picker 드롭다운용)
+  const monthOptions = useMemo(() => {
+    const now = new Date();
+    const list: { key: string; label: string }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = i === 0 ? `이번 달 (${key})` : key;
+      list.push({ key, label });
     }
     return list;
-  }, [days]);
+  }, []);
 
-  const todayKey = dayKeys[0].key;
+  const [selectedMonth, setSelectedMonth] = useState(monthOptions[0].key);
+  const isCurrentMonth = selectedMonth === monthOptions[0].key;
+
+  // 일자 키 list — 이번 달이면 오늘 + 과거 days 일, 다른 달이면 그 달의 일자 전체 (최신 먼저)
+  const dayKeys = useMemo(() => {
+    if (isCurrentMonth) {
+      const list: { key: string; offset: number }[] = [];
+      for (let i = 0; i <= days; i++) {
+        const d = new Date(Date.now() - i * 86400 * 1000);
+        list.push({ key: dateKey(d.toISOString())!, offset: i });
+      }
+      return list;
+    }
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const list: { key: string; offset: number }[] = [];
+    for (let d = daysInMonth; d >= 1; d--) {
+      const key = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      list.push({ key, offset: -1 });
+    }
+    return list;
+  }, [days, selectedMonth, isCurrentMonth]);
+
+  const todayKey = isCurrentMonth ? dayKeys[0].key : dateKey(new Date().toISOString())!;
   const [selectedKey, setSelectedKey] = useState<string>(todayKey);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
 
   // 일자별 stats (모든 status · pill 옆 카운트용)
   const dayStats = useMemo(() => {
@@ -130,6 +161,15 @@ export default function DateHistoryTabs<T extends HistoryItem>({
         {pageLabel && (
           <span className="px-2 py-1 text-[11px] rounded bg-bf-panel2 text-bf-muted mr-1">📅 {pageLabel}</span>
         )}
+        <select
+          className="px-2 py-1 rounded text-xs bg-bf-panel2 text-bf-text border border-bf-border"
+          value={selectedMonth}
+          onChange={(e) => setSelectedMonth(e.target.value)}
+        >
+          {monthOptions.map((m) => (
+            <option key={m.key} value={m.key}>{m.label}</option>
+          ))}
+        </select>
         <button
           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
             isAll ? 'bg-bf-primary text-white' : 'bg-bf-panel2 text-bf-muted hover:bg-bf-panel'
@@ -208,13 +248,23 @@ export default function DateHistoryTabs<T extends HistoryItem>({
             </button>
           ))}
         </div>
+        <div className="flex items-center gap-1 ml-2 border-l border-bf-border pl-2">
+          <button
+            className={`px-2 py-0.5 rounded text-[11px] ${viewMode === 'list' ? 'bg-bf-text text-bf-bg' : 'bg-bf-panel2 text-bf-muted'}`}
+            onClick={() => setViewMode('list')}
+          >📋 리스트</button>
+          <button
+            className={`px-2 py-0.5 rounded text-[11px] ${viewMode === 'map' ? 'bg-bf-text text-bf-bg' : 'bg-bf-panel2 text-bf-muted'}`}
+            onClick={() => setViewMode('map')}
+          >🗺️ 지도</button>
+        </div>
       </div>
 
       {/* 오늘 액션 영역 (D-0 only) */}
       {isToday && todayActions}
 
       {/* children 으로 filtered items 전달 */}
-      {children(filtered, { selectedKey, isToday, isAll })}
+      {children(filtered, { selectedKey, isToday, isAll, viewMode })}
     </div>
   );
 }

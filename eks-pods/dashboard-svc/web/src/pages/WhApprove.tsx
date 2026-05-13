@@ -4,6 +4,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { ApiError, fetchPending, patchPendingOrder, postIntervene, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
+import BatchMapView from '../components/BatchMapView';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
 
@@ -234,7 +235,9 @@ export default function WhApprove() {
           );
         })()}
       >
-        {(filtered, { isToday }) => (
+        {(filtered, { isToday, viewMode }) => viewMode === 'map' ? (
+          <BatchMapView items={filtered as any} nameOf={nameOf} whIdOf={whIdOf} />
+        ) : (
           <div className="card">
             <table className="data-table">
               <thead>

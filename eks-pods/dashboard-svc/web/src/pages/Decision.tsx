@@ -7,6 +7,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
 import DateHistoryTabs from '../components/DateHistoryTabs';
+import BatchMapView from '../components/BatchMapView';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
 
@@ -197,7 +198,9 @@ export default function Decision() {
           </div>
         }
       >
-        {(filtered, { isToday }) => (
+        {(filtered, { isToday, viewMode }) => viewMode === 'map' ? (
+          <BatchMapView items={filtered as any} nameOf={nameOf} />
+        ) : (
           <div className="card">
             <table className="data-table">
               <thead>

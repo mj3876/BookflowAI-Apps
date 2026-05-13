@@ -5,6 +5,7 @@ import { fetchPending, postIntervene, type Role } from '../api';
 import { useLocations } from '../useLocations';
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
+import BatchMapView from '../components/BatchMapView';
 
 /**
  * HQ Approval - Stage 3 (PUBLISHER_ORDER) 단독 최종 승인.
@@ -105,7 +106,9 @@ export default function Approval() {
           </div>
         }
       >
-        {(filtered, { isToday }) => (
+        {(filtered, { isToday, viewMode }) => viewMode === 'map' ? (
+          <BatchMapView items={filtered as any} nameOf={nameOf} />
+        ) : (
           <div className="card">
             <table className="data-table">
               <thead>

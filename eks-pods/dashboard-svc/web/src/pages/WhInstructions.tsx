@@ -4,6 +4,7 @@ import { fetchInstructions, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO, whName } from '../labels';
 import { useLocations } from '../useLocations';
 import DateHistoryTabs from '../components/DateHistoryTabs';
+import BatchMapView from '../components/BatchMapView';
 
 /**
  * 출고/입고 지시서 — 승인된 pending_orders.
@@ -75,7 +76,10 @@ export default function WhInstructions() {
       </div>
 
       <DateHistoryTabs items={all} days={6} pageLabel="출고/입고 지시 일자별 기록">
-        {(filtered) => {
+        {(filtered, { viewMode }) => {
+          if (viewMode === 'map') {
+            return <BatchMapView items={filtered as any} nameOf={nameOf} />;
+          }
           const newBookItems = filtered.filter((o) => o.urgency_level === 'NEWBOOK');
           const generalItems = filtered.filter((o) => o.urgency_level !== 'NEWBOOK');
           return (
