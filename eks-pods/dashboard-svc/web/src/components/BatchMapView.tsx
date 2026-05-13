@@ -282,19 +282,43 @@ export default function BatchMapView({ items, nameOf, whIdOf }: Props) {
     );
   }
 
-  // ── 5. 엣지 path 계산 ────────────────────────────────────────────────
-  const edgePath = (sx: number, sy: number, tx: number, ty: number): string => {
-    // 부드러운 cubic bezier · 수평 거리에 비례한 control offset
+  // ── 5. 엣지 path 계산 — 같은 (source,target,direction) edge 가 여러 개면 perpendicular offset 으로 분리
+  // 양방향 (A→B, B→A) 은 perpendicular 부호가 자연 반전되어 자동 분리.
+  // 같은 방향의 multi order_type (REBALANCE + WH_TRANSFER 등) 은 index/total 로 명시 분리.
+  const directionGroups = new Map<string, string[]>();
+  edges.forEach((e) => {
+    const key = `${e.sourceKey}→${e.targetKey}`;
+    if (!directionGroups.has(key)) directionGroups.set(key, []);
+    directionGroups.get(key)!.push(e.key);
+  });
+  const edgeIndex = new Map<string, { index: number; total: number }>();
+  directionGroups.forEach((keys) => {
+    keys.forEach((k, i) => edgeIndex.set(k, { index: i, total: keys.length }));
+  });
+
+  const edgePath = (
+    sx: number,
+    sy: number,
+    tx: number,
+    ty: number,
+    offsetIndex = 0,
+    total = 1,
+  ): string => {
     const dx = tx - sx;
     const dy = ty - sy;
-    const dist = Math.hypot(dx, dy);
-    const cOff = Math.min(120, Math.max(40, dist * 0.35));
-    // 수평 우선: control 은 좌우로 뻗음
-    const c1x = sx + cOff;
-    const c1y = sy;
-    const c2x = tx - cOff;
-    const c2y = ty;
-    return `M ${sx},${sy} C ${c1x},${c1y} ${c2x},${c2y} ${tx},${ty}`;
+    const dist = Math.hypot(dx, dy) || 1;
+    // perpendicular unit vector
+    const px = -dy / dist;
+    const py = dx / dist;
+    // index 가 center 중심으로 분포: [-1.5, -0.5, 0.5, 1.5] * SEPARATION 등
+    const SEPARATION = 22;
+    const off = (offsetIndex - (total - 1) / 2) * SEPARATION;
+    const ox = px * off;
+    const oy = py * off;
+    const cOff = Math.min(140, Math.max(50, dist * 0.4));
+    const s1x = sx + ox, s1y = sy + oy;
+    const t1x = tx + ox, t1y = ty + oy;
+    return `M ${s1x},${s1y} C ${s1x + cOff},${s1y} ${t1x - cOff},${t1y} ${t1x},${t1y}`;
   };
 
   return (
@@ -317,7 +341,7 @@ export default function BatchMapView({ items, nameOf, whIdOf }: Props) {
         <div className="flex items-center gap-1.5 mb-1">
           <span className="inline-block w-4 h-0.5 rounded" style={{ background: ORDER_TYPE_COLOR.PUBLISHER_ORDER }} />
           <span className="text-bf-text">출판사 발주</span>
-          <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배">lead time D+7~14</span>
+          <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배">lead time D+3</span>
         </div>
         <div className="mt-1.5 pt-1.5 border-t border-bf-border/40 text-bf-muted">
           점선 = 거절 우세 · 클릭 시 상세
@@ -465,9 +489,17 @@ export default function BatchMapView({ items, nameOf, whIdOf }: Props) {
           const isRejected = e.dominant === 'REJECTED';
           const sw = arrowWidth(e.count);
           const isSelected = selectedKey === e.key;
-          const pathD = edgePath(src.x, src.y, tgt.x, tgt.y);
-          const midX = (src.x + tgt.x) / 2;
-          const midY = (src.y + tgt.y) / 2 - 16;
+          const eIdx = edgeIndex.get(e.key) ?? { index: 0, total: 1 };
+          const pathD = edgePath(src.x, src.y, tgt.x, tgt.y, eIdx.index, eIdx.total);
+          // badge 위치도 같은 perpendicular offset 적용
+          const dxe = tgt.x - src.x;
+          const dye = tgt.y - src.y;
+          const diste = Math.hypot(dxe, dye) || 1;
+          const pxe = -dye / diste, pye = dxe / diste;
+          const SEPARATION = 22;
+          const off = (eIdx.index - (eIdx.total - 1) / 2) * SEPARATION;
+          const midX = (src.x + tgt.x) / 2 + pxe * off;
+          const midY = (src.y + tgt.y) / 2 + pye * off - 16;
           const color = arrowColor(e.orderType);
           return (
             <g
@@ -475,8 +507,8 @@ export default function BatchMapView({ items, nameOf, whIdOf }: Props) {
               className="pointer-events-auto cursor-pointer"
               onClick={() => setSelectedKey(e.key)}
             >
-              {/* hit area (투명) */}
-              <path d={pathD} stroke="transparent" strokeWidth={Math.max(16, sw + 12)} fill="none" />
+              {/* hit area (투명 · 클릭 hit-area 확대) */}
+              <path d={pathD} stroke="transparent" strokeWidth={Math.max(22, sw + 18)} fill="none" />
               {/* visible stroke */}
               <path
                 d={pathD}

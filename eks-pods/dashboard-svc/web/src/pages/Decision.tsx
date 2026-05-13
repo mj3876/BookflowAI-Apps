@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
-import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, ApiError, type InsufficientStockItem, type Role } from '../api';
+import { fetchInsufficientStock, fetchPending, postDecide, postCascadeBatch, postIntervene, ApiError, type InsufficientStockItem, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
@@ -112,26 +112,19 @@ export default function Decision() {
     enabled: role === 'hq-admin' && demoOpen,
   });
 
+  // 사용자 결정 2026-05-13: frontend N 회 호출 → backend batch endpoint 1 회 호출 (503 race + 느림 해소)
   const triggerDemo = useMutation({
     mutationFn: async (items: InsufficientStockItem[]) => {
-      let s1 = 0, s2 = 0, s3 = 0;
-      for (const it of items) {
-        try {
-          const r = await postDecide(role, {
-            isbn13: it.isbn13,
-            target_location_id: it.recommend_target_location_id,  // store_id 의 WH 로 발주 (출판사→WH→매장 분배)
-            qty: it.suggested_qty,
-            note: `시연용 자동 cascade · 예측 부족 (출판사→WH→매장 ${nameOf(it.store_id)})`,
-          });
-          if (r.stage === 1) s1++;
-          else if (r.stage === 2) s2++;
-          else if (r.stage === 3) s3++;
-        } catch { /* skip */ }
-      }
-      return { total: items.length, s1, s2, s3 };
+      return postCascadeBatch(role, items.map((it) => ({
+        isbn13: it.isbn13,
+        target_location_id: it.recommend_target_location_id,  // 출판사→WH→매장
+        qty: it.suggested_qty,
+        note: `시연용 자동 cascade · 예측 부족 (출판사→WH→매장 ${nameOf(it.store_id)})`,
+      })));
     },
     onSuccess: (r) => {
-      setDemoResult(`${r.total}건 처리 — 1단계 ${r.s1} · 2단계 ${r.s2} · 3단계 ${r.s3}`);
+      const errTail = r.failed > 0 ? ` · 실패 ${r.failed}` : '';
+      setDemoResult(`✓ ${r.total}건 처리 — 1단계 ${r.s1} · 2단계 ${r.s2} · 3단계 ${r.s3}${errTail}`);
       setDemoOpen(false);
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
@@ -239,8 +232,8 @@ export default function Decision() {
                         <span className={STAGE_LABEL[stage].color}>{stage}단계</span>
                         <span className="text-[11px] text-bf-muted ml-1">{ko(ORDER_TYPE_KO, o.order_type)}</span>
                         {o.order_type === 'PUBLISHER_ORDER' && (
-                          <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 7~14일)">
-                            📦 출판사→WH (D+7~14)
+                          <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 최대 3일)">
+                            📦 출판사→WH (D+3)
                           </span>
                         )}
                       </td>

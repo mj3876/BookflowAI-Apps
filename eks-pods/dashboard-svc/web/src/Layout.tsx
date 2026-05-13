@@ -15,7 +15,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
-    section: '본사 (전사 관제)',
+    section: '📊 본사 (전사 관제)',
     items: [
       { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
       { to: '/inventory',   label: '전사 재고',           desc: '모든 매장 재고와 부족 알림',              allow: 'HQ' },
@@ -26,7 +26,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
-    section: '물류센터 (자기 권역)',
+    section: '🏬 물류센터 (자기 권역)',
     items: [
       { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간 (지점처럼)', allow: 'WH' },
       { to: '/wh-approve',      label: '처리 대기',         desc: '권역 승인 + 일자별 처리 기록', allow: 'WH' },
@@ -35,22 +35,27 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
-    section: '매장 (자기 매장)',
+    section: '🏪 매장 (자기 매장)',
     items: [
       { to: '/branch-inventory', label: '매장 재고',         desc: '내 매장 도서 재고와 부족 알림',          allow: 'BRANCH' },
       { to: '/branch-inbound',   label: '입고 확인',         desc: '매장 입고 처리 (승인 대기 분리)',        allow: 'BRANCH' },
       { to: '/branch-sales',     label: '매장 매출',         desc: '내 매장 실시간 판매 (POS)',              allow: 'BRANCH' },
-      { to: '/branch-curation',  label: 'SNS 급등 도서',     desc: '최근 24시간 화제가 된 도서 중 매장 재고 보유분 (입고 요청 발의)', allow: 'BRANCH' },
+      { to: '/branch-curation',  label: '내 매장 SNS 매칭',  desc: '전사 SNS 급등 도서 중 우리 매장 재고 보유분 (입고 요청 발의)', allow: 'BRANCH' },
       { to: '/branch-manual',    label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'BRANCH' },
     ],
   },
   {
-    section: '공통',
+    section: '📚 카탈로그',
     items: [
-      { to: '/books',         label: '도서 카탈로그',       desc: '전체 도서 검색·정보 조회 (본사만 판매 ON/OFF)', allow: 'ALL' },
-      { to: '/spikes',        label: 'SNS 급등 도서',       desc: '최근 24시간 화제가 된 도서 (수요 급변)',   allow: 'ALL' },
-      { to: '/notifications', label: '알림 이력',           desc: '주문 / 시스템 이벤트 송신 이력',          allow: 'ALL' },
-      { to: '/live',          label: '실시간 이벤트',       desc: '재고 변동 · 주문 · SNS 급등 실시간 스트림', allow: 'ALL' },
+      { to: '/books',  label: '도서 카탈로그', desc: '전체 도서 검색·정보 조회 (본사만 판매 ON/OFF)', allow: 'ALL' },
+      { to: '/spikes', label: 'SNS 급등 (전사)', desc: '최근 24시간 화제가 된 도서 (수요 급변 · 전사)', allow: 'ALL' },
+    ],
+  },
+  {
+    section: '⚙️ 시스템 (감사·시연)',
+    items: [
+      { to: '/notifications', label: '알림 이력',     desc: '주문 / 시스템 이벤트 송신 이력',          allow: 'ALL' },
+      { to: '/live',          label: '실시간 이벤트', desc: '재고 변동 · 주문 · SNS 급등 실시간 스트림', allow: 'ALL' },
     ],
   },
 ];
@@ -91,7 +96,7 @@ const PAGE_LABEL: Record<string, string> = {
   'branch-inventory': '매장 재고',
   'branch-inbound': '입고 확인',
   'branch-sales': '매장 매출',
-  'branch-curation': 'SNS 급등 도서',
+  'branch-curation': '내 매장 SNS 매칭',
   'branch-manual': '매장 수동 조정',
   notifications: '알림 로그',
   live: '실시간 이벤트',

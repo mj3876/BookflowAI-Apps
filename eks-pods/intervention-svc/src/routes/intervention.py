@@ -600,6 +600,53 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
     return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at)
 
 
+@router.post("/intervene/batch")
+def intervene_batch(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """일괄 승인/거절 (사용자 결정 2026-05-13).
+
+    frontend N 회 호출 → backend 1 회로 통합. 503 race + 느림 해소.
+    body: {action: 'approve'|'reject', items: [{order_id, approval_side, reject_reason?}]}
+    response: {total, ok, failed, errors}
+    """
+    action = body.get("action")
+    items = body.get("items", [])
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="action 은 'approve' 또는 'reject'")
+    if not items or len(items) > 1000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="items 는 1~1000 개")
+
+    ok = 0
+    failed = 0
+    errors: list[str] = []
+    for it in items:
+        try:
+            if action == "approve":
+                req = ApproveRequest(
+                    order_id=it["order_id"],
+                    approval_side=it.get("approval_side", "FINAL"),
+                    note=it.get("note"),
+                )
+                approve(req, ctx)
+            else:
+                req2 = RejectRequest(
+                    order_id=it["order_id"],
+                    approval_side=it.get("approval_side", "FINAL"),
+                    reject_reason=it.get("reject_reason", "일괄 거절"),
+                )
+                reject(req2, ctx)
+            ok += 1
+        except HTTPException as e:
+            failed += 1
+            if len(errors) < 20:
+                errors.append(f"{it.get('order_id', '?')}: {e.detail}")
+        except Exception as e:
+            failed += 1
+            if len(errors) < 20:
+                errors.append(f"{it.get('order_id', '?')}: {str(e)[:100]}")
+
+    return {"total": len(items), "ok": ok, "failed": failed, "errors": errors}
+
+
 @router.patch("/pending-orders/{order_id}", response_model=PendingOrderEditResponse)
 def edit_pending_order(order_id: UUID, req: PendingOrderEditRequest, ctx: AuthContext = Depends(require_auth)):
     """D5-7 Notion 2.6 · WH AI 추천 수정 (수량/대상 매장).

@@ -127,8 +127,8 @@ export default function Approval() {
                           <div className="text-sm">{o.title ?? o.isbn13}</div>
                           <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
                           {o.order_type === 'PUBLISHER_ORDER' && (
-                            <span className="text-[10px] text-emerald-500" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 7~14일)">
-                              📦 출판사→WH (D+7~14)
+                            <span className="text-[10px] text-emerald-500" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 최대 3일)">
+                              📦 출판사→WH (D+3)
                             </span>
                           )}
                         </td>

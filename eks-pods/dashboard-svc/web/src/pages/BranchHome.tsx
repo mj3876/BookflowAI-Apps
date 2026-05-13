@@ -2,12 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useOutletContext } from 'react-router-dom';
 import {
   fetchPendingGrouped, fetchInventoryByStore, fetchCuration,
-  fetchHourlySales, fetchBestsellers, type Role,
+  fetchHourlySales, type Role,
 } from '../api';
 import { useScope } from '../auth';
 import { useStockUpdates } from '../useStockUpdates';
-import KpiLine from '../components/charts/KpiLine';
-import KpiBar from '../components/charts/KpiBar';
 
 const STORE_NAMES: Record<number, string> = {
   1: '강남점', 2: '광화문점', 3: '잠실점', 4: '홍대점', 5: '신촌점', 6: '용산점',
@@ -18,10 +16,10 @@ const STORE_NAMES: Record<number, string> = {
 /**
  * Branch Home — 매장 직원 진입 첫 화면.
  *
- * 매일 흐름:
- *  - 오늘 입고 대기 (신간 분배 / 권역간 도착) — batch 가 결정한 결과 검수
- *  - 매장 부족 도서 top 5 (책 단위 · 표지 + 가용/안전재고)
- *  - SNS 급등 매장재고 매칭 (BranchCuration entry)
+ * 차트 0 · "오늘 매장에서 뭐 해야 하는지" 액션 list.
+ *  - 3 metric card (오늘 매출 / 입고 대기 / 부족 도서) — 색상 강화
+ *  - 입고 대기 / 부족 도서 / 급등+매장재고 / 신간 분배 list
+ *  - 매출 상세 차트는 /branch-sales CTA
  */
 export default function BranchHome() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -56,18 +54,10 @@ export default function BranchHome() {
     staleTime: 2 * 60 * 1000,
   });
 
-  // hourly: 1 day · 24 row — 1 분 OK
+  // hourly: 오늘 매출 총액만 사용 (차트 X · 카드 숫자에만)
   const hourly = useQuery({
     queryKey: ['branch-hourly', storeId, role],
     queryFn: () => fetchHourlySales(role, storeId),
-    refetchInterval: 60000,
-    staleTime: 30000,
-  });
-
-  // best: 오늘 베스트셀러 — 1 분
-  const best = useQuery({
-    queryKey: ['branch-best', storeId, role],
-    queryFn: () => fetchBestsellers(role, 1, 10, storeId),
     refetchInterval: 60000,
     staleTime: 30000,
   });
@@ -78,131 +68,65 @@ export default function BranchHome() {
   const data = grouped.data;
   const items = data?.items ?? [];
   const newbookItems = items.filter((o) => o.urgency_level === 'NEWBOOK');
-  const inboundItems = items.filter(
-    (o) => o.order_type === 'WH_TRANSFER' && o.target_location_id === storeId,
-  );
+  const inboundItems = items
+    .filter((o) => o.order_type === 'WH_TRANSFER' && o.target_location_id === storeId)
+    .slice(0, 10);
+  const approvedInbound = items.filter(
+    (o) => o.target_location_id === storeId && o.status === 'APPROVED',
+  ).slice(0, 10);
 
-  // 매장 부족 도서 top 5 (가용 ≤ 안전재고)
+  // 매장 부족 도서 (가용 ≤ 안전재고)
   const invItems = (inv.data?.items ?? []) as any[];
-  const lowStock = invItems
+  const lowStockAll = invItems
     .filter((it) => (it.available ?? 0) <= (it.safety_stock ?? 0))
-    .sort((a, b) => (a.available ?? 0) - (b.available ?? 0))
-    .slice(0, 5);
+    .sort((a, b) => (a.available ?? 0) - (b.available ?? 0));
+  const lowStock = lowStockAll.slice(0, 5);
 
-  // 매장 재고 매칭된 SNS 급등 도서 top 3
+  // 매장 재고 매칭된 SNS 급등 도서 top 10
   const curItems = (cur.data?.items ?? []) as any[];
-  const matchedSpikes = curItems.filter((c) => (c.on_hand ?? 0) > 0).slice(0, 3);
+  const matchedSpikes = curItems.filter((c) => (c.on_hand ?? 0) > 0).slice(0, 10);
 
   const totalToday = data?.manual_review ?? 0;
 
-  // 시간대별 매출 (0-23 시 · 누락 시간은 0 채움)
+  // 오늘 매출 총액 (hourly raw sum)
   const hourlyRaw = (hourly.data?.items ?? []) as { hour: number; revenue: number }[];
-  const hourlyData = Array.from({ length: 24 }, (_, h) => {
-    const found = hourlyRaw.find((it) => it.hour === h);
-    return { hour: `${h}시`, revenue: found?.revenue ?? 0 };
-  });
-
-  // 오늘 베스트셀러
-  const bestItems = ((best.data?.items ?? []) as { isbn13: string; title?: string | null; qty: number }[])
-    .slice(0, 10)
-    .map((it) => ({ label: (it.title ?? it.isbn13).slice(0, 24), qty: it.qty }));
-
-  // 7일 매출 추이 mini (sales-daily endpoint 미구현 — placeholder)
-  const week7 = (() => {
-    const totalToday = hourlyRaw.reduce((s, it) => s + (it.revenue ?? 0), 0) || 500000;
-    const arr: { date: string; revenue: number }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const noise = 0.7 + Math.random() * 0.6;
-      arr.push({ date: `${d.getMonth() + 1}/${d.getDate()}`, revenue: Math.round(totalToday * noise) });
-    }
-    return arr;
-  })();
+  const todaysRevenue = hourlyRaw.reduce((s, it) => s + (it.revenue ?? 0), 0);
 
   return (
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="h1">{storeName} · {today}</h1>
         <p className="text-bf-muted text-xs mt-1">
-          오늘 매장에서 처리할 입고와 부족 도서를 한 화면으로.
+          오늘 매장에서 처리할 액션을 한 화면으로. 매출 차트는 매장 매출 상세 페이지에서 확인하세요.
         </p>
       </div>
 
-      {/* 1행: 오늘 처리 현황 (batch monitor) */}
+      {/* 1행: 오늘 처리 현황 (3 카드 · 색상 강화) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <Link to="/branch-inbound" className="metric-card hover:border-bf-primary transition">
+        <Link to="/branch-sales" className="metric-card hover:border-bf-primary transition border-bf-success">
+          <div className="metric-label">💰 오늘 매출</div>
+          <div className="metric-value text-bf-success">₩{todaysRevenue.toLocaleString()}</div>
+          <div className="text-[11px] text-bf-muted mt-1">매장 매출 상세 →</div>
+        </Link>
+        <Link to="/branch-inbound" className="metric-card hover:border-bf-primary transition border-bf-warn">
           <div className="metric-label">📥 오늘 입고 대기</div>
-          <div className="metric-value">{newbookItems.length + inboundItems.length}건</div>
+          <div className="metric-value text-bf-warn">{newbookItems.length + approvedInbound.length}건</div>
           <div className="text-[11px] text-bf-muted mt-1">
-            🆕 신간 {newbookItems.length} · 권역간 {inboundItems.length}
+            🆕 신간 {newbookItems.length} · 권역간 {approvedInbound.length}
           </div>
         </Link>
-        <Link to="/branch-inventory" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">📦 매장 부족 도서</div>
-          <div className="metric-value">{lowStock.length}권</div>
+        <Link to="/branch-inventory" className="metric-card hover:border-bf-primary transition border-bf-danger">
+          <div className="metric-label">⚠️ 매장 부족 도서</div>
+          <div className="metric-value text-bf-danger">{lowStockAll.length}권</div>
           <div className="text-[11px] text-bf-muted mt-1">가용 ≤ 안전재고</div>
         </Link>
-        <Link to="/branch-curation" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">🔥 SNS 급등 (매장재고)</div>
-          <div className="metric-value">{matchedSpikes.length}건</div>
-          <div className="text-[11px] text-bf-muted mt-1">매장 재고 매칭</div>
-        </Link>
-      </div>
-
-      {/* 1.5행: 오늘 시간대별 매출 + 7일 mini */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="card lg:col-span-2">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2 text-sm">📊 오늘 시간대별 매출</h2>
-            <span className="text-[11px] text-bf-muted">1분마다 갱신</span>
-          </div>
-          <KpiLine
-            data={hourlyData}
-            xKey="hour"
-            yKey="revenue"
-            yLabels={['시간 매출']}
-            area
-            height={200}
-            isLoading={hourly.isLoading}
-          />
-        </div>
-        <div className="card">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2 text-sm">📉 7일 매출 추이</h2>
-          </div>
-          <KpiLine
-            data={week7}
-            xKey="date"
-            yKey="revenue"
-            yLabels={['일 매출']}
-            height={150}
-          />
-        </div>
-      </div>
-
-      {/* 1.7행: 오늘 베스트셀러 */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="h2 text-sm">🏆 오늘 베스트셀러 top 10</h2>
-          <Link to="/branch-sales" className="text-[11px] text-bf-primary hover:underline">매출 상세 →</Link>
-        </div>
-        <KpiBar
-          data={bestItems}
-          xKey="label"
-          yKey="qty"
-          horizontal
-          yLabels={['판매 수량']}
-          height={280}
-          isLoading={best.isLoading}
-        />
       </div>
 
       {/* 2행: 신간 분배 (urgency=NEWBOOK · 별도 색상 강조) */}
       {newbookItems.length > 0 && (
         <div className="card-tight bg-yellow-50 border-yellow-300">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-bold text-yellow-900">🆕 본사 신간 분배 (검수 필요)</div>
+            <div className="text-xs font-bold text-yellow-900">📥 오늘 신간 분배 (검수 필요)</div>
             <Link to="/branch-inbound" className="text-[11px] text-bf-primary hover:underline">
               자세히 →
             </Link>
@@ -217,16 +141,52 @@ export default function BranchHome() {
         </div>
       )}
 
-      {/* 3행: 부족 도서 top 5 (책 단위) */}
-      <div className="card-tight">
+      {/* 3행: 입고 대기 list (APPROVED top 10) */}
+      <div className="card">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="h2 text-sm">📦 매장 부족 도서 top 5</h2>
+          <h2 className="h2 text-sm">📦 입고 대기 (승인 완료 · 도착 대기) top 10</h2>
+          <Link to="/branch-inbound" className="text-[11px] text-bf-primary hover:underline">입고 처리 →</Link>
+        </div>
+        {approvedInbound.length === 0 && inboundItems.length === 0 ? (
+          <div className="text-xs text-bf-muted py-6 text-center">입고 대기 없음</div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="text-bf-muted">
+              <tr>
+                <th className="text-left py-1">긴급도</th>
+                <th className="text-left py-1">제목</th>
+                <th className="text-left py-1">출발</th>
+                <th className="text-right py-1">수량</th>
+                <th className="text-left py-1 pl-2">상태</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(approvedInbound.length > 0 ? approvedInbound : inboundItems).map((o) => (
+                <tr key={o.order_id} className="border-t border-bf-border2 hover:bg-bf-panel2">
+                  <td className={`py-1.5 font-bold ${o.urgency_level === 'CRITICAL' ? 'text-bf-danger' : o.urgency_level === 'URGENT' ? 'text-bf-warn' : 'text-bf-muted'}`}>
+                    {o.urgency_level}
+                  </td>
+                  <td className="py-1.5 font-medium truncate max-w-[220px]">{o.title ?? o.isbn13}</td>
+                  <td className="py-1.5 text-bf-muted">위치 {o.source_location_id ?? '-'}</td>
+                  <td className="py-1.5 text-right">{o.qty}</td>
+                  <td className="py-1.5 pl-2 text-bf-warn">{o.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* 4행: 부족 도서 alert top 5 */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="h2 text-sm">⚠️ 매장 부족 도서 top 5 (안전재고 미달)</h2>
           <Link to="/branch-inventory" className="text-[11px] text-bf-primary hover:underline">
             매장 재고 전체 →
           </Link>
         </div>
         {lowStock.length === 0 ? (
-          <div className="text-xs text-bf-muted">현재 부족 도서 없음 · 매장 정상 운영</div>
+          <div className="text-xs text-bf-muted py-6 text-center">현재 부족 도서 없음 · 매장 정상 운영</div>
         ) : (
           <table className="w-full text-xs">
             <thead className="text-bf-muted">
@@ -244,7 +204,7 @@ export default function BranchHome() {
                 const av = liveAv ?? it.available;
                 const flash = flashed(it.isbn13, storeId);
                 return (
-                  <tr key={it.isbn13} className="border-t border-bf-border2">
+                  <tr key={it.isbn13} className="border-t border-bf-border2 hover:bg-bf-panel2">
                     <td className="py-1.5 font-medium">{it.title ?? it.isbn13}</td>
                     <td className="py-1.5 text-bf-muted">{it.author ?? '-'}</td>
                     <td className="py-1.5 text-right">{it.on_hand}</td>
@@ -260,23 +220,67 @@ export default function BranchHome() {
         )}
       </div>
 
-      {/* 4행: 다음 액션 hint */}
+      {/* 5행: SNS 급등 + 매장 보유 top 10 */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="h2 text-sm">🔥 SNS 급등 + 매장 보유 top 10 (우선 진열)</h2>
+          <Link to="/branch-curation" className="text-[11px] text-bf-primary hover:underline">큐레이션 →</Link>
+        </div>
+        {matchedSpikes.length === 0 ? (
+          <div className="text-xs text-bf-muted py-6 text-center">매장 재고 매칭 급등 도서 없음</div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="text-bf-muted">
+              <tr>
+                <th className="text-left py-1">제목</th>
+                <th className="text-left py-1">분야</th>
+                <th className="text-right py-1">z-score</th>
+                <th className="text-right py-1">매장재고</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matchedSpikes.map((c, i) => (
+                <tr key={`${c.isbn13 ?? i}-${i}`} className="border-t border-bf-border2 hover:bg-bf-panel2">
+                  <td className="py-1.5 font-medium truncate max-w-[220px]">{c.title ?? c.isbn13}</td>
+                  <td className="py-1.5 text-bf-muted">{c.category ?? '-'}</td>
+                  <td className={`py-1.5 text-right font-bold ${(c.z_score ?? 0) >= 3 ? 'text-bf-danger' : 'text-bf-warn'}`}>
+                    {(c.z_score ?? 0).toFixed(2)}
+                  </td>
+                  <td className="py-1.5 text-right text-bf-success font-bold">{c.on_hand}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* 6행: 큰 CTA — 매출 상세 페이지 */}
+      <Link to="/branch-sales" className="card hover:border-bf-primary transition flex items-center justify-between py-6">
+        <div>
+          <div className="text-xs text-bf-muted mb-1">📊 시간대별 매출 · 베스트셀러 차트</div>
+          <div className="text-xl font-bold text-bf-text">매장 매출 상세 보기</div>
+          <div className="text-[11px] text-bf-muted mt-1">오늘 시간대별 매출 · 베스트셀러 top 10 · 카테고리 분포</div>
+        </div>
+        <div className="text-3xl text-bf-primary">→</div>
+      </Link>
+
+      {/* 7행: 추천 액션 hint */}
       <div className="card-tight bg-bf-panel2 border-bf-border2">
         <div className="text-[11px] text-bf-muted mb-2">📋 추천 액션</div>
         <ul className="text-xs space-y-1 ml-4 list-disc">
           {newbookItems.length > 0 && (
             <li>본사 신간 <b className="text-yellow-700">{newbookItems.length}건</b> 검수 — <Link to="/branch-inbound" className="text-bf-primary hover:underline">입고 처리</Link></li>
           )}
-          {inboundItems.length > 0 && (
-            <li>권역간 도착 <b>{inboundItems.length}건</b> 수령 확인 — <Link to="/branch-inbound" className="text-bf-primary hover:underline">입고 처리</Link></li>
+          {approvedInbound.length > 0 && (
+            <li>권역간 도착 <b>{approvedInbound.length}건</b> 수령 확인 — <Link to="/branch-inbound" className="text-bf-primary hover:underline">입고 처리</Link></li>
           )}
-          {lowStock.length > 0 && (
-            <li>부족 도서 <b className="text-bf-danger">{lowStock.length}권</b> 본사 발주 요청 검토 — <Link to="/branch-curation" className="text-bf-primary hover:underline">발주 요청</Link></li>
+          {lowStockAll.length > 0 && (
+            <li>부족 도서 <b className="text-bf-danger">{lowStockAll.length}권</b> 본사 발주 요청 검토 — <Link to="/branch-curation" className="text-bf-primary hover:underline">발주 요청</Link></li>
           )}
           {matchedSpikes.length > 0 && (
             <li>SNS 급등 도서 <b>{matchedSpikes.length}건</b> 우선 진열 — <Link to="/branch-curation" className="text-bf-primary hover:underline">매장 재고 매칭</Link></li>
           )}
-          {totalToday === 0 && lowStock.length === 0 && (
+          {totalToday === 0 && lowStockAll.length === 0 && (
             <li className="list-none text-bf-muted">오늘 처리 대기 없음 · 매장 정상 운영 중</li>
           )}
         </ul>

@@ -28,6 +28,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..auth import AuthContext, require_auth
 from ..db import db_conn
 from ..models import (
+    BatchDecideRequest,
+    BatchDecideResponse,
     DecideRequest,
     DecideResponse,
     PendingOrder,
@@ -535,3 +537,39 @@ def list_pending(
         for r in rows
     ]
     return PendingOrdersResponse(items=items)
+
+
+@router.post("/decide/batch", response_model=BatchDecideResponse)
+def decide_batch(req: BatchDecideRequest, ctx: AuthContext = Depends(require_auth)):
+    """일괄 cascade 결정 (사용자 결정 2026-05-13).
+
+    시연 "일괄 발의" 또는 매일 03:30 batch 가 N items 를 한 번에 전송 → backend 가 sequential 처리.
+    개별 /decide 를 N 번 호출하던 frontend 패턴의 503 race + 느림 해소.
+
+    각 item 별 transaction 분리 (한 건 실패가 다른 건에 영향 X). 결과 요약만 응답.
+    """
+    if ctx.role not in ("hq-admin", "wh-manager"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hq-admin 또는 wh-manager 만 batch 결정 가능")
+
+    counts = {"s1": 0, "s2": 0, "s3": 0}
+    failed = 0
+    errors: list[str] = []
+    for it in req.items:
+        try:
+            resp = decide(it, ctx)  # 같은 함수 직접 호출 (각 transaction 분리)
+            stage_key = f"s{resp.stage}"
+            counts[stage_key] = counts.get(stage_key, 0) + 1
+        except HTTPException as e:
+            failed += 1
+            if len(errors) < 20:  # 너무 많이 누적 방지
+                errors.append(f"{it.isbn13}: {e.detail}")
+        except Exception as e:
+            failed += 1
+            if len(errors) < 20:
+                errors.append(f"{it.isbn13}: {str(e)[:100]}")
+
+    return BatchDecideResponse(
+        total=len(req.items),
+        s1=counts["s1"], s2=counts["s2"], s3=counts["s3"],
+        failed=failed, errors=errors,
+    )

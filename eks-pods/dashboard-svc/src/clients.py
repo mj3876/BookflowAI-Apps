@@ -109,10 +109,16 @@ async def get_notifications_recent(token: str, limit: int = 50) -> dict | None:
     return await _safe_get(f"{settings.notification_svc_url}/notification/recent?limit={limit}", token)
 
 
-async def _safe_post(url: str, body: dict, token: str) -> tuple[int, Any]:
-    """POST 프록시. (status_code, body_or_None) 반환. downstream pod 미배포면 503."""
+async def _safe_post(url: str, body: dict, token: str, timeout: float | None = None) -> tuple[int, Any]:
+    """POST 프록시. (status_code, body_or_None) 반환. downstream pod 미배포면 503.
+
+    timeout: None 이면 _client 기본값 · 큰 batch 요청은 60s 등 override.
+    """
     try:
-        r = await _client.post(url, json=body, headers={"Authorization": token})
+        if timeout is not None:
+            r = await _client.post(url, json=body, headers={"Authorization": token}, timeout=timeout)
+        else:
+            r = await _client.post(url, json=body, headers={"Authorization": token})
         return r.status_code, r.json() if r.content else None
     except Exception as e:
         log.warning("fan-in POST %s failed: %s", url, e)
@@ -173,6 +179,11 @@ async def post_inbound_reject(order_id: str, body: dict, token: str) -> tuple[in
     )
 
 
+async def post_intervention_batch(body: dict, token: str) -> tuple[int, Any]:
+    """일괄 승인/거절 (사용자 결정 2026-05-13) — frontend N 회 → backend 1 회."""
+    return await _safe_post(f"{settings.intervention_svc_url}/intervention/intervene/batch", body, token, timeout=60.0)
+
+
 async def post_intervention_approve(body: dict, token: str) -> tuple[int, Any]:
     return await _safe_post(f"{settings.intervention_svc_url}/intervention/approve", body, token)
 
@@ -187,6 +198,11 @@ async def post_notification_send(body: dict, token: str) -> tuple[int, Any]:
 
 async def post_decision_decide(body: dict, token: str) -> tuple[int, Any]:
     return await _safe_post(f"{settings.decision_svc_url}/decision/decide", body, token)
+
+
+async def post_decision_decide_batch(body: dict, token: str) -> tuple[int, Any]:
+    """일괄 cascade 결정 — N items 한 번에 (시연 + 배치 매일 03:30)."""
+    return await _safe_post(f"{settings.decision_svc_url}/decision/decide/batch", body, token, timeout=60.0)
 
 
 async def post_intervention_returns_request(body: dict, token: str) -> tuple[int, Any]:

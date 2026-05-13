@@ -1,10 +1,18 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchReturns, postReturnsApprove, postReturnsReject, type Role } from '../api';
+import { fetchReturns, postReturnsApprove, postReturnsReject, type ReturnRow, type Role } from '../api';
 import { ko, RETURN_STATUS_KO } from '../labels';
 import { useLocations } from '../useLocations';
 import ConfirmModal from '../components/ConfirmModal';
+import DateHistoryTabs from '../components/DateHistoryTabs';
+
+// DateHistoryTabs 는 created_at/approved_at/executed_at 필드를 본다.
+// ReturnRow 는 requested_at/hq_approved_at 으로 다르게 명명되어 있어 alias adapter 로 매핑.
+type ReturnRowForTabs = ReturnRow & {
+  created_at: string;
+  approved_at: string | null;
+};
 
 const RETURN_REASON_KO: Record<string, string> = {
   CUSTOMER:             '고객 반품',
@@ -23,7 +31,17 @@ export default function Returns() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const { nameOf } = useLocations(role);
 
-  const q = useQuery({ queryKey: ['returns', role], queryFn: () => fetchReturns(role, 50), refetchInterval: 8000 });
+  const q = useQuery({ queryKey: ['returns', role], queryFn: () => fetchReturns(role, 200), refetchInterval: 8000 });
+
+  // DateHistoryTabs 용 adapter — requested_at → created_at, hq_approved_at → approved_at 매핑
+  const rowsForTabs = useMemo<ReturnRowForTabs[]>(
+    () => (q.data?.items ?? []).map((r) => ({
+      ...r,
+      created_at: r.requested_at,
+      approved_at: r.hq_approved_at,
+    })),
+    [q.data?.items],
+  );
 
   const approve = useMutation({
     mutationFn: (return_id: string) => postReturnsApprove(role, { return_id }),
@@ -90,68 +108,76 @@ export default function Returns() {
         </div>
       )}
 
-      <div className="card">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>요청 일시</th>
-              <th>ISBN</th>
-              <th>제목</th>
-              <th>위치</th>
-              <th>수량</th>
-              <th>사유</th>
-              <th>상태</th>
-              <th>승인</th>
-              <th className="text-right">액션</th>
-            </tr>
-          </thead>
-          <tbody>
-            {q.data?.items.map((r) => (
-              <tr key={r.return_id}>
-                <td className="text-bf-muted">{new Date(r.requested_at).toLocaleString('ko-KR')}</td>
-                <td className="font-mono text-[11px]">{r.isbn13}</td>
-                <td>{r.title ?? '-'}</td>
-                <td>{nameOf(r.location_id)}</td>
-                <td>{r.qty}권</td>
-                <td className="text-bf-muted">{ko(RETURN_REASON_KO, r.reason)}</td>
-                <td>
-                  <span className={
-                    r.status === 'APPROVED' ? 'pill-approved' :
-                    r.status === 'EXECUTED' ? 'pill-info' :
-                    r.status === 'REJECTED' ? 'pill-rejected' : 'pill-pending'
-                  }>{ko(RETURN_STATUS_KO, r.status)}</span>
-                </td>
-                <td className="text-bf-muted">{r.hq_approved_at ? new Date(r.hq_approved_at).toLocaleString('ko-KR') : '-'}</td>
-                <td className="text-right">
-                  {r.status === 'PENDING' && role === 'hq-admin' ? (
-                    <div className="flex gap-1 justify-end">
-                      <button
-                        className="btn-primary btn-sm"
-                        disabled={busy === r.return_id}
-                        onClick={() => setApproveTarget(r.return_id)}
-                      >
-                        승인
-                      </button>
-                      <button
-                        className="btn-danger btn-sm"
-                        disabled={busy === r.return_id}
-                        onClick={() => setRejectTarget(r.return_id)}
-                      >
-                        거부
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="text-[10px] text-bf-muted">-</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {q.data?.items.length === 0 && (
-              <tr><td colSpan={9} className="text-center py-6 text-bf-muted">반품 요청 없음</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DateHistoryTabs<ReturnRowForTabs>
+        items={rowsForTabs}
+        days={6}
+        pageLabel="반품 처리"
+      >
+        {(filtered) => (
+          <div className="card">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>요청 일시</th>
+                  <th>ISBN</th>
+                  <th>제목</th>
+                  <th>위치</th>
+                  <th>수량</th>
+                  <th>사유</th>
+                  <th>상태</th>
+                  <th>승인</th>
+                  <th className="text-right">액션</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r) => (
+                  <tr key={r.return_id}>
+                    <td className="text-bf-muted">{new Date(r.requested_at).toLocaleString('ko-KR')}</td>
+                    <td className="font-mono text-[11px]">{r.isbn13}</td>
+                    <td>{r.title ?? '-'}</td>
+                    <td>{nameOf(r.location_id)}</td>
+                    <td>{r.qty}권</td>
+                    <td className="text-bf-muted">{ko(RETURN_REASON_KO, r.reason)}</td>
+                    <td>
+                      <span className={
+                        r.status === 'APPROVED' ? 'pill-approved' :
+                        r.status === 'EXECUTED' ? 'pill-info' :
+                        r.status === 'REJECTED' ? 'pill-rejected' : 'pill-pending'
+                      }>{ko(RETURN_STATUS_KO, r.status)}</span>
+                    </td>
+                    <td className="text-bf-muted">{r.hq_approved_at ? new Date(r.hq_approved_at).toLocaleString('ko-KR') : '-'}</td>
+                    <td className="text-right">
+                      {r.status === 'PENDING' && role === 'hq-admin' ? (
+                        <div className="flex gap-1 justify-end">
+                          <button
+                            className="btn-primary btn-sm"
+                            disabled={busy === r.return_id}
+                            onClick={() => setApproveTarget(r.return_id)}
+                          >
+                            승인
+                          </button>
+                          <button
+                            className="btn-danger btn-sm"
+                            disabled={busy === r.return_id}
+                            onClick={() => setRejectTarget(r.return_id)}
+                          >
+                            거부
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-bf-muted">-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr><td colSpan={9} className="text-center py-6 text-bf-muted">선택된 일자에 반품 요청 없음</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DateHistoryTabs>
 
       <ConfirmModal
         open={approveTarget !== null}

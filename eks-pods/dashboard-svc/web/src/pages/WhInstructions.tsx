@@ -41,8 +41,8 @@ export default function WhInstructions() {
             <td>
               {ko(ORDER_TYPE_KO, o.order_type)}
               {o.order_type === 'PUBLISHER_ORDER' && (
-                <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 7~14일)">
-                  📦 출판사→WH (D+7~14)
+                <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 최대 3일)">
+                  📦 출판사→WH (D+3)
                 </span>
               )}
             </td>

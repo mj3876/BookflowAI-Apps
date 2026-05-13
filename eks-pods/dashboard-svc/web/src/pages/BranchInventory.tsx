@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { ApiError, fetchAllForecast, fetchOverview, postBranchFeedback, postReturnsRequest, type Role } from '../api';
+import {
+  ApiError, fetchAllForecast, fetchOverview, postBranchFeedback, postReturnsRequest,
+  fetchInventoryByCategory, fetchInsufficientTrend,
+  type Role,
+} from '../api';
 import { useToast } from '../components/Toast';
 import { useLocations } from '../useLocations';
 import { useScope } from '../auth';
 import { useStockUpdates } from '../useStockUpdates';
 import InlineMessage from '../components/InlineMessage';
 import Pagination, { pageSlice } from '../components/Pagination';
+import KpiPie from '../components/charts/KpiPie';
+import KpiLine from '../components/charts/KpiLine';
 
 const RETURN_REASONS = ['파손', '불량', '누락', '계약 종료', '기타'];
 
@@ -64,11 +70,32 @@ export default function BranchInventory() {
   const forecastMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const f of fcQ.data?.items ?? []) {
-      m.set(`${f.isbn13}|${f.store_id}`, f.predicted_demand);
+      // store_id 가 number/string 가 섞일 가능성 대비 — Number() 정규화
+      m.set(`${f.isbn13}|${Number(f.store_id)}`, f.predicted_demand);
     }
     return m;
   }, [fcQ.data?.items]);
-  const forecastOf = (isbn: string, locId: number) => forecastMap.get(`${isbn}|${locId}`);
+
+  // 매장 forecast 없을 경우 WH location 의 forecast 로 fallback
+  // (forecast_cache 가 매장이 아닌 WH 만 갖고 있는 row 대응)
+  const forecastOf = (isbn: string, locId: number): number | undefined => {
+    const direct = forecastMap.get(`${isbn}|${Number(locId)}`);
+    if (direct !== undefined) return direct;
+    // fallback: 그 매장의 wh_id 에 해당하는 WH location_id 로 lookup
+    const loc = byId.get(locId);
+    if (loc?.wh_id != null) {
+      // WH location_id 는 14 + wh_id pattern 일 가능성 (seed 기준 15/16) 하나, byId 로 더 안전하게 매칭
+      const whLoc = locItems.find(
+        (l: any) => l.location_type === 'WH' && l.wh_id === loc.wh_id,
+      );
+      if (whLoc) {
+        const whPred = forecastMap.get(`${isbn}|${Number(whLoc.location_id)}`);
+        if (whPred !== undefined) return whPred;
+      }
+    }
+    return undefined;
+  };
+
 
   // Redis stock.changed 실시간 (cell flash + 가용 즉시 갱신)
   const { flashed, availableOf } = useStockUpdates(role);
@@ -102,6 +129,29 @@ export default function BranchInventory() {
   const total = myInventoryRaw.length;
   const lowStock = myInventoryRaw.filter((it: any) => (availableOf(it.isbn13, my_store) ?? it.available) <= (it.safety_stock ?? 10)).length;
   const totalQty = myInventoryRaw.reduce((s, it) => s + it.on_hand, 0);
+
+  // 차트 1: 카테고리 분포 (매장/권역 보유) — backend role-scope 자동 적용
+  const catQ = useQuery({
+    queryKey: ['inv-category', role, my_store],
+    queryFn: () => fetchInventoryByCategory(role),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+  const categoryPie = (catQ.data?.items ?? []).map((it) => ({
+    name: it.category, value: it.on_hand,
+  }));
+
+  // 차트 2: 부족 도서 추이 (이번 달 · 30일)
+  const trendQ = useQuery({
+    queryKey: ['inv-insufficient-trend', role],
+    queryFn: () => fetchInsufficientTrend(role, 30),
+    refetchInterval: 30 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
+  });
+  const trendSeries = (trendQ.data?.items ?? []).map((it) => {
+    const [, mm, dd] = it.date.split('-');
+    return { date: `${parseInt(mm)}/${parseInt(dd)}`, count: it.insufficient_count };
+  });
 
   // P1-3 반품 신청 modal state
   const [returnTarget, setReturnTarget] = useState<{ isbn13: string; on_hand: number } | null>(null);
@@ -224,6 +274,40 @@ export default function BranchInventory() {
         <div className="metric-card">
           <div className="metric-label">예약중 합계</div>
           <div className="metric-value">{myInventory.reduce((s, it) => s + it.reserved_qty, 0).toLocaleString()}</div>
+        </div>
+      </div>
+
+      {/* 차트: 카테고리 분포 + 부족 도서 추이 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📊 카테고리 분포 (보유)</h2>
+          </div>
+          <KpiPie
+            data={categoryPie}
+            nameKey="name"
+            valueKey="value"
+            donut
+            height={220}
+            isLoading={catQ.isLoading}
+          />
+        </div>
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📊 부족 도서 추이 (30일)</h2>
+            {trendQ.data?.note && (
+              <span className="text-[10px] text-bf-muted">{trendQ.data.note}</span>
+            )}
+          </div>
+          <KpiLine
+            data={trendSeries}
+            xKey="date"
+            yKey="count"
+            yLabels={['부족 SKU 수']}
+            area
+            height={220}
+            isLoading={trendQ.isLoading}
+          />
         </div>
       </div>
 

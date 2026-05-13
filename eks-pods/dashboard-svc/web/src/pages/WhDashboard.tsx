@@ -6,10 +6,12 @@ import {
   fetchBestsellers,
   fetchCascadeFunnel,
   fetchInventoryHeatmap,
+  fetchInventoryTurnover,
   fetchKpiByCategory,
   fetchOverview,
   fetchPending,
   fetchSalesByStore,
+  fetchSalesByWeekday,
   type LocationCell,
   type Role,
 } from '../api';
@@ -20,6 +22,7 @@ import { useScope } from '../auth';
 import KpiBar from '../components/charts/KpiBar';
 import KpiLine from '../components/charts/KpiLine';
 import KpiFunnel from '../components/charts/KpiFunnel';
+import KpiPie from '../components/charts/KpiPie';
 
 // 부족률 (low_count / sku_count) 기반 히트맵 색상.
 // 0% green / <5% yellow / <15% orange / 15%+ red. 데이터 없으면 회색.
@@ -130,6 +133,22 @@ export default function WhDashboard() {
     staleTime: 15000,
   });
 
+  // 신규 (2026-05-13 차트 강화) ----------------------------------------
+  // 권역 회전율 30 일 (전사 응답 · frontend 에서 내 wh_id 필터) — 5 분
+  const turnover = useQuery({
+    queryKey: ['turnover-all', role],
+    queryFn: () => fetchInventoryTurnover(role, 30),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+  // 요일별 매출 30 일 — 5 분 (전사 응답)
+  const weekday = useQuery({
+    queryKey: ['weekday-all', role],
+    queryFn: () => fetchSalesByWeekday(role, 30),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+
   // D+1 AI 수요예측 batch — 하루 1회 갱신. 30 분
   const fcQ = useQuery({
     queryKey: ['forecast-all', role],
@@ -220,6 +239,36 @@ export default function WhDashboard() {
     [best.data?.items],
   );
 
+  // 카테고리별 권역 매출 pie — 30 일 (상위 8 + 기타)
+  const catPieChart = useMemo(() => {
+    const items = byCat.data?.items ?? [];
+    const sorted = [...items].sort((a, b) => b.revenue - a.revenue);
+    const top = sorted.slice(0, 8).map((c) => ({ name: c.category, value: Math.round(c.revenue) }));
+    const rest = sorted.slice(8).reduce((s, c) => s + c.revenue, 0);
+    return rest > 0 ? [...top, { name: '기타', value: Math.round(rest) }] : top;
+  }, [byCat.data?.items]);
+
+  // 권역 회전율 bar (전사 응답에서 내 wh_id 필터 — 1개 row 만 표시되지만 비교 위해 양 권역 모두 표시)
+  const turnoverChart = useMemo(
+    () =>
+      (turnover.data?.items ?? [])
+        .map((t) => ({
+          name: t.wh_id === 1 ? '수도권' : t.wh_id === 2 ? '영남' : `권역 ${t.wh_id}`,
+          value: Number((t.turnover ?? 0).toFixed(2)),
+        }))
+        .sort((a, b) => b.value - a.value),
+    [turnover.data?.items],
+  );
+
+  // 요일별 매출 bar (backend dow=0(일)~6(토) 가정 — dow_label 우선 사용)
+  const weekdayChart = useMemo(() => {
+    const items = weekday.data?.items ?? [];
+    return items
+      .slice()
+      .sort((a, b) => a.dow - b.dow)
+      .map((w) => ({ name: w.dow_label ?? String(w.dow), value: Math.round(w.revenue ?? 0) }));
+  }, [weekday.data?.items]);
+
   return (
     <div className="flex flex-col gap-4">
       {/* 헤더 + hq-admin 모드 selector */}
@@ -308,6 +357,28 @@ export default function WhDashboard() {
           height={320}
           isLoading={best.isLoading}
         />
+      </div>
+
+      {/* row 3.5 — 신규 BI: 카테고리 pie + 회전율 bar (2 col) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <h3 className="h3 mb-2">카테고리별 권역 매출 (30일)</h3>
+          <KpiPie data={catPieChart} height={300} isLoading={byCat.isLoading} />
+        </div>
+        <div className="card">
+          <h3 className="h3 mb-2">권역 회전율 비교 (30일 · 매출 ÷ 평균재고)</h3>
+          <KpiBar
+            data={turnoverChart}
+            height={300}
+            isLoading={turnover.isLoading}
+          />
+        </div>
+      </div>
+
+      {/* row 3.6 — 요일별 매출 (30일 합산 · 전사 응답) */}
+      <div className="card">
+        <h3 className="h3 mb-2">요일별 매출 (30일 합산)</h3>
+        <KpiBar data={weekdayChart} height={240} isLoading={weekday.isLoading} />
       </div>
 
       {/* row 4 — 협의 필요 list (기존 유지 · 권역 매장 필터) */}

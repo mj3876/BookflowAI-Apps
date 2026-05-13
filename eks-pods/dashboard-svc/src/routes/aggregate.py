@@ -145,6 +145,18 @@ async def intervene_reject(body: dict = Body(...), ctx: AuthContext = Depends(re
     return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
 
 
+@router.post("/intervene/batch")
+async def intervene_batch(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """일괄 승인/거절 (사용자 결정 2026-05-13).
+
+    body: {action: 'approve'|'reject', items: [{order_id, approval_side, reject_reason?}]}
+    response: {total, ok, failed, errors}
+    """
+    from ..clients import post_intervention_batch
+    sc, data = await post_intervention_batch(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
 @router.patch("/pending-orders/{order_id}")
 async def edit_pending_order(order_id: str, body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
     """D5-7 WH AI 추천 수정 (수량/대상 매장 · Notion 2.6) — intervention-svc PATCH 프록시."""
@@ -169,6 +181,19 @@ async def notify_send(body: dict = Body(...), ctx: AuthContext = Depends(require
 async def decide(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
     """HQ Decision 페이지 - 의사결정 1건 생성 (decision-svc /decide proxy · 3-stage cascade)."""
     sc, data = await post_decision_decide(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "decision-svc unavailable"})
+
+
+@router.post("/cascade/run-batch")
+async def cascade_run_batch(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """일괄 cascade 결정 — N items 한 번에 (시연 trigger + 매일 03:30 batch).
+
+    기존 frontend N 회 호출 → 503 race / 느림 해소. backend 가 sequential 처리 + 결과 요약.
+    body: {items: [{isbn13, target_location_id, qty, note?}]}
+    response: {total, s1, s2, s3, failed, errors}
+    """
+    from ..clients import post_decision_decide_batch
+    sc, data = await post_decision_decide_batch(body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "decision-svc unavailable"})
 
 

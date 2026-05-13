@@ -423,6 +423,12 @@ export const postIntervene = (role: Role, action: 'approve' | 'reject', body: un
     `/dashboard/intervene/${action}`, role, body,
   );
 
+// 일괄 승인/거절 (시연 일괄 처리) — frontend N 회 → backend 1 회
+export type InterveneBatchItem = { order_id: string; approval_side?: string; reject_reason?: string };
+export type InterveneBatchResult = { total: number; ok: number; failed: number; errors: string[] };
+export const postIntervenebatch = (role: Role, action: 'approve' | 'reject', items: InterveneBatchItem[]) =>
+  postJson<InterveneBatchResult>('/dashboard/intervene/batch', role, { action, items });
+
 export type DecideResult = {
   order_id: string;
   order_type: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
@@ -438,6 +444,19 @@ export type DecideResult = {
 };
 export const postDecide = (role: Role, body: { isbn13: string; target_location_id: number; qty: number; note?: string }) =>
   postJson<DecideResult>('/dashboard/decide', role, body);
+
+// 일괄 cascade (시연 + 매일 03:30 batch) — N items 한 번에 backend 처리
+export type CascadeBatchResult = {
+  total: number;
+  s1: number;
+  s2: number;
+  s3: number;
+  failed: number;
+  errors: string[];
+};
+export type CascadeBatchItem = { isbn13: string; target_location_id: number; qty: number; note?: string };
+export const postCascadeBatch = (role: Role, items: CascadeBatchItem[]) =>
+  postJson<CascadeBatchResult>('/dashboard/cascade/run-batch', role, { items });
 
 // UX-6: 재고 수동 조정 (Manual 페이지) — inventory-svc /adjust 프록시.
 export type InventoryAdjustResult = {
@@ -619,3 +638,66 @@ export const fetchAllForecast = (role: Role, snapshot_date?: string) => {
     `/dashboard/forecast/all${qs}`, role,
   );
 };
+
+// ─── Extended sales / inventory / forecast analytics (10 endpoints) ────
+const _storeQS = (store_id?: number) => (store_id !== undefined ? `&store_id=${store_id}` : '');
+
+export type WeekdaySales = { dow: number; dow_label: string; revenue: number; qty: number; tx_count: number };
+export const fetchSalesByWeekday = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: WeekdaySales[] }>(
+    `/dashboard/sales/by-weekday?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type HourAvgSales = { hour: number; avg_revenue: number; avg_qty: number; avg_tx_count: number };
+export const fetchSalesByHourAvg = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: HourAvgSales[] }>(
+    `/dashboard/sales/by-hour-avg?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type PaymentSales = { payment: string; revenue: number; count: number };
+export const fetchSalesByPayment = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: PaymentSales[] }>(
+    `/dashboard/sales/by-payment?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type ASPTrend = { date: string; asp: number; revenue: number; tx_count: number };
+export const fetchSalesAsp = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: ASPTrend[] }>(
+    `/dashboard/sales/asp?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type DailySales = { date: string; revenue: number; qty: number };
+export const fetchSales30Days = (role: Role, store_id?: number) =>
+  getJson<{ items: DailySales[] }>(
+    `/dashboard/sales/30days${store_id !== undefined ? `?store_id=${store_id}` : ''}`, role,
+  );
+
+export type TurnoverItem = { wh_id: number; turnover: number; total_sales: number; avg_inventory: number };
+export const fetchInventoryTurnover = (role: Role, days = 7) =>
+  getJson<{ days: number; items: TurnoverItem[] }>(
+    `/dashboard/inventory/turnover?days=${days}`, role,
+  );
+
+export type InsufficientTrendItem = { date: string; insufficient_count: number };
+export const fetchInsufficientTrend = (role: Role, days = 30) =>
+  getJson<{ days: number; items: InsufficientTrendItem[]; note?: string }>(
+    `/dashboard/inventory/insufficient-trend?days=${days}`, role,
+  );
+
+export type InventoryByCategory = { category: string; on_hand: number; available: number };
+export const fetchInventoryByCategory = (role: Role) =>
+  getJson<{ items: InventoryByCategory[] }>(`/dashboard/inventory/by-category`, role);
+
+export type CategoryTrendItem = { date: string; category: string; revenue: number };
+export const fetchCategoryTrend = (role: Role, days = 30) =>
+  getJson<{ days: number; categories: string[]; items: CategoryTrendItem[] }>(
+    `/dashboard/sales/category-trend?days=${days}`, role,
+  );
+
+export type ForecastAccuracyItem = {
+  date: string; mae: number; mape: number; total_predicted: number; total_actual: number;
+};
+export const fetchForecastAccuracy = (role: Role, days = 7) =>
+  getJson<{ days: number; items: ForecastAccuracyItem[]; note?: string }>(
+    `/dashboard/forecast/accuracy?days=${days}`, role,
+  );

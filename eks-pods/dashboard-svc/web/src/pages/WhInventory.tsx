@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchAllForecast, fetchOverview, type Role } from '../api';
+import {
+  fetchAllForecast,
+  fetchCascadeFunnel,
+  fetchInventoryByCategory,
+  fetchOverview,
+  type Role,
+} from '../api';
 import { useLocations } from '../useLocations';
 import { useScope } from '../auth';
 import { useStockUpdates } from '../useStockUpdates';
 import Pagination, { pageSlice } from '../components/Pagination';
+import KpiBar from '../components/charts/KpiBar';
+import KpiLine from '../components/charts/KpiLine';
+import KpiPie from '../components/charts/KpiPie';
 
 /**
  * D1-5 v2 (2026-05-12 사용자 추가 요구):
@@ -62,6 +71,22 @@ export default function WhInventory() {
   }, [fcQ.data?.items]);
   const forecastOf = (isbn: string, locId: number) => forecastMap.get(`${isbn}|${locId}`);
 
+  // 신규 차트 쿼리 (2026-05-13) -----------------------------------------
+  // 카테고리별 재고 분포 — 5 분 (전사 응답 · backend wh_id 필터 미지원)
+  const invByCat = useQuery({
+    queryKey: ['inv-cat-all', role],
+    queryFn: () => fetchInventoryByCategory(role),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+  // 7일 입출고 추이 (cascade funnel daily) — 1 분
+  const funnel7 = useQuery({
+    queryKey: ['funnel-wh-inv', wh_id, role],
+    queryFn: () => fetchCascadeFunnel(role, 7),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<'available' | 'on_hand' | 'title'>('available');
   const [page, setPage] = useState(1);
@@ -96,6 +121,41 @@ export default function WhInventory() {
 
   const pageItems = pageSlice(sorted, page, 20);
 
+  // 안전재고 미달 도서 수 (이미 lowStock 으로 계산. 별도 명칭만)
+  const belowSafetyCount = lowStock;
+
+  // 카테고리 분포 pie (재고 수량 합계)
+  const catPieChart = useMemo(() => {
+    const items = (invByCat.data?.items ?? []) as Array<{ category: string; on_hand: number }>;
+    const sorted = [...items].sort((a, b) => b.on_hand - a.on_hand);
+    const top = sorted.slice(0, 8).map((c) => ({ name: c.category || '미분류', value: c.on_hand }));
+    const rest = sorted.slice(8).reduce((s, c) => s + c.on_hand, 0);
+    return rest > 0 ? [...top, { name: '기타', value: rest }] : top;
+  }, [invByCat.data?.items]);
+
+  // 7일 입출고 추이 line (APPROVED · EXECUTED)
+  const dailyChart = useMemo(() => {
+    const daily = funnel7.data?.daily ?? [];
+    return daily.map((d: any) => ({
+      date: typeof d.date === 'string' ? d.date.slice(5) : d.date,
+      입고: d.APPROVED ?? 0,
+      출고: d.EXECUTED ?? 0,
+    }));
+  }, [funnel7.data?.daily]);
+
+  // 출판사별 보유 top 10 (frontend GROUP BY · raw inventory + books JOIN 가정)
+  const publisherChart = useMemo(() => {
+    const byPub = new Map<string, number>();
+    for (const it of raw as any[]) {
+      const pub = it.publisher ?? '미상';
+      byPub.set(pub, (byPub.get(pub) ?? 0) + (it.on_hand ?? 0));
+    }
+    return [...byPub.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
+  }, [raw]);
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -120,11 +180,12 @@ export default function WhInventory() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="metric-card"><div className="metric-label">SKU 수</div><div className="metric-value">{total.toLocaleString()}</div></div>
         <div className="metric-card"><div className="metric-label">총 보유 수량</div><div className="metric-value">{totalQty.toLocaleString()}</div></div>
         <div className="metric-card"><div className="metric-label">부족 SKU (≤ 안전재고)</div><div className="metric-value text-orange-600">{lowStock}</div></div>
         <div className="metric-card"><div className="metric-label">결품 SKU (0권)</div><div className="metric-value text-red-600">{zeroStock}</div></div>
+        <div className="metric-card"><div className="metric-label">안전재고 미달 도서</div><div className="metric-value text-orange-600">{belowSafetyCount}</div></div>
       </div>
 
       <div className="card">
@@ -202,6 +263,35 @@ export default function WhInventory() {
           </tbody>
         </table>
         <Pagination total={sorted.length} pageSize={20} page={page} onChange={setPage} />
+      </div>
+
+      {/* 페이지 하단 신규 BI 차트 (2026-05-13) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <h3 className="h3 mb-2">카테고리 재고 분포 (전사 집계)</h3>
+          <KpiPie data={catPieChart} height={300} isLoading={invByCat.isLoading} />
+        </div>
+        <div className="card">
+          <h3 className="h3 mb-2">7일 입출고 추이</h3>
+          <KpiLine
+            data={dailyChart}
+            xKey="date"
+            yKey={['입고', '출고']}
+            yLabels={['입고 (승인)', '출고 (실행)']}
+            height={300}
+            smooth
+            isLoading={funnel7.isLoading}
+          />
+        </div>
+      </div>
+      <div className="card">
+        <h3 className="h3 mb-2">출판사별 보유 top 10 (거점창고)</h3>
+        <KpiBar
+          data={publisherChart}
+          horizontal
+          height={320}
+          isLoading={ov.isLoading}
+        />
       </div>
     </div>
   );

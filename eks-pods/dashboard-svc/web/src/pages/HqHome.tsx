@@ -2,20 +2,16 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useOutletContext } from 'react-router-dom';
 import {
   fetchPending, fetchPendingGrouped, fetchSpikeEvents, fetchReturns, fetchNewBookRequests,
-  fetchSalesSummary, fetchInsufficientStock, type Role,
+  fetchInsufficientStock, type Role,
 } from '../api';
-import KpiLine from '../components/charts/KpiLine';
-import KpiBar from '../components/charts/KpiBar';
-import KpiPie from '../components/charts/KpiPie';
 
 /**
  * HQ Home — 본사 진입 첫 화면.
  *
- * 메인: "오늘 무엇이 있고 어디로 가야 하는지" 즉시 보임.
- *  - 4 PENDING 카운트 (의사결정 / 외부발주 승인 / 반품 / 신간)
- *  - 24h 매출 요약
- *  - SNS 급등 카운트
- *  - 다음 액션 링크 (각 카운트 클릭 시 해당 페이지로)
+ * 차트 0 · "오늘 무엇을 처리해야 하는지" 액션 list 중심.
+ *  - 4 metric card (오늘 batch / 검토 필요 / spike / 반품)
+ *  - 검토 필요 / spike / 반품 / 신간 top 5 list (각각 행동 페이지로 link)
+ *  - 상세 차트는 KPI / 의사결정 페이지로 CTA
  */
 export default function HqHome() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -57,17 +53,10 @@ export default function HqHome() {
     refetchInterval: 5 * 60 * 1000,
     staleTime: 2 * 60 * 1000,
   });
-  // sales: 매출 1h summary — 30 초 (이전 10 초)
-  const sales = useQuery({
-    queryKey: ['hq-sales', role],
-    queryFn: () => fetchSalesSummary(role),
-    refetchInterval: 30000,
-    staleTime: 15000,
-  });
   // insufficient: forecast 기반 (시간당 갱신 OK)
   const insufficient = useQuery({
     queryKey: ['hq-insufficient', role],
-    queryFn: () => fetchInsufficientStock(role, 10),
+    queryFn: () => fetchInsufficientStock(role, 20),
     refetchInterval: 30 * 60 * 1000,
     staleTime: 10 * 60 * 1000,
   });
@@ -82,52 +71,42 @@ export default function HqHome() {
   const spikeCritical = (spikes.data?.items ?? []).filter((s) => (s.z_score ?? 0) >= 3).length;
   const spikeWarning = (spikes.data?.items ?? []).filter((s) => (s.z_score ?? 0) >= 1.5 && (s.z_score ?? 0) < 3).length;
 
-  const returnsPending = (returns.data?.items ?? []).filter((r) => r.status === 'PENDING').length;
-  const requestsPending = (requests.data?.items ?? []).filter((r) => r.status === 'NEW' || r.status === 'FETCHED').length;
+  const returnsItems = (returns.data?.items ?? []);
+  const returnsPending = returnsItems.filter((r) => r.status === 'PENDING').length;
+  const requestsItems = (requests.data?.items ?? []);
+  const requestsPending = requestsItems.filter((r) => r.status === 'NEW' || r.status === 'FETCHED').length;
 
-  const todaysRevenue = sales.data?.total_revenue ?? 0;
-  const totalTransactions = sales.data?.transactions ?? 0;
-
-  // 7일 매출 추이 mock (daily sales summary 미구현 — sales-summary 단일 시점 기반 가상 series)
-  // TODO: backend /dashboard/sales-daily 엔드포인트 생기면 교체
-  const today7 = (() => {
-    const arr: { date: string; revenue: number }[] = [];
-    const base = todaysRevenue || 1000000;
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const noise = 0.7 + Math.random() * 0.6;
-      arr.push({ date: `${d.getMonth() + 1}/${d.getDate()}`, revenue: Math.round(base * noise) });
-    }
-    return arr;
-  })();
-
-  // cascade stage 분포 (PENDING 만)
-  const cascadeDist = [
-    { name: '재분배 (1단계)', value: stage1 },
-    { name: '권역간 (2단계)', value: stage2 },
-    { name: '외부발주 (3단계)', value: stage3 },
-  ].filter((d) => d.value > 0);
-
-  // 검토 필요 도서 top 10 (forecast-svc insufficient)
-  const insufficientTop = (insufficient.data?.items ?? [])
-    .slice(0, 10)
-    .map((it) => ({
-      label: (it.title ?? it.isbn13).slice(0, 24),
-      gap: it.gap,
-    }));
+  // 검토 필요 도서 top 20 (URGENT/CRITICAL 우선 → gap 큰 순)
+  const urgencyRank = (u: string) => (u === 'CRITICAL' ? 0 : u === 'URGENT' ? 1 : u === 'NEWBOOK' ? 2 : 3);
+  const pendingTop = [...items]
+    .filter((o) => o.status === 'PENDING')
+    .sort((a, b) => urgencyRank(a.urgency_level) - urgencyRank(b.urgency_level))
+    .slice(0, 20);
 
   // spike 도서 top 5 (z_score desc)
   const spikeTop5 = [...(spikes.data?.items ?? [])]
     .sort((a, b) => (b.z_score ?? 0) - (a.z_score ?? 0))
     .slice(0, 5);
 
+  // 반품 신청 top 5 (PENDING · 최근 신청 순)
+  const returnsTop5 = returnsItems
+    .filter((r) => r.status === 'PENDING')
+    .slice(0, 5);
+
+  // 신간 신청 top 5 (NEW / FETCHED)
+  const requestsTop5 = requestsItems
+    .filter((r) => r.status === 'NEW' || r.status === 'FETCHED')
+    .slice(0, 5);
+
+  // 검토 필요 (예측 부족 forecast) top 20
+  const insufficientTop = (insufficient.data?.items ?? []).slice(0, 20);
+
   return (
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="h1">본사 · {today}</h1>
         <p className="text-bf-muted text-xs mt-1">
-          오늘 batch 처리 현황과 검토 필요 건수를 한 화면으로. 카드를 클릭하면 처리 페이지로 이동합니다.
+          오늘 처리할 액션을 한 화면으로. 차트는 상단 KPI · 의사결정 페이지에서 확인하세요.
         </p>
       </div>
 
@@ -157,122 +136,80 @@ export default function HqHome() {
         </div>
       </div>
 
-      {/* 1행: PENDING 카운트 4종 */}
+      {/* 1행: PENDING 카운트 4종 — 색상 강화 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Link to="/decision" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">의사결정 처리 대기</div>
-          <div className="metric-value">{totalPending}건</div>
+        <Link to="/decision" className="metric-card hover:border-bf-primary transition border-bf-warn">
+          <div className="metric-label">📋 의사결정 처리</div>
+          <div className="metric-value text-bf-warn">{totalPending}건</div>
           <div className="text-[11px] text-bf-muted mt-1">
             1단계 {stage1} · 2단계 {stage2} · 3단계 {stage3}
             {urgentPending > 0 && <span className="text-bf-danger ml-1">· 긴급 {urgentPending}</span>}
           </div>
         </Link>
-        <Link to="/approval" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">외부 발주 승인 대기</div>
-          <div className="metric-value">{stage3}건</div>
-          <div className="text-[11px] text-bf-muted mt-1">출판사 발주 — 비용 발생</div>
+        <Link to="/spikes" className="metric-card hover:border-bf-primary transition border-bf-danger">
+          <div className="metric-label">🔥 SNS 급등</div>
+          <div className="metric-value text-bf-danger">{spikes.data?.items.length ?? 0}건</div>
+          <div className="text-[11px] text-bf-muted mt-1">
+            매우높음 {spikeCritical} · 높음 {spikeWarning}
+          </div>
         </Link>
-        <Link to="/returns" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">반품 처리 대기</div>
-          <div className="metric-value">{returnsPending}건</div>
+        <Link to="/returns" className="metric-card hover:border-bf-primary transition border-bf-primary">
+          <div className="metric-label">📦 반품 처리</div>
+          <div className="metric-value text-bf-primary">{returnsPending}건</div>
           <div className="text-[11px] text-bf-muted mt-1">매장 → 본사 신청</div>
         </Link>
-        <Link to="/requests" className="metric-card hover:border-bf-primary transition">
-          <div className="metric-label">신간 편입 결정</div>
-          <div className="metric-value">{requestsPending}건</div>
+        <Link to="/requests" className="metric-card hover:border-bf-primary transition border-bf-success">
+          <div className="metric-label">📚 신간 편입</div>
+          <div className="metric-value text-bf-success">{requestsPending}건</div>
           <div className="text-[11px] text-bf-muted mt-1">출판사 신간 신청</div>
         </Link>
       </div>
 
-      {/* 2행: 매출 + SNS 급등 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Link to="/kpi" className="card hover:border-bf-primary transition">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2">오늘 매출</h2>
-            <span className="text-[11px] text-bf-muted">30초마다 갱신</span>
+      {/* 2행: 검토 필요 PENDING top 20 (urgency 우선) */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="h2 text-sm">⚠️ 검토 필요 PENDING top 20</h2>
+          <Link to="/decision" className="text-[11px] text-bf-primary hover:underline">전체 처리 →</Link>
+        </div>
+        {pendingTop.length === 0 ? (
+          <div className="text-xs text-bf-muted py-6 text-center">PENDING 의사결정 없음 · 정상 운영</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-bf-muted">
+                <tr>
+                  <th className="text-left py-1">긴급도</th>
+                  <th className="text-left py-1">단계</th>
+                  <th className="text-left py-1">제목</th>
+                  <th className="text-right py-1">수량</th>
+                  <th className="text-left py-1 pl-2">생성</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingTop.map((o) => {
+                  const stageLabel = o.order_type === 'REBALANCE' ? '재분배' : o.order_type === 'WH_TRANSFER' ? '권역간' : '발주';
+                  const uColor = o.urgency_level === 'CRITICAL' ? 'text-bf-danger' : o.urgency_level === 'URGENT' ? 'text-bf-warn' : 'text-bf-muted';
+                  return (
+                    <tr key={o.order_id} className="border-t border-bf-border2 hover:bg-bf-panel2">
+                      <td className={`py-1.5 font-bold ${uColor}`}>{o.urgency_level}</td>
+                      <td className="py-1.5">{stageLabel}</td>
+                      <td className="py-1.5 font-medium truncate max-w-[260px]">{o.title ?? o.isbn13}</td>
+                      <td className="py-1.5 text-right">{o.qty}</td>
+                      <td className="py-1.5 pl-2 text-bf-muted">{o.created_at?.slice(5, 16) ?? '-'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-          <div className="text-3xl font-bold text-bf-text">
-            ₩{todaysRevenue.toLocaleString()}
-          </div>
-          <div className="text-xs mt-1 text-bf-muted">
-            거래 {totalTransactions.toLocaleString()}건
-          </div>
-        </Link>
-        <Link to="/spikes" className="card hover:border-bf-primary transition">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2">SNS 급등 (24h)</h2>
-            <span className="text-[11px] text-bf-muted">10분마다 분석</span>
-          </div>
-          <div className="flex gap-3 text-sm">
-            <div>
-              <div className="text-[11px] text-bf-muted">매우 높음</div>
-              <div className="text-2xl font-bold text-bf-danger">{spikeCritical}건</div>
-            </div>
-            <div>
-              <div className="text-[11px] text-bf-muted">높음</div>
-              <div className="text-2xl font-bold text-bf-warn">{spikeWarning}건</div>
-            </div>
-            <div>
-              <div className="text-[11px] text-bf-muted">전체</div>
-              <div className="text-2xl font-bold text-bf-text">{spikes.data?.items.length ?? 0}건</div>
-            </div>
-          </div>
-        </Link>
+        )}
       </div>
 
-      {/* 3행: 7일 매출 추이 + cascade stage 분포 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="card lg:col-span-2">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2 text-sm">📊 7일 매출 추이</h2>
-            <Link to="/kpi" className="text-[11px] text-bf-primary hover:underline">📈 상세 KPI 보기 →</Link>
-          </div>
-          <KpiLine
-            data={today7}
-            xKey="date"
-            yKey="revenue"
-            yLabels={['일 매출']}
-            area
-            height={220}
-            isLoading={sales.isLoading}
-          />
-        </div>
-        <div className="card">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2 text-sm">📊 의사결정 단계 분포</h2>
-            <Link to="/decision" className="text-[11px] text-bf-primary hover:underline">처리 →</Link>
-          </div>
-          <KpiPie
-            data={cascadeDist}
-            nameKey="name"
-            valueKey="value"
-            donut
-            height={220}
-            isLoading={pending.isLoading}
-          />
-        </div>
-      </div>
-
-      {/* 4행: 검토 필요 도서 top 10 + spike top 5 */}
+      {/* 3행: spike top 5 + 반품 top 5 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="card">
           <div className="flex items-center justify-between mb-2">
-            <h2 className="h2 text-sm">📊 검토 필요 도서 top 10 (예측 부족분)</h2>
-            <Link to="/decision" className="text-[11px] text-bf-primary hover:underline">처리 →</Link>
-          </div>
-          <KpiBar
-            data={insufficientTop}
-            xKey="label"
-            yKey="gap"
-            horizontal
-            yLabels={['부족 수량']}
-            height={280}
-            isLoading={insufficient.isLoading}
-          />
-        </div>
-        <div className="card">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="h2 text-sm">🔥 SNS 급등 top 5</h2>
+            <h2 className="h2 text-sm">🔥 SNS 급등 도서 top 5</h2>
             <Link to="/spikes" className="text-[11px] text-bf-primary hover:underline">결정 발의 →</Link>
           </div>
           {spikeTop5.length === 0 ? (
@@ -289,7 +226,7 @@ export default function HqHome() {
               </thead>
               <tbody>
                 {spikeTop5.map((s) => (
-                  <tr key={s.event_id} className="border-t border-bf-border2">
+                  <tr key={s.event_id} className="border-t border-bf-border2 hover:bg-bf-panel2">
                     <td className="py-1.5 font-medium truncate max-w-[200px]">{s.title ?? s.isbn13}</td>
                     <td className="py-1.5 text-bf-muted">{s.category ?? '-'}</td>
                     <td className={`py-1.5 text-right font-bold ${(s.z_score ?? 0) >= 3 ? 'text-bf-danger' : 'text-bf-warn'}`}>
@@ -302,9 +239,125 @@ export default function HqHome() {
             </table>
           )}
         </div>
+
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📦 반품 신청 top 5</h2>
+            <Link to="/returns" className="text-[11px] text-bf-primary hover:underline">전체 처리 →</Link>
+          </div>
+          {returnsTop5.length === 0 ? (
+            <div className="text-xs text-bf-muted py-6 text-center">반품 신청 없음</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="text-bf-muted">
+                <tr>
+                  <th className="text-left py-1">제목</th>
+                  <th className="text-left py-1">매장</th>
+                  <th className="text-right py-1">수량</th>
+                  <th className="text-left py-1 pl-2">사유</th>
+                </tr>
+              </thead>
+              <tbody>
+                {returnsTop5.map((r) => (
+                  <tr key={`${r.isbn13}-${r.requested_at}`} className="border-t border-bf-border2 hover:bg-bf-panel2">
+                    <td className="py-1.5 font-medium truncate max-w-[180px]">{r.title ?? r.isbn13}</td>
+                    <td className="py-1.5 text-bf-muted">매장 {r.location_id}</td>
+                    <td className="py-1.5 text-right">{r.qty}</td>
+                    <td className="py-1.5 pl-2 text-bf-muted truncate max-w-[120px]">{r.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
 
-      {/* 5행: 다음 액션 hint */}
+      {/* 4행: 신간 신청 top 5 + 예측 부족 top 5 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📚 신간 편입 신청 top 5</h2>
+            <Link to="/requests" className="text-[11px] text-bf-primary hover:underline">전체 검토 →</Link>
+          </div>
+          {requestsTop5.length === 0 ? (
+            <div className="text-xs text-bf-muted py-6 text-center">신간 신청 없음</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="text-bf-muted">
+                <tr>
+                  <th className="text-left py-1">제목</th>
+                  <th className="text-left py-1">출판사</th>
+                  <th className="text-left py-1">상태</th>
+                  <th className="text-left py-1 pl-2">신청일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requestsTop5.map((r) => (
+                  <tr key={r.id} className="border-t border-bf-border2 hover:bg-bf-panel2">
+                    <td className="py-1.5 font-medium truncate max-w-[200px]">{r.title ?? r.isbn13}</td>
+                    <td className="py-1.5 text-bf-muted">P-{r.publisher_id}</td>
+                    <td className="py-1.5 text-bf-warn">{r.status}</td>
+                    <td className="py-1.5 pl-2 text-bf-muted">{r.requested_at?.slice(5, 10) ?? '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📉 예측 부족 도서 top 5</h2>
+            <Link to="/decision" className="text-[11px] text-bf-primary hover:underline">의사결정 →</Link>
+          </div>
+          {insufficientTop.length === 0 ? (
+            <div className="text-xs text-bf-muted py-6 text-center">예측 부족 도서 없음</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="text-bf-muted">
+                <tr>
+                  <th className="text-left py-1">제목</th>
+                  <th className="text-right py-1">예측수요</th>
+                  <th className="text-right py-1">가용</th>
+                  <th className="text-right py-1">부족</th>
+                </tr>
+              </thead>
+              <tbody>
+                {insufficientTop.slice(0, 5).map((it) => (
+                  <tr key={`${it.isbn13}-${it.store_id}`} className="border-t border-bf-border2 hover:bg-bf-panel2">
+                    <td className="py-1.5 font-medium truncate max-w-[200px]">{it.title ?? it.isbn13}</td>
+                    <td className="py-1.5 text-right">{it.predicted_demand}</td>
+                    <td className="py-1.5 text-right">{it.available}</td>
+                    <td className="py-1.5 text-right text-bf-danger font-bold">{it.gap}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* 5행: 큰 CTA — 차트 페이지로 유도 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <Link to="/kpi" className="card hover:border-bf-primary transition flex items-center justify-between py-6">
+          <div>
+            <div className="text-xs text-bf-muted mb-1">📈 매출 차트 · 카테고리별 분석</div>
+            <div className="text-xl font-bold text-bf-text">전사 KPI 차트 보기</div>
+            <div className="text-[11px] text-bf-muted mt-1">7일 매출 · 카테고리 분포 · 베스트셀러</div>
+          </div>
+          <div className="text-3xl text-bf-primary">→</div>
+        </Link>
+        <Link to="/decision" className="card hover:border-bf-primary transition flex items-center justify-between py-6">
+          <div>
+            <div className="text-xs text-bf-muted mb-1">📊 의사결정 단계 분포 · cascade</div>
+            <div className="text-xl font-bold text-bf-text">의사결정 현황 보기</div>
+            <div className="text-[11px] text-bf-muted mt-1">PENDING 처리 · 강제 승인 · 거절</div>
+          </div>
+          <div className="text-3xl text-bf-primary">→</div>
+        </Link>
+      </div>
+
+      {/* 6행: 추천 액션 hint */}
       <div className="card-tight bg-bf-panel2 border-bf-border2">
         <div className="text-[11px] text-bf-muted mb-2">📋 추천 액션</div>
         <ul className="text-xs space-y-1 ml-4 list-disc">

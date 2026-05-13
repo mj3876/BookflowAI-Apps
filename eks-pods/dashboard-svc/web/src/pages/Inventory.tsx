@@ -1,10 +1,23 @@
 import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchAllForecast, fetchInventoryHeatmap, fetchSpikeEvents, type LocationCell, type Role, type SpikeEvent } from '../api';
+import {
+  fetchAllForecast,
+  fetchInsufficientTrend,
+  fetchInventoryByCategory,
+  fetchInventoryHeatmap,
+  fetchInventoryTurnover,
+  fetchSpikeEvents,
+  type LocationCell,
+  type Role,
+  type SpikeEvent,
+} from '../api';
 import AnomalyBanner from '../components/AnomalyBanner';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
+import KpiBar from '../components/charts/KpiBar';
+import KpiLine from '../components/charts/KpiLine';
+import KpiPie from '../components/charts/KpiPie';
 
 /**
  * UX-8 전사 재고 + 이상 감지 — 본사 KPI/Inventory 페이지.
@@ -30,6 +43,29 @@ export default function Inventory() {
     queryFn: () => fetchSpikeEvents(role, 20),
     refetchInterval: 3 * 60 * 1000,
     staleTime: 60000,
+  });
+
+  // 신규 (2026-05-13) -----------------------------------------------------
+  // 부족 도서 30일 추이 — daily snapshot. 5 분
+  const insufficient = useQuery({
+    queryKey: ['insufficient-trend', role],
+    queryFn: () => fetchInsufficientTrend(role, 30),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+  // 권역 회전율 비교 (wh_id 없이 전체) — 5 분
+  const turnover = useQuery({
+    queryKey: ['inv-turnover-all', role],
+    queryFn: () => fetchInventoryTurnover(role, 30),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+  // 카테고리 재고 분포 (전사) — 5 분
+  const invByCat = useQuery({
+    queryKey: ['inv-cat-all', role],
+    queryFn: () => fetchInventoryByCategory(role),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
   });
 
   // D+1 AI 수요예측 batch — 하루 1회. 30 분
@@ -76,6 +112,36 @@ export default function Inventory() {
   };
 
   const byWh = (whId: number | null) => items.filter((c) => c.wh_id === whId);
+
+  // 신규 차트 데이터 (2026-05-13) ----------------------------------------
+  // 부족 도서 30일 추이 line (backend: insufficient_count)
+  const insufficientChart = useMemo(() => {
+    const it = insufficient.data?.items ?? [];
+    return it.map((d) => ({
+      date: typeof d.date === 'string' ? d.date.slice(5) : d.date,
+      부족: d.insufficient_count ?? 0,
+    }));
+  }, [insufficient.data?.items]);
+
+  // 권역 회전율 비교 bar (backend 가 wh_id 별 1 row · turnover 필드)
+  const turnoverByWh = useMemo(() => {
+    const items = turnover.data?.items ?? [];
+    return items
+      .map((t) => ({
+        name: t.wh_id === 1 ? '수도권' : t.wh_id === 2 ? '영남' : `권역 ${t.wh_id}`,
+        value: Number((t.turnover ?? 0).toFixed(2)),
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [turnover.data?.items]);
+
+  // 카테고리 재고 분포 pie (전사)
+  const catPieChart = useMemo(() => {
+    const items = (invByCat.data?.items ?? []) as Array<{ category: string; on_hand: number }>;
+    const sorted = [...items].sort((a, b) => b.on_hand - a.on_hand);
+    const top = sorted.slice(0, 8).map((c) => ({ name: c.category || '미분류', value: c.on_hand }));
+    const rest = sorted.slice(8).reduce((s, c) => s + c.on_hand, 0);
+    return rest > 0 ? [...top, { name: '기타', value: rest }] : top;
+  }, [invByCat.data?.items]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -127,6 +193,31 @@ export default function Inventory() {
         )}
         <WarehouseSection title="수도권 권역 (창고 1)" cells={byWh(1)} highlightFilter={highlightFilter} predByLoc={predByLoc} />
         <WarehouseSection title="영남 권역 (창고 2)" cells={byWh(2)} highlightFilter={highlightFilter} predByLoc={predByLoc} />
+      </div>
+
+      {/* 신규 BI 차트 (2026-05-13) — 부족 추이 + 권역 회전율 + 카테고리 분포 */}
+      <div className="card">
+        <h3 className="h3 mb-2">부족 도서 30일 추이</h3>
+        <KpiLine
+          data={insufficientChart}
+          xKey="date"
+          yKey="부족"
+          yLabels={['부족 도서 수']}
+          height={260}
+          smooth
+          area
+          isLoading={insufficient.isLoading}
+        />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <h3 className="h3 mb-2">권역 회전율 비교 (30일 평균)</h3>
+          <KpiBar data={turnoverByWh} height={280} isLoading={turnover.isLoading} />
+        </div>
+        <div className="card">
+          <h3 className="h3 mb-2">카테고리 재고 분포 (전사)</h3>
+          <KpiPie data={catPieChart} height={280} isLoading={invByCat.isLoading} />
+        </div>
       </div>
 
       <div ref={refSpike} className="card">

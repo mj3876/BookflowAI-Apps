@@ -1,10 +1,13 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
+import ReactECharts from 'echarts-for-react';
 import { fetchPending, type PendingOrder, type Role } from '../api';
 import { ko, ORDER_STATUS_KO, URGENCY_KO, whName } from '../labels';
 import { useLocations } from '../useLocations';
 import { groupByDate, dateGroupTone } from '../dateGroup';
+import KpiLine from '../components/charts/KpiLine';
+import KpiPie from '../components/charts/KpiPie';
 
 /**
  * 권역 이동 - 2단계 SOURCE/TARGET 이중 승인 시나리오 (.pen C-1~C-4).
@@ -27,6 +30,17 @@ function RationaleDetail({ r, qty }: { r: Rationale; qty: number }) {
   const hasPartner = stage === 2 && r.partner_wh != null;
   const ratio = r.ratio as number | undefined;
   const reason = r.reason as string | undefined;
+
+  // partner_surplus 계산식 시각화 — 출발 권역 가용 보유분 산출 step-by-step.
+  // 공식 (decision-svc Stage 2): partner_surplus = on_hand - reserved - safety - expected_demand_14d
+  const onHand = typeof r.partner_on_hand === 'number' ? r.partner_on_hand : null;
+  const reserved = typeof r.partner_reserved === 'number' ? r.partner_reserved : null;
+  const safety = typeof r.partner_safety === 'number' ? r.partner_safety : null;
+  const demand14 = typeof r.partner_expected_demand_14d === 'number' ? r.partner_expected_demand_14d : null;
+  const canCompute = hasPartner && onHand != null && reserved != null && safety != null && demand14 != null;
+  const computed = canCompute ? onHand - reserved - safety - demand14 : null;
+  const surplusValue = typeof partnerSurplus === 'number' ? partnerSurplus : computed;
+
   return (
     <div className="bg-bf-card border border-bf-border rounded-md p-3 text-xs">
       <div className="flex items-baseline justify-between mb-2">
@@ -36,16 +50,53 @@ function RationaleDetail({ r, qty }: { r: Rationale; qty: number }) {
         <div className="text-bf-muted">요청 수량 {qty.toLocaleString()}권</div>
       </div>
       {hasPartner ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <div><div className="text-bf-muted text-[10px]">출발 권역</div><div className="font-mono">{whName((r.partner_wh as number) ?? 0)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">출발 보유</div><div className="font-mono">{fmt(r.partner_on_hand)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">예약 분</div><div className="font-mono">{fmt(r.partner_reserved)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">안전재고</div><div className="font-mono">{fmt(r.partner_safety)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">14일 예상수요</div><div className="font-mono">{fmt(r.partner_expected_demand_14d)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">출발 여유분</div><div className={`font-mono font-semibold ${typeof partnerSurplus === 'number' && partnerSurplus < qty ? 'text-orange-600' : 'text-green-700'}`}>{fmt(partnerSurplus)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">이전 가능</div><div className="font-mono">{fmt(r.transferable_qty)}</div></div>
-          <div><div className="text-bf-muted text-[10px]">출발 위치 ID</div><div className="font-mono">{fmt(r.source_location_id)}</div></div>
-        </div>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div><div className="text-bf-muted text-[10px]">출발 권역</div><div className="font-mono">{whName((r.partner_wh as number) ?? 0)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">출발 보유</div><div className="font-mono">{fmt(r.partner_on_hand)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">예약 분</div><div className="font-mono">{fmt(r.partner_reserved)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">안전재고</div><div className="font-mono">{fmt(r.partner_safety)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">14일 예상수요</div><div className="font-mono">{fmt(r.partner_expected_demand_14d)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">출발 여유분</div><div className={`font-mono font-semibold ${typeof partnerSurplus === 'number' && partnerSurplus < qty ? 'text-orange-600' : 'text-green-700'}`}>{fmt(partnerSurplus)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">이전 가능</div><div className="font-mono">{fmt(r.transferable_qty)}</div></div>
+            <div><div className="text-bf-muted text-[10px]">출발 위치 ID</div><div className="font-mono">{fmt(r.source_location_id)}</div></div>
+          </div>
+
+          {/* partner_surplus 계산식 자세히 — 시각적 분해 (.pen C-3 의 Stage 2 산출 공식) */}
+          <div className="mt-3 pt-3 border-t border-bf-border">
+            <div className="text-[11px] text-bf-fg font-semibold mb-2">📐 출발 권역 가용 여유분 계산식</div>
+            <div className="flex items-center flex-wrap gap-1.5 text-[11px]">
+              <span className="px-2 py-1 rounded bg-blue-500/10 border border-blue-500/40 font-mono">
+                보유 <b>{fmt(onHand)}</b>
+              </span>
+              <span className="text-bf-muted">−</span>
+              <span className="px-2 py-1 rounded bg-orange-500/10 border border-orange-500/40 font-mono">
+                예약 <b>{fmt(reserved)}</b>
+              </span>
+              <span className="text-bf-muted">−</span>
+              <span className="px-2 py-1 rounded bg-yellow-500/10 border border-yellow-500/40 font-mono">
+                안전재고 <b>{fmt(safety)}</b>
+              </span>
+              <span className="text-bf-muted">−</span>
+              <span className="px-2 py-1 rounded bg-rose-500/10 border border-rose-500/40 font-mono">
+                14일 수요 <b>{fmt(demand14)}</b>
+              </span>
+              <span className="text-bf-muted">=</span>
+              <span className={`px-2.5 py-1 rounded font-mono font-bold ${
+                surplusValue != null && surplusValue < qty
+                  ? 'bg-orange-500/20 border border-orange-500/60 text-orange-700'
+                  : 'bg-green-500/20 border border-green-500/60 text-green-700'
+              }`}>
+                가용 {fmt(surplusValue)}
+              </span>
+            </div>
+            <div className="mt-2 text-[10px] text-bf-muted">
+              {surplusValue != null && surplusValue < qty
+                ? `⚠ 가용 여유분 ${surplusValue}권 < 요청 ${qty}권 — 부분 이전 또는 거절 권장`
+                : `✓ 가용 여유분이 요청 수량을 충족 — 이전 가능`}
+            </div>
+          </div>
+        </>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {reason && <div><div className="text-bf-muted text-[10px]">발의 사유</div><div className="font-medium">{reason}</div></div>}
@@ -179,7 +230,96 @@ export default function WhTransfer() {
 
   const q = useQuery({ queryKey: ['pending-transfer', role], queryFn: () => fetchPending(role, { order_type: 'WH_TRANSFER', limit: 100 }), refetchInterval: 5000 });
 
+  // 30일 history (분석 뷰 차별화 — 추세 라인 + 발의자 pie + sankey)
+  // include_history=true · days=30 — 5 분 cache (분석용 · 실시간 불필요)
+  const history30 = useQuery({
+    queryKey: ['transfer-history-30', role],
+    queryFn: () => fetchPending(role, { order_type: 'WH_TRANSFER', include_history: true, days: 30, limit: 1000 }),
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+  });
+
   const transfers = q.data?.items.filter((o) => o.order_type === 'WH_TRANSFER') ?? [];
+  const history = history30.data?.items.filter((o) => o.order_type === 'WH_TRANSFER') ?? [];
+
+  // 30일 권역 이동 추이 line (date → count · qty)
+  const dailyTrend = useMemo(() => {
+    const byDate = new Map<string, { count: number; qty: number }>();
+    for (const o of history) {
+      const d = (o.created_at ?? '').slice(0, 10);
+      if (!d) continue;
+      const cur = byDate.get(d) ?? { count: 0, qty: 0 };
+      cur.count += 1;
+      cur.qty += o.qty ?? 0;
+      byDate.set(d, cur);
+    }
+    return [...byDate.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, v]) => ({ date: date.slice(5), 건수: v.count, 수량: v.qty }));
+  }, [history]);
+
+  // 발의자 분석 pie (auto vs manual)
+  //   AUTO_EXECUTED (07:00 batch 자동 승인) = auto
+  //   그 외 PENDING/APPROVED/REJECTED/EXECUTED = manual (사용자 의사결정)
+  const initiatorPie = useMemo(() => {
+    let auto = 0;
+    let manual = 0;
+    for (const o of history) {
+      if (o.status === 'AUTO_EXECUTED' || (o as any).auto_execute_eligible === true) {
+        auto += 1;
+      } else {
+        manual += 1;
+      }
+    }
+    return [
+      { name: 'decision-svc 자동', value: auto },
+      { name: '사용자 수동', value: manual },
+    ];
+  }, [history]);
+
+  // 권역간 흐름 sankey — wh1 ↔ wh2 양방향 qty
+  const sankeyOption = useMemo(() => {
+    let wh1ToWh2 = 0;
+    let wh2ToWh1 = 0;
+    for (const o of history) {
+      const sWh = whIdOf(o.source_location_id);
+      const tWh = whIdOf(o.target_location_id);
+      const qty = o.qty ?? 0;
+      if (sWh === 1 && tWh === 2) wh1ToWh2 += qty;
+      else if (sWh === 2 && tWh === 1) wh2ToWh1 += qty;
+    }
+    // Sankey 는 양방향 표현 불가 — 한쪽씩 source/target 분리 노드 사용
+    const nodes = [
+      { name: '수도권 (출발)' },
+      { name: '영남 (출발)' },
+      { name: '수도권 (도착)' },
+      { name: '영남 (도착)' },
+    ];
+    const links = [
+      { source: '수도권 (출발)', target: '영남 (도착)', value: wh1ToWh2 },
+      { source: '영남 (출발)', target: '수도권 (도착)', value: wh2ToWh1 },
+    ].filter((l) => l.value > 0);
+    return {
+      tooltip: { trigger: 'item', formatter: (p: any) => `${p.name}<br/>${p.value?.toLocaleString?.() ?? p.value} 권` },
+      series: [
+        {
+          type: 'sankey',
+          left: 30,
+          right: 130,
+          top: 20,
+          bottom: 20,
+          nodeWidth: 18,
+          nodeGap: 14,
+          data: nodes,
+          links,
+          lineStyle: { color: 'gradient', curveness: 0.5 },
+          label: { color: '#212529', fontSize: 11 },
+          itemStyle: { borderColor: '#FFFFFF', borderWidth: 1 },
+        },
+      ],
+    };
+  }, [history, whIdOf]);
+  const sankeyHasData = (sankeyOption.series[0].links?.length ?? 0) > 0;
   // D1-3a: locations.wh_id 기준 분리 (이전 not-null 비교는 모든 row 가 양쪽 list 에 중복으로 들어가 버그)
   const outbound = transfers.filter((o) => whIdOf(o.source_location_id) === wh); // 내 권역 매장이 출고
   const inbound  = transfers.filter((o) => whIdOf(o.target_location_id) === wh); // 내 권역 매장이 입고
@@ -188,10 +328,10 @@ export default function WhTransfer() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h1 className="h1">권역 이동 · {whName(wh)} 권역</h1>
+        <h1 className="h1">권역 이동 의사결정 분석 뷰 — {whName(wh)} 권역</h1>
         <p className="text-bf-muted text-xs mt-1">
-          권역 간 재고 이동 — 출고측 권역이 먼저 발의하고 입고측 권역이 수락해야 운송 시작 (양쪽 승인 필요).
-          행 클릭 시 의사결정 근거 (여유분 계산) 펼침.
+          권역 간 이동의 <b>근거 분석 · 추세 · 발의자</b> 중심 뷰입니다. <b>승인 처리</b>는 처리 대기 (WhApprove · WH_TRANSFER 탭) 에서 진행하세요.
+          행 클릭 시 출발 권역의 가용 여유분 (보유 − 예약 − 안전재고 − 14일 수요) 계산식을 단계별로 보여줍니다.
         </p>
       </div>
 
@@ -239,6 +379,41 @@ export default function WhTransfer() {
         </div>
         <div className="text-[11px] text-bf-muted text-center">
           내 권역(파랑) 입장 — 출고는 상대 권역으로 보내고, 입고는 상대 권역에서 받습니다.
+        </div>
+      </div>
+
+      {/* 분석 뷰 차별화 (2026-05-13) — 추세 + 발의자 + 흐름 */}
+      <div className="card">
+        <h3 className="h3 mb-2">권역 이동 30일 추이 (건수 · 수량)</h3>
+        <KpiLine
+          data={dailyTrend}
+          xKey="date"
+          yKey={['건수', '수량']}
+          yLabels={['건수', '수량 (권)']}
+          height={260}
+          smooth
+          isLoading={history30.isLoading}
+        />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <h3 className="h3 mb-2">발의자 분석 (30일 · auto vs manual)</h3>
+          <KpiPie data={initiatorPie} height={280} isLoading={history30.isLoading} />
+          <div className="text-[10px] text-bf-muted mt-1">
+            decision-svc 07:00 KST batch 자동 발의 vs 본사/창고 담당자 수동 발의 비율
+          </div>
+        </div>
+        <div className="card">
+          <h3 className="h3 mb-2">권역간 흐름 (30일 누적 수량)</h3>
+          {history30.isLoading ? (
+            <div className="h-[280px] rounded bg-bf-panel2 border border-bf-border2 animate-pulse" />
+          ) : sankeyHasData ? (
+            <ReactECharts option={sankeyOption} style={{ height: 280 }} opts={{ renderer: 'svg' }} />
+          ) : (
+            <div className="h-[280px] flex items-center justify-center text-bf-muted text-xs rounded bg-bf-panel2 border border-bf-border2">
+              30일 권역 이동 누적 데이터 없음
+            </div>
+          )}
         </div>
       </div>
 

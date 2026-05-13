@@ -1,0 +1,43 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: decision-svc
+  namespace: bookflow
+  labels:
+    app: decision-svc
+    component: msa-pod
+spec:
+  # 매일 03:30 batch + 시연 일괄 발의 트래픽 폭주 대응 (사용자 결정 2026-05-13)
+  # /decide/batch endpoint 가 N items sequential 처리 → CPU 가 핵심 metric.
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: decision-svc
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30   # 빠른 scale-up (batch 시점 즉시)
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 천천히 scale-down (잘못된 spike 회피)
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
