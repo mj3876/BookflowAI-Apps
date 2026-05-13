@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
-import { ApiError, fetchPending, patchPendingOrder, postIntervene, type Role } from '../api';
+import { ApiError, fetchPending, patchPendingOrder, postIntervene, postIntervenebatch, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
 import BatchMapView from '../components/BatchMapView';
@@ -99,31 +99,32 @@ export default function WhApprove() {
     );
   }
 
-  // 일괄 승인 — 현재 탭의 PENDING 중 "내 측" 만 단일 API 반복 호출 (sequential · 진행 표시)
-  // WH_TRANSFER 는 sideForOrder() 가 null 이면 상대 측이라 skip.
+  // 일괄 승인 — backend bulk endpoint 단일 호출 (sequential 폐기)
+  // WH_TRANSFER: side 는 sideForOrder() 가 결정 (null = 상대 측 → skip)
   const bulkApprove = async () => {
     const items = (pending.data?.items ?? []) as any[];
-    const approvable = items.filter((o) => {
-      if (o.status !== 'PENDING') return false;
-      if (tab === 'WH_TRANSFER') return sideForOrder(o) !== null;
-      return true;
-    });
-    if (!approvable.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
-    if (!window.confirm(`내 측 PENDING ${approvable.length}건을 일괄 승인합니다. 진행할까요?`)) return;
-    setBulkBusy(true);
-    let ok = 0, ng = 0;
-    for (const o of approvable) {
-      const side: 'FINAL' | 'SOURCE' | 'TARGET' =
-        tab === 'WH_TRANSFER' ? (sideForOrder(o) ?? 'SOURCE') : 'FINAL';
-      try {
-        await act.mutateAsync({ order_id: o.order_id, action: 'approve', side });
-        ok++;
-      } catch { ng++; }
-      const sideLabel = tab === 'WH_TRANSFER' ? '내 측 (SOURCE/TARGET)' : '내 측';
-      setFeedback(`${sideLabel} ${ok + ng}/${approvable.length}건 일괄 승인 중… · 성공 ${ok} 실패 ${ng}`);
+    const batchItems: { order_id: string; approval_side: 'FINAL' | 'SOURCE' | 'TARGET' }[] = [];
+    for (const o of items) {
+      if (o.status !== 'PENDING') continue;
+      if (tab === 'WH_TRANSFER') {
+        const side = sideForOrder(o);
+        if (side === null) continue;  // 상대 측만 발의 → skip
+        batchItems.push({ order_id: o.order_id, approval_side: side });
+      } else {
+        batchItems.push({ order_id: o.order_id, approval_side: 'FINAL' });
+      }
     }
-    const tail = tab === 'WH_TRANSFER' ? ' · 상대 측 미승인 시 PENDING 유지' : '';
-    setFeedback(`✓ 내 측 ${ok}건 승인 · 실패 ${ng}건${tail}`);
+    if (!batchItems.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
+    if (!window.confirm(`내 측 PENDING ${batchItems.length}건을 일괄 승인합니다. 진행할까요?`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await postIntervenebatch(role, 'approve', batchItems);
+      const tail = tab === 'WH_TRANSFER' ? ' · 상대 측 미승인 시 PENDING 유지' : '';
+      const failTail = (r?.failed ?? 0) > 0 ? ` · 실패 ${r.failed}` : '';
+      setFeedback(`✓ 내 측 ${r?.ok ?? 0}/${r?.total ?? 0} 승인${failTail}${tail}`);
+    } catch (e) {
+      setFeedback(`✗ 일괄 승인 실패: ${String(e)}`);
+    }
     setBulkBusy(false);
     qc.invalidateQueries({ queryKey: ['pending-active'] });
     qc.invalidateQueries({ queryKey: ['pending-detail'] });

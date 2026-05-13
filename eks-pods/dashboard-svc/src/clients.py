@@ -47,6 +47,7 @@ async def get_forecast(store_id: int, snapshot_date: str, token: str) -> dict | 
 async def get_pending_orders(
     token: str,
     limit: int = 50,
+    offset: int = 0,
     order_type: str | None = None,
     wh_id: int | None = None,
     include_history: bool = False,
@@ -57,8 +58,11 @@ async def get_pending_orders(
 
     - date=YYYY-MM-DD: 그 일자만 (lazy detail · DateHistoryTabs 가 호출)
     - include_history=true (deprecated): PENDING + 최근 N일. summary+date 로 대체 권장.
+    - offset: 페이지네이션 (limit 이전 row skip).
     """
     qs = [f"limit={limit}"]
+    if offset:
+        qs.append(f"offset={offset}")
     if order_type:
         qs.append(f"order_type={order_type}")
     if wh_id is not None:
@@ -208,6 +212,14 @@ async def post_decision_decide_batch(body: dict, token: str) -> tuple[int, Any]:
 async def post_decision_plan_daily(body: dict, token: str) -> tuple[int, Any]:
     """D+1 forecast 기반 익일 배치 발의 (전 isbn × 전 location 동시 plan)."""
     return await _safe_post(f"{settings.decision_svc_url}/decision/plan-daily", body, token, timeout=120.0)
+
+
+async def post_intervention_inbound_batch_receive(body: dict, token: str) -> tuple[int, Any]:
+    """일괄 입고 수령 (BranchInbound 전체 수령/발송 · WhInstructions 일괄)."""
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/inbound/batch-receive",
+        body, token, timeout=60.0,
+    )
 
 
 async def post_intervention_returns_request(body: dict, token: str) -> tuple[int, Any]:

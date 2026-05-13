@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchInstructions, postInboundReceive, postInboundReject, type Role } from '../api';
+import { fetchInstructions, postInboundReceive, postInboundReject, postInboundBatchReceive, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import { groupByDate, dateGroupTone } from '../dateGroup';
 import ConfirmModal from '../components/ConfirmModal';
@@ -184,12 +184,16 @@ export default function BranchInbound() {
                 if (!myInbound.length) { setFeedback({ type:'error', msg:'입고 대기 항목이 없습니다.' }); return; }
                 if (!window.confirm(`입고 대기 ${myInbound.length}건을 모두 수령 처리합니다. 진행할까요?`)) return;
                 setBulkBusy(true);
-                let ok = 0, ng = 0;
-                for (const o of myInbound) {
-                  try { await receiveMu.mutateAsync(o.order_id); ok++; }
-                  catch { ng++; }
+                try {
+                  const r = await postInboundBatchReceive(role, myInbound.map((o) => o.order_id));
+                  setFeedback({
+                    type: r.failed > 0 ? 'error' : 'success',
+                    msg: `일괄 수령 완료 · ${r.ok}/${r.total}${r.failed ? ` · 실패 ${r.failed}` : ''}`,
+                  });
+                  qc.invalidateQueries({ queryKey: ['instr-all', role] });
+                } catch (e) {
+                  setFeedback({ type: 'error', msg: `일괄 수령 실패: ${String(e)}` });
                 }
-                setFeedback({ type: ng ? 'error' : 'success', msg: `일괄 수령 완료 · 성공 ${ok} 실패 ${ng}` });
                 setBulkBusy(false);
               }}
               disabled={bulkBusy || !myInbound.length}
@@ -278,12 +282,16 @@ export default function BranchInbound() {
                 if (!myOutbound.length) { setFeedback({ type:'error', msg:'출고 대기 항목이 없습니다.' }); return; }
                 if (!window.confirm(`출고 대기 ${myOutbound.length}건을 모두 발송 처리합니다. 진행할까요?`)) return;
                 setBulkBusy(true);
-                let ok = 0, ng = 0;
-                for (const o of myOutbound) {
-                  try { await shipMu.mutateAsync(o.order_id); ok++; }
-                  catch { ng++; }
+                try {
+                  const r = await postInboundBatchReceive(role, myOutbound.map((o) => o.order_id));
+                  setFeedback({
+                    type: r.failed > 0 ? 'error' : 'success',
+                    msg: `일괄 발송 완료 · ${r.ok}/${r.total}${r.failed ? ` · 실패 ${r.failed}` : ''}`,
+                  });
+                  qc.invalidateQueries({ queryKey: ['instr-all', role] });
+                } catch (e) {
+                  setFeedback({ type: 'error', msg: `일괄 발송 실패: ${String(e)}` });
                 }
-                setFeedback({ type: ng ? 'error' : 'success', msg: `일괄 발송 완료 · 성공 ${ok} 실패 ${ng}` });
                 setBulkBusy(false);
               }}
               disabled={bulkBusy || !myOutbound.length}

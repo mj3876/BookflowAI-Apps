@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchSessionRole, setRole, type Role } from '../auth';
+import { fetchSessionRole, setAuthMode, setRole, type Role } from '../auth';
 
 const ROLES: { id: Role; label: string; group: string; desc: string }[] = [
   { id: 'hq-admin',     label: '본사 관리자',  group: 'HQ',     desc: 'KPI · Books · Decision · Approval · Returns · Requests' },
@@ -17,6 +17,7 @@ export default function Login() {
   useEffect(() => {
     fetchSessionRole().then((s) => {
       if (s) {
+        setAuthMode('entra');  // 이후 모든 API 호출 cookie 기반 (mock-token Authorization 발송 X)
         setRole(s.role, s.scope);
         nav('/', { replace: true });
       } else {
@@ -26,6 +27,7 @@ export default function Login() {
   }, [nav]);
 
   const onPick = (r: Role) => {
+    setAuthMode('mock');  // mock 버튼 → Authorization Bearer mock-token-{role}
     setRole(r);
     nav('/', { replace: true });
   };

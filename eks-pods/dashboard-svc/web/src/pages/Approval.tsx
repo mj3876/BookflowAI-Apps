@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { postIntervene, type Role } from '../api';
+import { postIntervene, postIntervenebatch, type Role } from '../api';
 import { useLocations } from '../useLocations';
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
@@ -42,20 +42,22 @@ export default function Approval() {
     onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
   });
 
-  // 일괄 승인은 "오늘 PENDING" 만 처리 (filtered items 가 그 day 의 row).
-  // children 콜백 안에서 호출되도록 inline 구성 (todayActions 는 isToday 일 때만 표시).
+  // 일괄 승인 — backend bulk endpoint (`/intervention/batch`) 단일 호출
+  // 이전: N HTTP × N transactions × 1 SQL 검증 + 3 SQL record + 1 HTTP notify per row
+  // 신규: 1 HTTP × 1 transaction × bulk SQL + 1 notification
   const makeBulkApprove = (todayItems: any[]) => async () => {
     const approvable = todayItems.filter((o) => o.status === 'PENDING');
     if (!approvable.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
     if (!window.confirm(`외부 발주 PENDING ${approvable.length}건을 모두 승인합니다 (비용 발생). 진행할까요?`)) return;
     setBulkBusy(true);
-    let ok = 0, ng = 0;
-    for (const o of approvable) {
-      try { await act.mutateAsync({ order_id: o.order_id, action: 'approve' }); ok++; }
-      catch { ng++; }
-      setFeedback(`일괄 승인 중… (${ok + ng}/${approvable.length}) · 성공 ${ok} 실패 ${ng}`);
+    try {
+      const r = await postIntervenebatch(role, 'approve',
+        approvable.map((o) => ({ order_id: o.order_id, approval_side: 'FINAL' })));
+      const failTail = (r?.failed ?? 0) > 0 ? ` · 실패 ${r.failed}` : '';
+      setFeedback(`✓ 일괄 승인 완료 · ${r?.ok ?? 0}/${r?.total ?? 0}${failTail}`);
+    } catch (e) {
+      setFeedback(`✗ 일괄 승인 실패: ${String(e)}`);
     }
-    setFeedback(`✓ 일괄 승인 완료 · 성공 ${ok} 실패 ${ng}`);
     setBulkBusy(false);
     qc.invalidateQueries({ queryKey: ['pending-detail'] });
     qc.invalidateQueries({ queryKey: ['pending-summary'] });
