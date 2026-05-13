@@ -45,14 +45,21 @@ export default function BranchInventory() {
   const sourceWhId = myLoc?.wh_id;
   const qc = useQueryClient();
 
-  const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
+  // overview: 큰 payload (inventory + pending). queryKey ['ov', wh_id, role] WhDashboard/KPI 공유 — 30 초
+  // 재고 셀 변동은 Redis stock.changed 로 실시간 반영 (availableOf) · polling 은 정기 reconciliation 용
+  const ov = useQuery({
+    queryKey: ['ov', wh_id, role],
+    queryFn: () => fetchOverview(wh_id, role),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
 
-  // D+1 AI 수요예측 (전 매장 batch · isbn|store_id 키로 map)
+  // D+1 AI 수요예측 batch — 하루 1회. 30 분
   const fcQ = useQuery({
     queryKey: ['forecast-all', role],
     queryFn: () => fetchAllForecast(role),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
   });
   const forecastMap = useMemo(() => {
     const m = new Map<string, number>();

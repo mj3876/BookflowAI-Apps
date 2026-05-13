@@ -127,19 +127,53 @@ export const fetchPending = (
     limit?: number;
     order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
     wh_id?: number;
+    /** 특정 일자 (YYYY-MM-DD KST) detail · lazy fetch. summary count 와 함께 사용 권장. */
+    date?: string;
+    /** @deprecated 365일치 통째 fetch — 사용 자제. summary + date 조합 권장. */
     include_history?: boolean;
     days?: number;
   } = {},
 ) => {
   const qs = new URLSearchParams();
-  qs.set('limit', String(opts.limit ?? 100));
+  qs.set('limit', String(opts.limit ?? 200));
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
-  if (opts.include_history) {
+  if (opts.date) {
+    qs.set('date', opts.date);
+  } else if (opts.include_history) {
     qs.set('include_history', 'true');
     qs.set('days', String(opts.days ?? 7));
   }
   return getJson<{ items: PendingOrder[] }>(`/dashboard/pending?${qs.toString()}`, role);
+};
+
+// 일자별 status count summary — 가벼운 응답. DateHistoryTabs pill row 카운트.
+export type PendingSummary = {
+  days: number;
+  items: Array<{
+    date: string;
+    PENDING: number;
+    APPROVED: number;
+    EXECUTED: number;
+    REJECTED: number;
+    AUTO_EXECUTED: number;
+    total: number;
+  }>;
+};
+
+export const fetchPendingSummary = (
+  role: Role,
+  opts: {
+    days?: number;
+    order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+    wh_id?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  qs.set('days', String(opts.days ?? 365));
+  if (opts.order_type) qs.set('order_type', opts.order_type);
+  if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
+  return getJson<PendingSummary>(`/dashboard/pending/summary?${qs.toString()}`, role);
 };
 
 // D2 Home 메인 카드 — batch 처리 현황 + 검토 필요 건수
@@ -522,14 +556,54 @@ export type InsufficientStockItem = {
   title: string | null;
   store_id: number;
   predicted_demand: number;
+  safety_stock_5days: number;
   available: number;
   gap: number;
   suggested_qty: number;
+  recommend_target_location_id: number;  // 신규 · WH location (출판사 → WH → 매장 분배)
 };
 export const fetchInsufficientStock = (role: Role, limit = 20) =>
   getJson<{ snapshot_date: string; items: InsufficientStockItem[] }>(
     `/dashboard/forecast/insufficient?limit=${limit}`, role,
   );
+
+// ─── KPI by category / Bestsellers / Hourly / Cascade funnel ────────
+export type CategorySales = { category: string; revenue: number; qty: number; tx_count: number };
+export const fetchKpiByCategory = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: CategorySales[] }>(
+    `/dashboard/kpi/by-category?days=${days}${store_id ? `&store_id=${store_id}` : ''}`,
+    role,
+  );
+
+export type Bestseller = {
+  isbn13: string;
+  title: string | null;
+  author: string | null;
+  qty: number;
+  revenue: number;
+  tx_count: number;
+};
+export const fetchBestsellers = (role: Role, days = 7, limit = 20, store_id?: number) =>
+  getJson<{ days: number; items: Bestseller[] }>(
+    `/dashboard/sales/bestsellers?days=${days}&limit=${limit}${store_id ? `&store_id=${store_id}` : ''}`,
+    role,
+  );
+
+export type HourlySales = { hour: number; qty: number; revenue: number; tx_count: number };
+export const fetchHourlySales = (role: Role, store_id: number, date?: string) =>
+  getJson<{ date: string; store_id: number; items: HourlySales[] }>(
+    `/dashboard/sales/hourly?store_id=${store_id}${date ? `&date=${date}` : ''}`,
+    role,
+  );
+
+export type CascadeFunnel = {
+  days: number;
+  summary: Record<string, number>;
+  by_stage: Record<string, Record<string, number>>;
+  daily: Array<{ date: string } & Record<string, number>>;
+};
+export const fetchCascadeFunnel = (role: Role, days = 7) =>
+  getJson<CascadeFunnel>(`/dashboard/cascade/funnel?days=${days}`, role);
 
 // 전 매장 × 전 ISBN forecast batch (inventory 페이지 AI 수요예측 컬럼용).
 // snapshot_date 생략 시 backend D+1 KST 자동 계산.

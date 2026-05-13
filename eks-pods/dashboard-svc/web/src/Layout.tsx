@@ -10,7 +10,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: '🏠 오늘 한눈에',
     items: [
       { to: '/home/hq',     label: '본사 홈',           desc: '오늘 batch 처리 현황 + 검토 필요 한 화면', allow: 'HQ' },
-      { to: '/home/wh',     label: '권역 홈',           desc: '내 권역 batch 결과 + 협의 필요 한 화면',   allow: 'WH' },
+      { to: '/wh-dashboard', label: '권역 홈',           desc: '내 권역 batch 결과 + 매출/재고 차트 한 화면', allow: 'WH' },
       { to: '/home/branch', label: '매장 홈',           desc: '오늘 입고 + 부족 도서 + SNS 급등 매칭',     allow: 'BRANCH' },
     ],
   },
@@ -28,7 +28,6 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: '물류센터 (자기 권역)',
     items: [
-      { to: '/wh-dashboard',    label: '권역 대시보드',     desc: '내 권역 매장 매출과 재고 한눈에',        allow: 'WH' },
       { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간 (지점처럼)', allow: 'WH' },
       { to: '/wh-approve',      label: '처리 대기',         desc: '권역 승인 + 일자별 처리 기록', allow: 'WH' },
       { to: '/wh-instructions', label: '출고/입고 지시',    desc: '출고/입고 지시 + 일자별 기록', allow: 'WH' },
@@ -84,7 +83,7 @@ const PAGE_LABEL: Record<string, string> = {
   returns: '반품 처리',
   requests: '신간 신청',
   spikes: '급등 감지',
-  'wh-dashboard': '창고 대시보드',
+  'wh-dashboard': '권역 홈',
   'wh-approve': '권역 처리 대기',
   'wh-transfer': '권역 이동',
   'wh-instructions': '출고 지시서',

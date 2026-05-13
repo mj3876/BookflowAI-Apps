@@ -17,15 +17,27 @@ import HelpHint from '../components/HelpHint';
  */
 export default function Inventory() {
   const { role } = useOutletContext<{ role: Role }>();
-  const heat = useQuery({ queryKey: ['inv-heatmap', role], queryFn: () => fetchInventoryHeatmap(role), refetchInterval: 8000 });
-  const spike = useQuery({ queryKey: ['spike-24h', role], queryFn: () => fetchSpikeEvents(role, 20), refetchInterval: 30000 });
+  // heatmap: 14 위치 × low/zero counts — 8 초는 과함. 1 분 (queryKey 'heatmap' 와 분리되어 있음 · inv-heatmap 별도 캐시)
+  const heat = useQuery({
+    queryKey: ['inv-heatmap', role],
+    queryFn: () => fetchInventoryHeatmap(role),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+  // spike 24h — 10 분 batch detect. 3 분
+  const spike = useQuery({
+    queryKey: ['spike-24h', role],
+    queryFn: () => fetchSpikeEvents(role, 20),
+    refetchInterval: 3 * 60 * 1000,
+    staleTime: 60000,
+  });
 
-  // D+1 AI 수요예측 batch · location 단위로 합산 (전사 합 + 카드별 표시)
+  // D+1 AI 수요예측 batch — 하루 1회. 30 분
   const fcQ = useQuery({
     queryKey: ['forecast-all', role],
     queryFn: () => fetchAllForecast(role),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
   });
   const predByLoc = useMemo(() => {
     const m = new Map<number, number>();
@@ -69,7 +81,7 @@ export default function Inventory() {
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="h1">전사 재고 현황</h1>
-        <p className="text-bf-muted text-xs mt-1">14개 위치 · 보유/예약/부족 한눈 보기 · 8초 자동 갱신</p>
+        <p className="text-bf-muted text-xs mt-1">14개 위치 · 보유/예약/부족 한눈 보기 · 1분 자동 갱신 (재고 변동은 Redis 실시간)</p>
       </div>
 
       <AnomalyBanner

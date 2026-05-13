@@ -51,21 +51,42 @@ async def get_pending_orders(
     wh_id: int | None = None,
     include_history: bool = False,
     days: int = 7,
+    date: str | None = None,
 ) -> dict | None:
     """pending_orders 큐 - intervention-svc 의 role/scope 필터링된 큐 사용.
 
-    include_history=true 일 때 PENDING + 최근 N일 처리 row (APPROVED/EXECUTED/REJECTED) 포함.
-    일자 selector 기반 history view 가 사용 (Approval/Decision/WhApprove).
+    - date=YYYY-MM-DD: 그 일자만 (lazy detail · DateHistoryTabs 가 호출)
+    - include_history=true (deprecated): PENDING + 최근 N일. summary+date 로 대체 권장.
     """
     qs = [f"limit={limit}"]
     if order_type:
         qs.append(f"order_type={order_type}")
     if wh_id is not None:
         qs.append(f"wh_id={wh_id}")
-    if include_history:
+    if date:
+        qs.append(f"date={date}")
+    elif include_history:
         qs.append("include_history=true")
         qs.append(f"days={days}")
     return await _safe_get(f"{settings.intervention_svc_url}/intervention/queue?{'&'.join(qs)}", token)
+
+
+async def get_pending_summary(
+    token: str,
+    days: int = 7,
+    order_type: str | None = None,
+    wh_id: int | None = None,
+) -> dict | None:
+    """일자별 status count 가벼운 summary — DateHistoryTabs pill row 카운트용.
+
+    /intervention/queue/summary 프록시. 응답 = {days, items: [{date, PENDING, APPROVED, ...}]}
+    """
+    qs = [f"days={days}"]
+    if order_type:
+        qs.append(f"order_type={order_type}")
+    if wh_id is not None:
+        qs.append(f"wh_id={wh_id}")
+    return await _safe_get(f"{settings.intervention_svc_url}/intervention/queue/summary?{'&'.join(qs)}", token)
 
 
 async def get_intervention_queue(token: str, order_type: str | None = None, wh_id: int | None = None) -> dict | None:

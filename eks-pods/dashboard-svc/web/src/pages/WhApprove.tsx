@@ -50,7 +50,9 @@ export default function WhApprove() {
     onSuccess: (r) => {
       showToast({ type: 'success', message: `수정 완료 — 수량 ${r.qty}권 · 매장 ${nameOf(r.target_location_id)}` });
       setEditTarget(null);
-      qc.invalidateQueries({ queryKey: ['pending'] });
+      qc.invalidateQueries({ queryKey: ['pending-active'] });
+      qc.invalidateQueries({ queryKey: ['pending-detail'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary'] });
     },
     onError: (e) => {
       const err = e as ApiError | Error;
@@ -58,9 +60,11 @@ export default function WhApprove() {
     },
   });
 
+  // PENDING 만 light fetch — WH_TRANSFER 다이어그램 tally + bulkApprove 용.
+  // 일자별 detail 은 DateHistoryTabs 가 lazy fetch (365일치 통째 fetch 안 함).
   const pending = useQuery({
-    queryKey: ['pending', tab, role, 'history'],
-    queryFn: () => fetchPending(role, { order_type: tab, limit: 5000, include_history: true, days: 365 }),
+    queryKey: ['pending-active', tab, role],
+    queryFn: () => fetchPending(role, { order_type: tab, limit: 500 }),
     refetchInterval: 5000,
   });
 
@@ -75,7 +79,9 @@ export default function WhApprove() {
     onSuccess: (d, v) => {
       setBusy(null);
       setFeedback(`${v.action === 'approve' ? '✓' : '✓'} ${v.side} ${v.action} · ${d.approval_id ?? d.order_id ?? d.detail}`);
-      qc.invalidateQueries({ queryKey: ['pending'] });
+      qc.invalidateQueries({ queryKey: ['pending-active'] });
+      qc.invalidateQueries({ queryKey: ['pending-detail'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary'] });
     },
     onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
   });
@@ -114,7 +120,9 @@ export default function WhApprove() {
     const tail = tab === 'WH_TRANSFER' ? ' · 상대 측 미승인 시 PENDING 유지' : '';
     setFeedback(`✓ 내 측 ${ok}건 승인 · 실패 ${ng}건${tail}`);
     setBulkBusy(false);
-    qc.invalidateQueries({ queryKey: ['pending'] });
+    qc.invalidateQueries({ queryKey: ['pending-active'] });
+    qc.invalidateQueries({ queryKey: ['pending-detail'] });
+    qc.invalidateQueries({ queryKey: ['pending-summary'] });
   };
 
   // Stage 2 의 source/target 어느 쪽이 내 wh 인지 표시
@@ -206,21 +214,25 @@ export default function WhApprove() {
       })()}
 
       <DateHistoryTabs
-        items={pending.data?.items ?? []}
+        role={role}
+        order_type={tab}
         days={6}
         pageLabel={
           tab === 'REBALANCE' ? '재분배 (자기 권역 내)'
             : tab === 'WH_TRANSFER' ? '권역 이동 (양측 협의)'
             : '외부 발주 (자기 권역분)'
         }
-        todayActions={(() => {
-          const items = (pending.data?.items ?? []) as any[];
-          const myPending = items.filter((o) => {
-            if (o.status !== 'PENDING') return false;
-            if (tab === 'WH_TRANSFER') return sideForOrder(o) !== null;
-            return true;
-          });
-          return (
+      >
+        {(filtered, { isToday, viewMode, isLoading }) => {
+          // 오늘 액션 — filtered (그 일자 row) 에서 내 측 PENDING 계산
+          const myPending = isToday
+            ? (filtered as any[]).filter((o) => {
+                if (o.status !== 'PENDING') return false;
+                if (tab === 'WH_TRANSFER') return sideForOrder(o) !== null;
+                return true;
+              })
+            : [];
+          const todayBar = isToday ? (
             <div className="flex items-center justify-end gap-2">
               <span className="label-tag">5초마다 자동 갱신</span>
               <button
@@ -232,10 +244,8 @@ export default function WhApprove() {
                 {bulkBusy ? '진행 중…' : `내 측 전체 승인 (${myPending.length}건)`}
               </button>
             </div>
-          );
-        })()}
-      >
-        {(filtered, { isToday, viewMode }) => viewMode === 'map' ? (
+          ) : null;
+          const body = viewMode === 'map' ? (
           <BatchMapView items={filtered as any} nameOf={nameOf} whIdOf={whIdOf} />
         ) : (
           <div className="card">
@@ -279,6 +289,11 @@ export default function WhApprove() {
                       <td>
                         <div className="text-sm">{o.title ?? o.isbn13}</div>
                         <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
+                        {o.order_type === 'PUBLISHER_ORDER' && (
+                          <span className="text-[10px] text-emerald-500" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 7~14일)">
+                            📦 출판사→WH (D+7~14)
+                          </span>
+                        )}
                       </td>
                       <td className="text-[11px]">
                         {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'}
@@ -407,14 +422,21 @@ export default function WhApprove() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={tab === 'WH_TRANSFER' ? 7 : 7} className="text-center py-6 text-bf-muted">
-                      해당 일자에 처리 건 없음
+                      {isLoading ? '조회 중…' : '해당 일자에 처리 건 없음'}
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        )}
+          );
+          return (
+            <>
+              {todayBar}
+              {body}
+            </>
+          );
+        }}
       </DateHistoryTabs>
 
       <ConfirmModal
