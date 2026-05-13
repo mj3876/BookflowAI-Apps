@@ -386,7 +386,7 @@ def queue_summary(
 @router.get("/queue", response_model=QueueResponse)
 def queue(
     ctx: AuthContext = Depends(require_auth),
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=5000),
     order_type: str | None = Query(default=None, description="REBALANCE | WH_TRANSFER | PUBLISHER_ORDER"),
     wh_id: int | None = Query(default=None, description="해당 wh 가 source 또는 target 인 주문만"),
     date: str | None = Query(default=None, description="특정 일자 (YYYY-MM-DD KST) · history detail 용. 주어지면 그 날 처리 row 만"),

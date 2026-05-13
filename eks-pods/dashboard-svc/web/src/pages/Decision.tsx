@@ -45,7 +45,7 @@ export default function Decision() {
   // 일자별 detail 은 DateHistoryTabs 가 자체 lazy fetch — 여기서 fetchPending 으로 통째 365 일치 fetch 안 함.
   const pending = useQuery({
     queryKey: ['pending-active', role],
-    queryFn: () => fetchPending(role, { limit: 500 }),
+    queryFn: () => fetchPending(role, { limit: 5000 }),
     refetchInterval: 5000,
   });
 
