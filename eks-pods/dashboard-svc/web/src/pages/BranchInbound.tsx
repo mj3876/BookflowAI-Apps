@@ -37,7 +37,9 @@ export default function BranchInbound() {
     queryFn: () => fetchInstructions(role),
     refetchInterval: 8000,
   });
-  const myInbound = q.data?.items.filter((o) => o.target_location_id === my_store) ?? [];
+  const allInbound = q.data?.items.filter((o) => o.target_location_id === my_store) ?? [];
+  const myInbound = allInbound.filter((o) => o.status === 'APPROVED');
+  const myPending = allInbound.filter((o) => o.status === 'PENDING' || o.status === 'AUTO_EXECUTED');
 
   // Reject modal state
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; isbn13: string; qty: number } | null>(null);
@@ -123,7 +125,7 @@ export default function BranchInbound() {
       )}
 
       <div className="card">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-1">
           <h2 className="h2 flex items-center">입고 대기 ({myInbound.length})<HelpHint text="물류센터에서 발송된 도서. 정상이면 수령, 수량/품질 문제가 있으면 거부합니다. 거부 사유는 물류센터에 즉시 통보됩니다." /></h2>
           <button
             className="btn-primary text-xs"
@@ -145,6 +147,7 @@ export default function BranchInbound() {
             {bulkBusy ? '진행 중…' : `전체 수령 (${myInbound.length}건)`}
           </button>
         </div>
+        <p className="text-xs text-bf-muted mb-3">본사 승인 완료된 항목만 수령 가능</p>
         <table className="data-table">
           <thead>
             <tr>
@@ -212,6 +215,31 @@ export default function BranchInbound() {
           </tbody>
         </table>
       </div>
+
+      {myPending.length > 0 && (
+        <div className="card opacity-70">
+          <h2 className="h2">🕒 승인 대기 중 ({myPending.length})</h2>
+          <p className="text-xs text-bf-muted mb-2">
+            본사가 발주 승인하면 자동으로 위 "입고 대기" 로 이동합니다. 수령은 APPROVED 상태에서만 가능.
+          </p>
+          <table className="data-table">
+            <thead><tr><th>유형</th><th>긴급도</th><th>ISBN</th><th>제목</th><th>출발지</th><th>수량</th><th>현 상태</th></tr></thead>
+            <tbody>
+              {myPending.map((o) => (
+                <tr key={o.order_id}>
+                  <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
+                  <td>{ko(URGENCY_KO, o.urgency_level)}</td>
+                  <td className="font-mono text-[11px]">{o.isbn13}</td>
+                  <td>{o.title ?? '-'}</td>
+                  <td>{o.source_location_id != null ? nameOf(o.source_location_id) : '-'}</td>
+                  <td className="text-right">{o.qty}권</td>
+                  <td><span className="pill-pending">{o.status === 'AUTO_EXECUTED' ? '자동 실행됨' : '승인 대기'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* 수령 확인 모달 */}
       <ConfirmModal

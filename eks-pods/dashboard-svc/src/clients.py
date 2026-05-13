@@ -44,20 +44,27 @@ async def get_forecast(store_id: int, snapshot_date: str, token: str) -> dict | 
     return await _safe_get(f"{settings.forecast_svc_url}/forecast/{store_id}/{snapshot_date}", token)
 
 
-async def get_pending_orders(token: str, limit: int = 50, order_type: str | None = None, wh_id: int | None = None) -> dict | None:
+async def get_pending_orders(
+    token: str,
+    limit: int = 50,
+    order_type: str | None = None,
+    wh_id: int | None = None,
+    include_history: bool = False,
+    days: int = 7,
+) -> dict | None:
     """pending_orders 큐 - intervention-svc 의 role/scope 필터링된 큐 사용.
 
-    intervention-svc 가 인증 토큰 의 role+scope_wh_id 기반으로 자동 필터:
-    - hq-admin: 전체 (또는 명시적 wh_id/order_type)
-    - wh-manager: scope_wh_id 자동 적용
-
-    decision-svc /pending-orders 는 raw SELECT 라 권한 분리 미적용 → 사용 안 함.
+    include_history=true 일 때 PENDING + 최근 N일 처리 row (APPROVED/EXECUTED/REJECTED) 포함.
+    일자 selector 기반 history view 가 사용 (Approval/Decision/WhApprove).
     """
     qs = [f"limit={limit}"]
     if order_type:
         qs.append(f"order_type={order_type}")
     if wh_id is not None:
         qs.append(f"wh_id={wh_id}")
+    if include_history:
+        qs.append("include_history=true")
+        qs.append(f"days={days}")
     return await _safe_get(f"{settings.intervention_svc_url}/intervention/queue?{'&'.join(qs)}", token)
 
 

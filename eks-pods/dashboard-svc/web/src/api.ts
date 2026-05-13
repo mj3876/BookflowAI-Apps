@@ -113,6 +113,9 @@ export type PendingOrder = {
   forecast_rationale?: Record<string, unknown> | null;
   // P3-1 ISBN → 제목 우선 표시 (intervention-svc 가 LEFT JOIN books 로 채움)
   title?: string | null;
+  // include_history=true 응답에서 채워짐 (PENDING 모드는 null)
+  approved_at?: string | null;
+  executed_at?: string | null;
 };
 
 export const fetchOverview = (whId: number, role: Role) =>
@@ -120,12 +123,22 @@ export const fetchOverview = (whId: number, role: Role) =>
 
 export const fetchPending = (
   role: Role,
-  opts: { limit?: number; order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER'; wh_id?: number } = {},
+  opts: {
+    limit?: number;
+    order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+    wh_id?: number;
+    include_history?: boolean;
+    days?: number;
+  } = {},
 ) => {
   const qs = new URLSearchParams();
   qs.set('limit', String(opts.limit ?? 100));
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
+  if (opts.include_history) {
+    qs.set('include_history', 'true');
+    qs.set('days', String(opts.days ?? 7));
+  }
   return getJson<{ items: PendingOrder[] }>(`/dashboard/pending?${qs.toString()}`, role);
 };
 

@@ -299,13 +299,25 @@ def queue(
     limit: int = Query(default=50, ge=1, le=500),
     order_type: str | None = Query(default=None, description="REBALANCE | WH_TRANSFER | PUBLISHER_ORDER"),
     wh_id: int | None = Query(default=None, description="해당 wh 가 source 또는 target 인 주문만"),
+    include_history: bool = Query(default=False, description="과거 처리 row 포함 (APPROVED/EXECUTED/REJECTED · 최근 N일)"),
+    days: int = Query(default=7, ge=1, le=30, description="include_history=true 일 때 조회 기간 (일)"),
 ):
-    """PENDING 주문 큐. role 기반 자동 필터:
+    """주문 큐. role 기반 자동 필터:
 
-    - hq-admin: 명시적 wh_id/order_type 쿼리 없으면 전체. 보통 PUBLISHER_ORDER 만 보고 싶음 → ?order_type=PUBLISHER_ORDER
-    - wh-manager: scope_wh_id 자동 적용 (자기 wh 가 source 또는 target)
+    - default: PENDING 만 (오늘 처리 대기)
+    - include_history=true: PENDING + 최근 N일 처리 row 포함 (일자별 history view 용)
+    - hq-admin: 명시적 wh_id/order_type 없으면 전체
+    - wh-manager: scope_wh_id 자동 (자기 wh 가 source 또는 target)
     """
-    where = ["po.status = 'PENDING'"]
+    if include_history:
+        # PENDING (시점 무관) OR 최근 N일 처리 row
+        where = [
+            "(po.status = 'PENDING' "
+            "OR (po.status IN ('APPROVED','EXECUTED','REJECTED') "
+            f"AND po.created_at >= NOW() - INTERVAL '{days} days'))"
+        ]
+    else:
+        where = ["po.status = 'PENDING'"]
     params: list = []
 
     # role 자동 scope
@@ -329,15 +341,22 @@ def queue(
         params.append(order_type)
 
     params.append(limit)
+    # history 모드: 최신 처리/생성 순. PENDING 모드: urgency 우선 + 오래된 것 먼저.
+    order_clause = (
+        "ORDER BY COALESCE(po.approved_at, po.executed_at, po.created_at) DESC"
+        if include_history else
+        "ORDER BY po.urgency_level DESC, po.created_at ASC"
+    )
     sql = f"""
         SELECT po.order_id, po.order_type, po.isbn13,
                po.source_location_id, po.target_location_id, po.qty,
                po.urgency_level, po.auto_execute_eligible, po.status, po.created_at,
-               po.forecast_rationale, b.title
+               po.forecast_rationale, b.title,
+               po.approved_at, po.executed_at
           FROM pending_orders po
           LEFT JOIN books b ON b.isbn13 = po.isbn13
          WHERE {' AND '.join(where)}
-         ORDER BY po.urgency_level DESC, po.created_at ASC
+         {order_clause}
          LIMIT %s
     """
     with db_conn() as conn, conn.cursor() as cur:
@@ -351,6 +370,7 @@ def queue(
             qty=r[5], urgency_level=r[6], auto_execute_eligible=r[7],
             status=r[8], created_at=r[9],
             forecast_rationale=r[10], title=r[11],
+            approved_at=r[12], executed_at=r[13],
         )
         for r in rows
     ]

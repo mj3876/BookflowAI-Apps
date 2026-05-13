@@ -19,8 +19,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
       { to: '/inventory',   label: '전사 재고',           desc: '모든 매장 재고와 부족 알림',              allow: 'HQ' },
-      { to: '/decision',    label: '의사결정 현황',       desc: '3단계 발주 진행 상황 + 본사 강제 승인',    allow: 'HQ' },
-      { to: '/approval',    label: '외부 발주 승인',      desc: '비용 발생하는 출판사 발주 최종 승인',      allow: 'HQ' },
+      { to: '/decision',    label: '의사결정 현황',       desc: 'AI 추천 검토 + 일자별 처리 기록',          allow: 'HQ' },
+      { to: '/approval',    label: '외부 발주 승인',      desc: '외부 발주 승인 + 일자별 처리 기록 7일',    allow: 'HQ' },
       { to: '/returns',     label: '반품 처리',           desc: '매장이 신청한 반품 승인 / 거부',           allow: 'HQ' },
       { to: '/requests',    label: '신간 편입 결정',      desc: '출판사 신간을 우리 매장에 들일지 결정',    allow: 'HQ' },
     ],
@@ -30,8 +30,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { to: '/wh-dashboard',    label: '권역 대시보드',     desc: '내 권역 매장 매출과 재고 한눈에',        allow: 'WH' },
       { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간 (지점처럼)', allow: 'WH' },
-      { to: '/wh-approve',      label: '처리 대기',         desc: '권역 내 재분배 · 권역 간 이동 · 외부 발주 모두 한 화면 (탭 분리)', allow: 'WH' },
-      { to: '/wh-instructions', label: '출고/입고 지시',    desc: '오늘 처리할 출고와 입고 (신간 별도 표시)', allow: 'WH' },
+      { to: '/wh-approve',      label: '처리 대기',         desc: '권역 승인 + 일자별 처리 기록', allow: 'WH' },
+      { to: '/wh-instructions', label: '출고/입고 지시',    desc: '출고/입고 지시 + 일자별 기록', allow: 'WH' },
       { to: '/wh-manual',       label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'WH' },
     ],
   },
@@ -39,7 +39,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: '매장 (자기 매장)',
     items: [
       { to: '/branch-inventory', label: '매장 재고',         desc: '내 매장 도서 재고와 부족 알림',          allow: 'BRANCH' },
-      { to: '/branch-inbound',   label: '입고 확인',         desc: '오늘 들어오는 도서 수령 / 거부',         allow: 'BRANCH' },
+      { to: '/branch-inbound',   label: '입고 확인',         desc: '매장 입고 처리 (승인 대기 분리)',        allow: 'BRANCH' },
       { to: '/branch-sales',     label: '매장 매출',         desc: '내 매장 실시간 판매 (POS)',              allow: 'BRANCH' },
       { to: '/branch-curation',  label: 'SNS 급등 도서',     desc: '최근 24시간 화제가 된 도서 중 매장 재고 보유분 (입고 요청 발의)', allow: 'BRANCH' },
       { to: '/branch-manual',    label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'BRANCH' },
@@ -63,6 +63,14 @@ const STATUS_PILL: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   up: '연결됨', connecting: '연결 중', down: '끊김',
 };
+
+// 페이지별 헤더 pill — DateHistoryTabs 적용 페이지에 "📅 일자별 처리 기록" 표시.
+const PAGES_WITH_HISTORY = new Set([
+  'approval',
+  'decision',
+  'wh-approve',
+  'wh-instructions',
+]);
 
 const PAGE_LABEL: Record<string, string> = {
   'home/hq': '본사 홈',
@@ -168,6 +176,14 @@ export default function Layout() {
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-bf-border px-6 flex items-center gap-4 bg-bf-panel shrink-0">
           <div className="text-sm text-bf-text font-semibold">{pageTitle}</div>
+          {PAGES_WITH_HISTORY.has(seg) && (
+            <span
+              className="px-2 py-0.5 rounded text-[10px] bg-bf-panel2 text-bf-muted border border-bf-border"
+              title="이 페이지는 최근 7일 처리 기록을 일자별 탭으로 볼 수 있습니다"
+            >
+              📅 일자별 처리 기록
+            </span>
+          )}
           <span className={STATUS_PILL[status] ?? 'pill-down'} title="WebSocket broker · Redis 4채널">실시간 {STATUS_LABEL[status] ?? status}</span>
           <div className="flex gap-3 ml-auto text-[11px]">
             <span title="stock.changed · pos-ingestor Lambda" className="flex items-center gap-1">

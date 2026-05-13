@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { fetchInsufficientStock, fetchPending, postDecide, postIntervene, ApiError, type InsufficientStockItem, type Role } from '../api';
@@ -6,9 +6,9 @@ import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
+import DateHistoryTabs from '../components/DateHistoryTabs';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
-import { groupByDate, dateGroupTone } from '../dateGroup';
 
 /**
  * 본사 의사결정 모니터링 + escalation.
@@ -42,14 +42,16 @@ export default function Decision() {
 
   const pending = useQuery({
     queryKey: ['pending-all', role],
-    queryFn: () => fetchPending(role, { limit: 50 }),
+    queryFn: () => fetchPending(role, { limit: 500, include_history: true, days: 7 }),
     refetchInterval: 5000,
   });
 
   const items = pending.data?.items ?? [];
-  const stage1 = items.filter((o) => STAGE_FROM_TYPE(o.order_type) === 1);
-  const stage2 = items.filter((o) => STAGE_FROM_TYPE(o.order_type) === 2);
-  const stage3 = items.filter((o) => STAGE_FROM_TYPE(o.order_type) === 3);
+  // Stage 별 카운트는 현재 처리 대기 (PENDING) 기준 — history 포함 응답에서 PENDING 만 추출.
+  const pendingOnly = items.filter((o) => o.status === 'PENDING');
+  const stage1 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 1);
+  const stage2 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 2);
+  const stage3 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 3);
 
   const [escalateTarget, setEscalateTarget] = useState<{ order_id: string; title: string; qty: number } | null>(null);
 
@@ -182,91 +184,105 @@ export default function Decision() {
         })}
       </div>
 
-      {/* 처리 대기 통합 list */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="h2">
-            처리 대기 ({items.length})
+      {/* 처리 대기 + 일자별 처리 기록 */}
+      <DateHistoryTabs
+        items={items}
+        days={6}
+        pageLabel="의사결정 처리 기록 7일"
+        todayActions={
+          <div className="card-tight flex items-center gap-2 text-xs">
             <HelpHint text="자동 cascade 결과 또는 매장/SNS 발의 결과. 본사는 필요 시 강제 승인 (escalation) 으로 즉시 통과시킬 수 있어요." />
-          </h2>
-          <span className="label-tag">5초마다 자동 갱신</span>
-        </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>긴급도</th>
-              <th>단계</th>
-              <th>도서</th>
-              <th>출발 → 도착</th>
-              <th className="text-right">수량</th>
-              <th>생성</th>
-              {role === 'hq-admin' && <th className="text-right">강제 승인</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {groupByDate(items.slice(0, 60)).map((g) => {
-              const tone = dateGroupTone(g.label);
-              const ncols = role === 'hq-admin' ? 7 : 6;
-              return (
-                <Fragment key={g.key}>
-                  <tr className="bg-bf-panel2"><td colSpan={ncols} className={`py-1.5 px-3 ${tone.wrap}`}>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${tone.pill}`}>{g.label}</span>
-                      <span className="text-[11px] text-bf-muted">{g.total}건 · 처리완료 {g.done}/{g.total} ({g.progressPct}%)</span>
-                      {g.approved > 0 && <span className="text-[10px] text-green-700">✓ {g.approved}</span>}
-                      {g.rejected > 0 && <span className="text-[10px] text-red-700">✗ {g.rejected}</span>}
-                      {g.allDone && <span className="ml-1 px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-semibold border border-green-500/40">✅ 완료 · 최종 계획안</span>}
-                    </div>
-                  </td></tr>
-                  {g.rows.map((o) => {
-              const stage = STAGE_FROM_TYPE(o.order_type);
-              return (
-                <tr key={o.order_id}>
-                  <td>
-                    <span className={
-                      o.urgency_level === 'CRITICAL' ? 'pill-rejected' :
-                      o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
-                    }>{ko(URGENCY_KO, o.urgency_level)}</span>
-                  </td>
-                  <td><span className={STAGE_LABEL[stage].color}>{stage}단계</span> <span className="text-[11px] text-bf-muted ml-1">{ko(ORDER_TYPE_KO, o.order_type)}</span></td>
-                  <td>
-                    <div className="text-sm">{o.title ?? o.isbn13}</div>
-                    <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
-                  </td>
-                  <td className="text-[11px]">
-                    {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'} → {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
-                  </td>
-                  <td className="text-right">{o.qty}권</td>
-                  <td className="text-bf-muted text-[11px]">{new Date(o.created_at).toLocaleString('ko-KR')}</td>
-                  {role === 'hq-admin' && (
-                    <td className="text-right">
-                      <button
-                        className="btn-outline btn-sm"
-                        title="다른 역할 승인 기다리지 않고 본사 단독 강제 승인 (escalation)"
-                        onClick={() => setEscalateTarget({
-                          order_id: o.order_id,
-                          title: o.title ?? o.isbn13,
-                          qty: o.qty,
-                        })}
-                      >
-                        강제 승인
-                      </button>
-                    </td>
-                  )}
+            <span className="text-bf-muted">오늘 처리 대기 {pendingOnly.length}건</span>
+            <span className="label-tag ml-auto">5초마다 자동 갱신</span>
+          </div>
+        }
+      >
+        {(filtered, { isToday }) => (
+          <div className="card">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>긴급도</th>
+                  <th>단계</th>
+                  <th>도서</th>
+                  <th>출발 → 도착</th>
+                  <th className="text-right">수량</th>
+                  <th>{isToday ? '생성' : '처리 일시'}</th>
+                  <th>상태</th>
+                  {role === 'hq-admin' && isToday && <th className="text-right">강제 승인</th>}
                 </tr>
-              );
-                  })}
-                </Fragment>
-              );
-            })}
-            {items.length === 0 && !pending.isLoading && (
-              <tr><td colSpan={role === 'hq-admin' ? 7 : 6}>
-                <EmptyState message="처리 대기 결정 없음" hint="자동 cascade · 매장 요청 · SNS 급등 결과로 발의가 들어오면 여기에 표시됩니다" />
-              </td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {filtered.map((o) => {
+                  const stage = STAGE_FROM_TYPE(o.order_type);
+                  const ts = o.approved_at ?? o.executed_at ?? o.created_at;
+                  const showAction = role === 'hq-admin' && isToday;
+                  return (
+                    <tr key={o.order_id}>
+                      <td>
+                        <span className={
+                          o.urgency_level === 'CRITICAL' ? 'pill-rejected' :
+                          o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
+                        }>{ko(URGENCY_KO, o.urgency_level)}</span>
+                      </td>
+                      <td>
+                        <span className={STAGE_LABEL[stage].color}>{stage}단계</span>
+                        <span className="text-[11px] text-bf-muted ml-1">{ko(ORDER_TYPE_KO, o.order_type)}</span>
+                      </td>
+                      <td>
+                        <div className="text-sm">{o.title ?? o.isbn13}</div>
+                        <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
+                      </td>
+                      <td className="text-[11px]">
+                        {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'} → {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
+                      </td>
+                      <td className="text-right">{o.qty}권</td>
+                      <td className="text-bf-muted text-[11px]">{ts ? new Date(ts).toLocaleString('ko-KR') : '-'}</td>
+                      <td>
+                        <span className={
+                          o.status === 'PENDING' ? 'pill-pending' :
+                          o.status === 'APPROVED' ? 'pill-approved' :
+                          o.status === 'EXECUTED' ? 'pill-info' :
+                          o.status === 'REJECTED' ? 'pill-rejected' : 'pill-info'
+                        }>{o.status}</span>
+                      </td>
+                      {showAction && (
+                        <td className="text-right">
+                          {o.status === 'PENDING' ? (
+                            <button
+                              className="btn-outline btn-sm"
+                              title="다른 역할 승인 기다리지 않고 본사 단독 강제 승인 (escalation)"
+                              onClick={() => setEscalateTarget({
+                                order_id: o.order_id,
+                                title: o.title ?? o.isbn13,
+                                qty: o.qty,
+                              })}
+                            >
+                              강제 승인
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-bf-muted">-</span>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+                {filtered.length === 0 && !pending.isLoading && (
+                  <tr>
+                    <td colSpan={role === 'hq-admin' && isToday ? 8 : 7}>
+                      <EmptyState
+                        message={isToday ? '처리 대기 결정 없음' : '해당 일자에 처리 기록이 없습니다'}
+                        hint={isToday ? '자동 cascade · 매장 요청 · SNS 급등 결과로 발의가 들어오면 여기에 표시됩니다' : undefined}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DateHistoryTabs>
 
       {/* 시연 trigger 모달 — 예측 부족 도서 list 보여주고 일괄 cascade 발의 */}
       {demoOpen && (

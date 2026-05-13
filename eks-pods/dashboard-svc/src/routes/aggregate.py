@@ -76,13 +76,19 @@ async def pending(
     limit: int = 50,
     order_type: str | None = None,
     wh_id: int | None = None,
+    include_history: bool = False,
+    days: int = 7,
 ) -> Any:
-    """V6.2 3-stage 의사결정 PENDING 큐.
+    """V6.2 3-stage 의사결정 큐.
 
+    - default: PENDING 만
+    - include_history=true: PENDING + 최근 N일 처리 row (일자별 history view 용)
     intervention-svc 가 role/scope 자동 적용 (wh-manager 는 자기 wh 만, hq-admin 은 옵션 wh_id).
-    `order_type`: REBALANCE | WH_TRANSFER | PUBLISHER_ORDER 필터.
     """
-    data = await get_pending_orders(ctx.token, limit=limit, order_type=order_type, wh_id=wh_id)
+    data = await get_pending_orders(
+        ctx.token, limit=limit, order_type=order_type, wh_id=wh_id,
+        include_history=include_history, days=days,
+    )
     if data is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="intervention-svc unavailable")
     return data
