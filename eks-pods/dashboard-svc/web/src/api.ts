@@ -488,6 +488,18 @@ export type InboundBatchResult = { total: number; ok: number; failed: number; er
 export const postInboundBatchReceive = (role: Role, order_ids: string[]) =>
   postJson<InboundBatchResult>('/dashboard/inbound/batch-receive', role, { order_ids });
 
+// 오늘 PENDING 전체 일괄 승인 — 서버측 fetch + bulk (페이지네이션 우회)
+export type ApproveAllResult = {
+  total_orders: number;
+  ok: number;
+  failed: number;
+  errors: string[];
+};
+export const postApproveAllToday = (
+  role: Role,
+  order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER',
+) => postJson<ApproveAllResult>('/dashboard/intervene/approve-all-today', role, order_type ? { order_type } : {});
+
 // UX-6: 재고 수동 조정 (Manual 페이지) — inventory-svc /adjust 프록시.
 export type InventoryAdjustResult = {
   isbn13: string;

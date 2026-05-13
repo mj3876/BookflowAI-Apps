@@ -222,6 +222,14 @@ async def post_intervention_inbound_batch_receive(body: dict, token: str) -> tup
     )
 
 
+async def post_intervention_approve_all_today(body: dict, token: str) -> tuple[int, Any]:
+    """오늘 PENDING 전체 일괄 승인 — 서버측 fetch + bulk (페이지네이션 우회)."""
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/intervene/approve-all-today",
+        body, token, timeout=120.0,
+    )
+
+
 async def post_intervention_returns_request(body: dict, token: str) -> tuple[int, Any]:
     """P1-3 Branch 반품 신청 (intervention-svc /intervention/returns/request)."""
     return await _safe_post(

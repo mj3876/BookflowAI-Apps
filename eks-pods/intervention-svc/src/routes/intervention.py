@@ -633,6 +633,87 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
     return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at)
 
 
+@router.post("/intervene/approve-all-today")
+def approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(require_auth)):
+    """오늘 PENDING 전체 일괄 승인 — 페이지네이션 / batch limit 우회 (서버측 fetch + bulk).
+
+    role/scope 자동 필터. WH_TRANSFER 는 권한 있는 측 (SOURCE/TARGET) 자동 처리.
+    body: {order_type?: 'REBALANCE'|'WH_TRANSFER'|'PUBLISHER_ORDER'}
+    response: {total, ok, failed, errors}
+    """
+    order_type = body.get("order_type")
+
+    where = ["po.status = 'PENDING'"]
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+        )
+        params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+    if order_type:
+        where.append("po.order_type = %s")
+        params.append(order_type)
+
+    sql = f"""
+        SELECT po.order_id::text, po.order_type, po.target_location_id,
+               sl.wh_id, tl.wh_id
+          FROM pending_orders po
+          LEFT JOIN locations sl ON sl.location_id = po.source_location_id
+          LEFT JOIN locations tl ON tl.location_id = po.target_location_id
+         WHERE {' AND '.join(where)}
+    """
+
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+        valid_items: list[dict] = []
+        errors: list[str] = []
+        for r in rows:
+            oid, ot, tloc, swh, twh = r
+            meta = {"order_type": ot, "target_loc": tloc, "source_wh": swh, "target_wh": twh}
+            if ot == "WH_TRANSFER":
+                for side in ("SOURCE", "TARGET"):
+                    try:
+                        _check_authority_rules(ctx, meta, side)
+                        valid_items.append({"order_id": oid, "side": side, "reject_reason": None})
+                    except HTTPException:
+                        pass
+            else:
+                try:
+                    _check_authority_rules(ctx, meta, "FINAL")
+                    valid_items.append({"order_id": oid, "side": "FINAL", "reject_reason": None})
+                except HTTPException as e:
+                    if len(errors) < 20:
+                        errors.append(f"{oid}: {e.detail}")
+
+        if valid_items:
+            _bulk_record_approvals(conn, valid_items, ctx, "APPROVED")
+        conn.commit()
+
+    if valid_items:
+        _notify(
+            ctx.token, "OrderApproved", severity="INFO",
+            payload={
+                "batch_size": len(valid_items),
+                "approver_role": ctx.role,
+                "approver_wh_id": ctx.scope_wh_id,
+                "scope": "today_all",
+                "order_type_filter": order_type,
+            },
+        )
+
+    # ok = approval row 수 (WH_TRANSFER 는 order 당 2 row · 그 외는 1 row)
+    return {
+        "total_orders": len(rows),
+        "ok": len(valid_items),
+        "failed": max(0, len(rows) - len({it["order_id"] for it in valid_items})),
+        "errors": errors,
+    }
+
+
 def _check_authority_rules(ctx: AuthContext, meta: dict, side: str) -> None:
     """`_validate_authority` 의 in-memory 변종. 이미 fetch 된 order meta 로 권한 검증.
 

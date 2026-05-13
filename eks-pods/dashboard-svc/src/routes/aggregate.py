@@ -200,13 +200,20 @@ async def cascade_run_batch(body: dict = Body(...), ctx: AuthContext = Depends(r
 
 @router.post("/inbound/batch-receive")
 async def inbound_batch_receive(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
-    """일괄 입고 수령 — intervention-svc /inbound/batch-receive proxy.
-
-    body: {order_ids: ["uuid", ...]} (max 1000)
-    response: {total, ok, failed, errors}
-    """
+    """일괄 입고 수령 — intervention-svc /inbound/batch-receive proxy."""
     from ..clients import post_intervention_inbound_batch_receive
     sc, data = await post_intervention_inbound_batch_receive(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/intervene/approve-all-today")
+async def intervene_approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(require_auth)):
+    """오늘 PENDING 전체 일괄 승인 — body: {order_type?} · role/scope 자동.
+
+    페이지네이션 우회: 서버측 fetch + bulk SQL · WH_TRANSFER 양측 자동 처리.
+    """
+    from ..clients import post_intervention_approve_all_today
+    sc, data = await post_intervention_approve_all_today(body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
 
 

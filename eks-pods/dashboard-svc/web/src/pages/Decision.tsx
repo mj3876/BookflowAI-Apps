@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
-import { fetchPending, postDecide, postIntervene, postIntervenebatch, postPlanDaily, ApiError, type Role } from '../api';
+import { fetchPending, postDecide, postIntervene, postIntervenebatch, postPlanDaily, postApproveAllToday, ApiError, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
@@ -86,20 +86,9 @@ export default function Decision() {
   const [bulkEscalateOpen, setBulkEscalateOpen] = useState(false);
   const bulkEscalate = useMutation({
     mutationFn: async () => {
-      // 페이지네이션과 무관하게 오늘 PENDING 전체 fetch 후 batch 호출
-      const all = await fetchPending(role, { limit: 10000 });
-      const all_pending = (all.items ?? []).filter((o) => o.status === 'PENDING');
-      if (!all_pending.length) return { total: 0, ok: 0, failed: 0, errors: [] as string[] };
-      const items: { order_id: string; approval_side: string }[] = [];
-      for (const o of all_pending) {
-        if (o.order_type === 'WH_TRANSFER') {
-          items.push({ order_id: o.order_id, approval_side: 'SOURCE' });
-          items.push({ order_id: o.order_id, approval_side: 'TARGET' });
-        } else {
-          items.push({ order_id: o.order_id, approval_side: 'FINAL' });
-        }
-      }
-      return postIntervenebatch(role, 'approve', items);
+      // 서버측 일괄 승인 — 페이지네이션·batch limit 우회, 단일 transaction.
+      const r = await postApproveAllToday(role);
+      return { total: r.total_orders, ok: r.ok, failed: r.failed, errors: r.errors };
     },
     onSuccess: (r) => {
       showToast({ type: 'success', message: `본사 강제 승인 완료 — ${r?.ok ?? 0}/${r?.total ?? 0} 처리` });

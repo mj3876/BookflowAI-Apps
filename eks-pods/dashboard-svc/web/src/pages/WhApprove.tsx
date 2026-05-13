@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
-import { ApiError, fetchPending, patchPendingOrder, postIntervene, postIntervenebatch, type Role } from '../api';
+import { ApiError, fetchPending, patchPendingOrder, postApproveAllToday, postIntervene, type Role } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
 import BatchMapView from '../components/BatchMapView';
@@ -101,30 +101,17 @@ export default function WhApprove() {
     );
   }
 
-  // 일괄 승인 — 클릭 시 전체 PENDING fetch (limit=10000) → bulk endpoint 단일 호출
-  // WH_TRANSFER: side 는 sideForOrder() 가 결정 (null = 상대 측 → skip)
+  // 일괄 승인 — 서버측 fetch + bulk endpoint (페이지네이션 / batch limit 우회 · 단일 transaction)
+  // role/scope + WH_TRANSFER 양측 자동 처리.
   const bulkApprove = async () => {
+    if (totalMyPending === 0) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
+    if (!window.confirm(`내 측 PENDING ${totalMyPending}건을 일괄 승인합니다. 진행할까요?`)) return;
     setBulkBusy(true);
-    const all = await fetchPending(role, { order_type: tab, limit: 10000 });
-    const items = (all.items ?? []) as any[];
-    const batchItems: { order_id: string; approval_side: 'FINAL' | 'SOURCE' | 'TARGET' }[] = [];
-    for (const o of items) {
-      if (o.status !== 'PENDING') continue;
-      if (tab === 'WH_TRANSFER') {
-        const side = sideForOrder(o);
-        if (side === null) continue;  // 상대 측만 발의 → skip
-        batchItems.push({ order_id: o.order_id, approval_side: side });
-      } else {
-        batchItems.push({ order_id: o.order_id, approval_side: 'FINAL' });
-      }
-    }
-    if (!batchItems.length) { setBulkBusy(false); setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
-    if (!window.confirm(`내 측 PENDING ${batchItems.length}건을 일괄 승인합니다. 진행할까요?`)) { setBulkBusy(false); return; }
     try {
-      const r = await postIntervenebatch(role, 'approve', batchItems);
+      const r = await postApproveAllToday(role, tab);
       const tail = tab === 'WH_TRANSFER' ? ' · 상대 측 미승인 시 PENDING 유지' : '';
       const failTail = (r?.failed ?? 0) > 0 ? ` · 실패 ${r.failed}` : '';
-      setFeedback(`✓ 내 측 ${r?.ok ?? 0}/${r?.total ?? 0} 승인${failTail}${tail}`);
+      setFeedback(`✓ 내 측 ${r?.ok ?? 0} 승인 처리 (전체 ${r?.total_orders ?? 0}건)${failTail}${tail}`);
     } catch (e) {
       setFeedback(`✗ 일괄 승인 실패: ${String(e)}`);
     }
