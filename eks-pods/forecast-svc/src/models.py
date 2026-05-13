@@ -37,15 +37,16 @@ class RefreshResponse(BaseModel):
     inserted: int
 
 
-# P1-4b 시연 trigger: 예측 수요 > 가용 재고 인 도서 list (cascade 자동 발의용)
+# P1-4b 시연 trigger: 예측 수요 × 5 (안전재고 5일치) > 가용 재고 인 도서 list (cascade 자동 발의용)
 class InsufficientStockItem(BaseModel):
     isbn13: str
     title: str | None = None
     store_id: int
-    predicted_demand: float
+    predicted_demand: float       # 1일치 (참고용)
+    safety_stock_5days: int = 0   # predicted_demand × 5 (안전재고 기준)
     available: int
-    gap: int                 # predicted_demand - available
-    suggested_qty: int       # 권장 보충 수량 (gap + safety_buffer)
+    gap: int                 # safety_stock_5days - available
+    suggested_qty: int       # 권장 보충 수량 (gap × 1.2 · max 500)
 
 
 class InsufficientStockResponse(BaseModel):

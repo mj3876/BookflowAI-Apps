@@ -47,15 +47,12 @@ def insufficient_stock(
     limit: int = 20,
     _: AuthContext = Depends(require_auth),
 ):
-    """P1-4b 시연 trigger: 예측 수요 > 가용 재고 인 도서 list (cascade 자동 발의용).
+    """P1-4b 시연 trigger: 안전재고 5일치 (predicted_demand × 5) > 가용재고 인 도서 list.
 
-    최근 snapshot_date 의 forecast_cache 와 inventory 를 JOIN 해 부족 도서 산출.
-    fallback: forecast_cache 비어있으면 빈 list 반환.
-    suggested_qty = gap + 안전재고 buffer (gap × 1.2, min 30, max 200).
+    안전재고 = 익일 forecast × 5 (사용자 결정 2026-05-13: forecast 는 권/일 단위 · 5일치를 안전선).
+    suggested_qty = gap × 1.2 (min 30, max 500 · 5일치라 더 큰 발주 허용).
     """
-    # 시연 의도: '익일 (CURRENT_DATE + 1) 지점·물류센터별 수요예측 vs 현재 가용재고' 비교.
-    # - 현재 가용재고: GREATEST(inventory.on_hand - reserved_qty, 0) (inventory.available 컬럼 부재)
-    # - 익일 forecast: snapshot_date = MIN(snapshot_date > CURRENT_DATE) (= 가장 가까운 미래일)
+    # 시연 의도: '익일 (CURRENT_DATE + 1) 지점·물류센터별 수요예측 × 5 vs 현재 가용재고' 비교.
     sql = """
         WITH target AS (
             SELECT MIN(snapshot_date) AS d FROM forecast_cache WHERE snapshot_date > CURRENT_DATE
@@ -69,8 +66,8 @@ def insufficient_stock(
           CROSS JOIN target
          WHERE f.snapshot_date = target.d
          GROUP BY f.isbn13, b.title, f.store_id, f.predicted_demand
-        HAVING f.predicted_demand > COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)
-         ORDER BY (f.predicted_demand - COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)) DESC
+        HAVING f.predicted_demand * 5 > COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)
+         ORDER BY (f.predicted_demand * 5 - COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)) DESC
          LIMIT %s
     """
     with db_conn() as conn, conn.cursor() as cur:
@@ -82,12 +79,14 @@ def insufficient_stock(
     items: list[InsufficientStockItem] = []
     for r in rows:
         isbn13, title, store_id, pred, avail = r[0], r[1], r[2], float(r[3]), int(r[4])
-        gap = max(0, int(pred) - avail)
-        # gap × 1.2 (안전재고 buffer), min 30, max 200 — 시연용 합리 수치
-        suggested = max(30, min(200, int(gap * 1.2)))
+        safety_5d = int(pred * 5)
+        gap = max(0, safety_5d - avail)
+        # gap × 1.2 buffer, min 30, max 500 (5일치 기준)
+        suggested = max(30, min(500, int(gap * 1.2)))
         items.append(InsufficientStockItem(
             isbn13=isbn13, title=title, store_id=store_id,
-            predicted_demand=pred, available=avail, gap=gap, suggested_qty=suggested,
+            predicted_demand=pred, safety_stock_5days=safety_5d,
+            available=avail, gap=gap, suggested_qty=suggested,
         ))
 
     return InsufficientStockResponse(snapshot_date=snapshot or date.today(), items=items)
