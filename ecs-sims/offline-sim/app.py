@@ -40,8 +40,8 @@ STREAM_NAME       = os.environ.get("KINESIS_STREAM_NAME", "bookflow-pos-events")
 REGION            = os.environ.get("AWS_REGION", "ap-northeast-1")
 INVENTORY_API_URL = os.environ.get("INVENTORY_API_URL", "").rstrip("/")
 ECS_CLUSTER_NAME  = os.environ.get("ECS_CLUSTER_NAME", "bookflow-ecs")
-INTERVAL_SEC      = (int(os.environ.get("INTERVAL_MIN", "30")),
-                     int(os.environ.get("INTERVAL_MAX", "90")))
+INTERVAL_SEC      = (int(os.environ.get("INTERVAL_MIN", "480")),
+                     int(os.environ.get("INTERVAL_MAX", "900")))
 CATALOG_TTL       = 600
 STOCK_CACHE_TTL   = 45
 
@@ -60,7 +60,7 @@ OFFLINE_STORES = {
 }
 
 # 매장 크기별 거래 건수 범위 (한 배치)
-BATCH_QTY_RANGE = {"L": (3, 8), "M": (2, 5), "S": (1, 3)}
+BATCH_QTY_RANGE = {"L": (1, 3), "M": (1, 2), "S": (1, 1)}
 
 # 오프라인 특성: 교재/선물용 현금 비율 높음
 PAYMENT_METHODS = ["CARD", "CARD", "CARD", "CARD", "CASH", "CASH", "MOBILE_PAY"]

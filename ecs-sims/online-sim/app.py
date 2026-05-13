@@ -35,8 +35,8 @@ STREAM_NAME          = os.environ.get("KINESIS_STREAM_NAME", "bookflow-pos-event
 REGION               = os.environ.get("AWS_REGION", "ap-northeast-1")
 INVENTORY_API_URL    = os.environ.get("INVENTORY_API_URL", "").rstrip("/")
 ECS_CLUSTER_NAME     = os.environ.get("ECS_CLUSTER_NAME", "bookflow-ecs")
-INTERVAL_SEC         = (int(os.environ.get("INTERVAL_MIN", "10")),
-                        int(os.environ.get("INTERVAL_MAX", "30")))
+INTERVAL_SEC         = (int(os.environ.get("INTERVAL_MIN", "180")),
+                        int(os.environ.get("INTERVAL_MAX", "360")))
 CATALOG_TTL          = 600   # 카탈로그 갱신 주기 (초)
 STOCK_CACHE_TTL      = 30    # 재고 캐시 TTL (초)
 
@@ -185,7 +185,7 @@ def get_stock(isbn13: str, wh_location_id: int) -> dict | None:
 
 # ── 거래 레코드 생성 ──────────────────────────────────────────────────────────
 def make_record(book: dict, stock: dict, online_location_id: int, wh_id: int) -> dict:
-    max_qty    = min(3, stock["available"])
+    max_qty    = min(2, stock["available"])
     qty        = random.randint(1, max(1, max_qty))
     unit_price = book["price_sales"]
     total      = qty * unit_price
