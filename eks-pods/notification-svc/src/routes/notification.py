@@ -14,7 +14,18 @@ from fastapi import APIRouter, Depends, Query
 
 from ..auth import AuthContext, require_auth
 from ..db import db_conn, redis_client
-from ..models import NotificationRow, RecentResponse, SendRequest, SendResponse
+from datetime import datetime, timezone
+from fastapi import HTTPException, status
+
+from ..models import (
+    BranchFeedbackRequest,
+    BranchFeedbackResponse,
+    NotificationRow,
+    RecentResponse,
+    SendRequest,
+    SendResponse,
+)
+from ..recipients import get_recipients
 from ..settings import settings
 
 log = logging.getLogger(__name__)
@@ -36,7 +47,7 @@ EVENT_CHANNEL = {
     "OrderPending":         "order.pending",
     "OrderApproved":        None,
     "OrderRejected":        None,
-    "OrderExecuted":        None,  # A1 매장 수령 (intervention /inbound/receive) — 시트04 외 운영 확장
+    "OrderExecuted":        None,
     "AutoExecutedUrgent":   None,
     "AutoRejectedBatch":    None,
     "SpikeUrgent":          "spike.detected",
@@ -44,16 +55,20 @@ EVENT_CHANNEL = {
     "StockArrivalPending":  None,
     "NewBookRequest":       "newbook.request",
     "ReturnPending":        None,
-    "LambdaAlarm":          None,
-    "DeploymentRollback":   None,
 }
 
 
-async def _post_logic_apps(event_type: str, payload: dict, correlation_id) -> tuple[bool, str | None]:
+async def _post_logic_apps(
+    event_type: str,
+    payload: dict,
+    correlation_id,
+    recipients: list[dict],
+) -> tuple[bool, str | None]:
     body = {
         "event_type": event_type,
         "correlation_id": str(correlation_id) if correlation_id else None,
         "payload": payload,
+        "recipients": recipients,  # [{address, displayName}] → ACS Email 수신자
     }
     url = f"{settings.logic_apps_url}/workflow/{event_type}"
     try:
@@ -68,9 +83,19 @@ async def _post_logic_apps(event_type: str, payload: dict, correlation_id) -> tu
 async def send(req: SendRequest, ctx: AuthContext = Depends(require_auth)) -> SendResponse:
     notification_id = uuid4()
 
-    # Logic Apps webhook 호출 (실패 허용 · 후처리 retry 는 Phase 4)
-    ok, err = await _post_logic_apps(req.event_type, req.payload_summary, req.correlation_id)
-    new_status = "SENT" if ok else "FAILED"
+    # InboundRejected: 5분 batch 집계를 위해 Redis 버퍼에 적재 (즉시 발송 X)
+    if req.event_type == "InboundRejected":
+        wh_id = req.payload_summary.get("target_wh_id", 0)
+        try:
+            redis_client().rpush(f"inbound_rejected_buffer:{wh_id}", json.dumps(req.payload_summary))
+            ok, err = True, None
+        except Exception as e:
+            ok, err = False, str(e)[:120]
+        new_status = "BUFFERED" if ok else "FAILED"
+    else:
+        recipients = get_recipients(req.event_type, req.payload_summary)
+        ok, err = await _post_logic_apps(req.event_type, req.payload_summary, req.correlation_id, recipients)
+        new_status = "SENT" if ok else "FAILED"
 
     insert_sql = """
         INSERT INTO notifications_log
