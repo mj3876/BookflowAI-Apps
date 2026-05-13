@@ -950,15 +950,21 @@ def approve_new_book_request(
             isbn13 = row[0]
 
             # 권역별 발주 지시서 자동 생성 (FR-A4.8 · 본사 신간 지시는 물류센터 자동 실행)
+            # location_type='WH' (시드 스키마 정합 · 'WAREHOUSE' 는 과거 명명 잔존 버그였음)
             for wh_id, qty in [(1, wh1_qty), (2, wh2_qty)]:
                 if qty <= 0:
                     continue
                 cur.execute(
-                    "SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'WAREHOUSE' LIMIT 1",
+                    "SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'WH' LIMIT 1",
                     (wh_id,),
                 )
                 loc = cur.fetchone()
-                target_loc = loc[0] if loc else wh_id  # fallback
+                if loc is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"WH 본체 location 누락 (wh_id={wh_id} · location_type='WH'). 시드 정합 확인 필요",
+                    )
+                target_loc = loc[0]
                 order_id = uuid4()
                 cur.execute(
                     """
@@ -969,7 +975,36 @@ def approve_new_book_request(
                     """,
                     (str(order_id), isbn13, target_loc, qty),
                 )
-                new_orders.append({"order_id": str(order_id), "wh_id": wh_id, "qty": qty})
+                new_orders.append({"order_id": str(order_id), "wh_id": wh_id, "qty": qty, "target_location_id": target_loc})
+
+                # WH → 매장 자동 분배 (REBALANCE NEWBOOK · 권역 내 균등 분배)
+                # 본사 신간 지시 = WH 수신 + 매장 분배 둘 다 자동 (Notion 2.3 "수신 확인만")
+                cur.execute(
+                    "SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'STORE_OFFLINE' ORDER BY location_id",
+                    (wh_id,),
+                )
+                stores = [r[0] for r in cur.fetchall()]
+                if stores:
+                    base = qty // len(stores)
+                    extra = qty - base * len(stores)  # 남는 권 → 앞 매장부터 +1
+                    for i, store_loc in enumerate(stores):
+                        store_qty = base + (1 if i < extra else 0)
+                        if store_qty <= 0:
+                            continue
+                        sub_id = uuid4()
+                        cur.execute(
+                            """
+                            INSERT INTO pending_orders
+                                (order_id, order_type, isbn13, source_location_id, target_location_id,
+                                 qty, urgency_level, status, approved_at)
+                            VALUES (%s, 'REBALANCE', %s, %s, %s, %s, 'NEWBOOK', 'APPROVED', NOW())
+                            """,
+                            (str(sub_id), isbn13, target_loc, store_loc, store_qty),
+                        )
+                        new_orders.append({
+                            "order_id": str(sub_id), "wh_id": wh_id, "qty": store_qty,
+                            "target_location_id": store_loc, "phase": "wh_to_store",
+                        })
 
             cur.execute(
                 """
