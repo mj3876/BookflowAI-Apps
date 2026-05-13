@@ -234,7 +234,7 @@ export default function WhTransfer() {
   // include_history=true · days=30 — 5 분 cache (분석용 · 실시간 불필요)
   const history30 = useQuery({
     queryKey: ['transfer-history-30', role],
-    queryFn: () => fetchPending(role, { order_type: 'WH_TRANSFER', include_history: true, days: 30, limit: 1000 }),
+    queryFn: () => fetchPending(role, { order_type: 'WH_TRANSFER', include_history: true, days: 30, limit: 500 }),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 5 * 60 * 1000,
   });

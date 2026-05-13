@@ -39,8 +39,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="bookflow-dashboard-svc", version="0.1.0", lifespan=lifespan)
-app.include_router(aggregate_router)
+# 정적 path (master /inventory/turnover · by-category 등) 를 먼저 include —
+# aggregate 의 /inventory/{wh_id} 가 정적 path 를 흡수하던 422 fix.
 app.include_router(master_router)
+app.include_router(aggregate_router)
 app.include_router(ws_router)
 
 
