@@ -458,6 +458,17 @@ export type CascadeBatchItem = { isbn13: string; target_location_id: number; qty
 export const postCascadeBatch = (role: Role, items: CascadeBatchItem[]) =>
   postJson<CascadeBatchResult>('/dashboard/cascade/run-batch', role, { items });
 
+// D+1 익일 plan 발의 — forecast_cache 기반 전 isbn × 전 location 동시 plan
+// 정식 source: BQ 결과 테이블 → forecast_cache sync (GCP 준비 후) · 현재 RDS 직읽음
+export type PlanDailyResult = {
+  snapshot_date: string;
+  rows_created: number;
+  by_stage: Record<string, number>;
+  isbns_planned: number;
+};
+export const postPlanDaily = (role: Role, snapshot_date?: string) =>
+  postJson<PlanDailyResult>('/dashboard/cascade/plan-daily', role, snapshot_date ? { snapshot_date } : {});
+
 // UX-6: 재고 수동 조정 (Manual 페이지) — inventory-svc /adjust 프록시.
 export type InventoryAdjustResult = {
   isbn13: string;

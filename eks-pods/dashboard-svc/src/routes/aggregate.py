@@ -197,6 +197,19 @@ async def cascade_run_batch(body: dict = Body(...), ctx: AuthContext = Depends(r
     return JSONResponse(status_code=sc, content=data or {"detail": "decision-svc unavailable"})
 
 
+@router.post("/cascade/plan-daily")
+async def cascade_plan_daily(body: dict = Body(default={}), ctx: AuthContext = Depends(require_auth)):
+    """D+1 forecast 기반 익일 배치 발의 — decision-svc /decision/plan-daily proxy.
+
+    BQ 결과 테이블 → forecast_cache (정식) / 현재는 RDS 직읽음 임시.
+    body (optional): {"snapshot_date": "YYYY-MM-DD"}  default = tomorrow KST.
+    response: {snapshot_date, rows_created, by_stage{1,2,3}, isbns_planned}
+    """
+    from ..clients import post_decision_plan_daily
+    sc, data = await post_decision_plan_daily(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "decision-svc unavailable"})
+
+
 @router.post("/inventory/adjust")
 async def inventory_adjust(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
     """UX-6 Manual 페이지 — 재고 수동 조정 (분실/파손/도난).

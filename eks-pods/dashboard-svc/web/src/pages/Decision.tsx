@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
-import { fetchInsufficientStock, fetchPending, postDecide, postCascadeBatch, postIntervene, postIntervenebatch, ApiError, type InsufficientStockItem, type Role } from '../api';
+import { fetchPending, postDecide, postIntervene, postIntervenebatch, postPlanDaily, ApiError, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
@@ -130,35 +130,26 @@ export default function Decision() {
     },
   });
 
-  // P1-4b 시연 trigger — 예측 부족 도서 자동 cascade 일괄 발의 (HQ 만)
-  const [demoOpen, setDemoOpen] = useState(false);
+  // 시연 trigger — D+1 forecast 기반 익일 plan 발의 (HQ 만)
+  // 2026-05-13: cascade/run-batch (insufficient list 기반 per-store decide) → plan-daily (전 isbn × 전 location 동시 plan)
+  // 정식 흐름은 BQ 결과 테이블 → forecast_cache sync (GCP 준비 후), 현재는 RDS forecast_cache 직읽음.
   const [demoResult, setDemoResult] = useState<string | null>(null);
-  const insufficient = useQuery({
-    queryKey: ['insufficient', role],
-    queryFn: () => fetchInsufficientStock(role, 2000),
-    enabled: role === 'hq-admin' && demoOpen,
-  });
 
-  // 사용자 결정 2026-05-13: frontend N 회 호출 → backend batch endpoint 1 회 호출 (503 race + 느림 해소)
   const triggerDemo = useMutation({
-    mutationFn: async (items: InsufficientStockItem[]) => {
-      return postCascadeBatch(role, items.map((it) => ({
-        isbn13: it.isbn13,
-        target_location_id: it.recommend_target_location_id,  // 출판사→WH→매장
-        qty: it.suggested_qty,
-        note: `시연용 자동 cascade · 예측 부족 (출판사→WH→매장 ${nameOf(it.store_id)})`,
-      })));
-    },
+    mutationFn: async () => postPlanDaily(role),
     onSuccess: (r) => {
-      const errTail = r.failed > 0 ? ` · 실패 ${r.failed}` : '';
-      setDemoResult(`✓ ${r.total}건 처리 — 1단계 ${r.s1} · 2단계 ${r.s2} · 3단계 ${r.s3}${errTail}`);
-      setDemoOpen(false);
+      const s1 = r.by_stage?.['1'] ?? 0;
+      const s2 = r.by_stage?.['2'] ?? 0;
+      const s3 = r.by_stage?.['3'] ?? 0;
+      setDemoResult(
+        `✓ D+1 (${r.snapshot_date}) plan 발의 — ${r.rows_created}건 (${r.isbns_planned} 도서) · 1단계 ${s1} · 2단계 ${s2} · 3단계 ${s3}`,
+      );
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
-      setTimeout(() => setDemoResult(null), 8000);
+      setTimeout(() => setDemoResult(null), 10000);
     },
-    onError: (e) => alert(`자동 발의 실패: ${String(e)}`),
+    onError: (e) => alert(`plan 발의 실패: ${String(e)}`),
   });
 
   return (
@@ -181,7 +172,11 @@ export default function Decision() {
             <button
               className="btn-outline btn-sm"
               title="시연용 — 예측 부족 도서 자동 cascade 일괄 발의 (각 단계의 처리 대기를 만들어 다른 역할이 승인 흐름 검증)"
-              onClick={() => setDemoOpen(true)}
+              disabled={triggerDemo.isPending}
+              onClick={() => {
+                if (!confirm('D+1 forecast 기반 익일 plan 을 발의합니다. 진행할까요?')) return;
+                triggerDemo.mutate();
+              }}
             >
               시연: 예측 자동 발의
             </button>
@@ -337,56 +332,6 @@ export default function Decision() {
           );
         }}
       </DateHistoryTabs>
-
-      {/* 시연 trigger 모달 — 예측 부족 도서 list 보여주고 일괄 cascade 발의 */}
-      {demoOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setDemoOpen(false)}>
-          <div className="bg-bf-bg border border-bf-border rounded-lg p-5 w-full max-w-2xl max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <h3 className="h2 mb-2">시연: 예측 부족 도서 자동 발의</h3>
-            <p className="text-xs text-bf-muted mb-3">
-              forecast-svc 가 detect 한 "예측 수요 &gt; 현 가용 재고" 인 도서. 한 번 클릭으로 각 도서 cascade 자동 발의 (1단계→2단계→3단계).
-              결과 pending_orders 가 생성되어 각 역할이 들어가 승인 흐름 검증 가능.
-            </p>
-            {insufficient.isLoading && <div className="text-xs text-bf-muted">조회 중…</div>}
-            {insufficient.data && (
-              <>
-                <div className="text-[11px] text-bf-muted mb-2">
-                  snapshot {insufficient.data.snapshot_date} · 부족 도서 {insufficient.data.items.length}건
-                </div>
-                <table className="data-table text-[11px]">
-                  <thead>
-                    <tr><th>도서</th><th>매장</th><th className="text-right">예측</th><th className="text-right">가용</th><th className="text-right">제안 발주</th></tr>
-                  </thead>
-                  <tbody>
-                    {insufficient.data.items.map((it) => (
-                      <tr key={`${it.isbn13}-${it.store_id}`}>
-                        <td>{it.title ?? it.isbn13}</td>
-                        <td>{nameOf(it.store_id)}</td>
-                        <td className="text-right">{it.predicted_demand.toFixed(1)}</td>
-                        <td className="text-right">{it.available}</td>
-                        <td className="text-right font-semibold">{it.suggested_qty}권</td>
-                      </tr>
-                    ))}
-                    {insufficient.data.items.length === 0 && (
-                      <tr><td colSpan={5} className="text-center py-4 text-bf-muted">부족 도서 없음 (시드 forecast_cache 확인 필요)</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </>
-            )}
-            <div className="mt-4 flex justify-end gap-2">
-              <button className="btn-secondary" onClick={() => setDemoOpen(false)}>취소</button>
-              <button
-                className="btn-primary"
-                disabled={triggerDemo.isPending || !insufficient.data || insufficient.data.items.length === 0}
-                onClick={() => insufficient.data && triggerDemo.mutate(insufficient.data.items)}
-              >
-                {triggerDemo.isPending ? '처리 중…' : `${insufficient.data?.items.length ?? 0}건 일괄 발의`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <ConfirmModal
         open={escalateTarget !== null}

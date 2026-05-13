@@ -18,12 +18,12 @@ import json
 import logging
 import math
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from ..auth import AuthContext, require_auth
 from ..db import db_conn
@@ -35,6 +35,11 @@ from ..models import (
     PendingOrder,
     PendingOrdersResponse,
 )
+
+# Daily planner 상수 (D+1 forecast 기반 익일 배치 발의)
+PLAN_SAFETY_DAYS = 5      # 매장 desired = predicted_demand × SAFETY_DAYS
+PLAN_WH_BUFFER_DAYS = 2   # WH 본체 desired = sum(same-wh stores predicted) × BUFFER_DAYS
+PLAN_MIN_ROW_QTY = 5      # 너무 작은 발의는 묶거나 스킵 (운송 효율)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/decision", tags=["decision"])
@@ -50,15 +55,16 @@ DEFAULT_ORDER_COST = 50000            # 발주 1건당 비용 (KRW · 운송 + �
 DEFAULT_HOLDING_COST_RATIO = 0.20     # books.price_standard 대비 연간 보관비 비율 (20%)
 
 
-def _get_target_wh(cur, target_location_id: int) -> int:
-    cur.execute("SELECT wh_id FROM locations WHERE location_id = %s", (target_location_id,))
+def _get_target_meta(cur, target_location_id: int) -> tuple[int, str]:
+    """target location 의 (wh_id, location_type) 반환. Stage 1 가드용."""
+    cur.execute("SELECT wh_id, location_type FROM locations WHERE location_id = %s", (target_location_id,))
     row = cur.fetchone()
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"target_location_id {target_location_id} 가 locations 에 없음",
         )
-    return row[0]
+    return row[0], row[1]
 
 
 def _effective_available(
@@ -190,6 +196,7 @@ def _stage1_source(cur, isbn13: str, target_wh: int, target_location_id: int, qt
               JOIN locations l ON l.location_id = i.location_id
               JOIN books b     ON b.isbn13 = i.isbn13
              WHERE l.wh_id = %s
+               AND l.location_type = 'STORE_OFFLINE'
                AND i.location_id <> %s
                AND i.isbn13 = %s
                AND b.active = TRUE
@@ -357,7 +364,7 @@ def decide(req: DecideRequest, ctx: AuthContext = Depends(require_auth)):
 
     with db_conn() as conn:
         with conn.cursor() as cur:
-            target_wh = _get_target_wh(cur, req.target_location_id)
+            target_wh, target_type = _get_target_meta(cur, req.target_location_id)
 
             # WH manager scope 검증 (자기 wh 외 결정 불가)
             if ctx.role == "wh-manager" and ctx.scope_wh_id is not None and ctx.scope_wh_id != target_wh:
@@ -388,7 +395,12 @@ def decide(req: DecideRequest, ctx: AuthContext = Depends(require_auth)):
             order_type: str
             source_loc: int | None
 
-            s1 = _stage1_source(cur, req.isbn13, target_wh, req.target_location_id, req.qty)
+            # Stage 1 (REBALANCE) 은 매장↔매장 만. target 이 WH 본체 / 온라인(virtual) 이면 스킵.
+            s1 = (
+                _stage1_source(cur, req.isbn13, target_wh, req.target_location_id, req.qty)
+                if target_type == "STORE_OFFLINE"
+                else None
+            )
             stage2_info: dict | None = None
             if s1 is not None:
                 stage_num, order_type, source_loc = 1, "REBALANCE", s1
@@ -573,3 +585,312 @@ def decide_batch(req: BatchDecideRequest, ctx: AuthContext = Depends(require_aut
         s1=counts["s1"], s2=counts["s2"], s3=counts["s3"],
         failed=failed, errors=errors,
     )
+
+
+# =============================================================================
+# Daily planner — D+1 forecast 기반 익일 inventory placement
+# =============================================================================
+# 매일 03:30 KST batch (cron) 가 호출. 1000책 × 14 location 을 한 번에 plan.
+# 알고리즘:
+#   per isbn:
+#     desired[loc]  = (매장: predicted×SAFETY_DAYS / WH: same-wh stores predicted×BUFFER_DAYS) + safety_stock
+#     effective[loc] = on_hand - reserved + in_transit_in
+#     gap[loc] = desired - effective   (양수=부족, 음수=잉여)
+#     Phase A (Stage 1 REBALANCE): 같은 wh 매장 잉여 → 같은 wh 매장 부족 (greedy)
+#     Phase B (Stage 2 WH_TRANSFER): WH 본체 잉여 → 다른 wh WH 본체 부족
+#     Phase C (Stage 3 PUBLISHER_ORDER): 잔존 부족 (WH 본체 단위로 집계) → 출판사 발주
+# =============================================================================
+
+def _build_daily_plan(cur, snapshot_date: date) -> list[dict]:
+    """D+1 forecast → optimal placement plan. Returns list of plan dicts."""
+    # 1. forecasts for snapshot_date (active books only)
+    cur.execute(
+        """
+        SELECT fc.isbn13, fc.store_id, fc.predicted_demand
+          FROM forecast_cache fc
+          JOIN books b ON b.isbn13 = fc.isbn13
+         WHERE fc.snapshot_date = %s
+           AND b.active = TRUE
+        """,
+        (snapshot_date,),
+    )
+    fc_rows = cur.fetchall()
+    forecast: dict[str, dict[int, float]] = {}
+    for isbn, store, pred in fc_rows:
+        forecast.setdefault(isbn, {})[int(store)] = float(pred)
+
+    if not forecast:
+        return []
+
+    isbns = list(forecast.keys())
+
+    # 2. locations meta
+    cur.execute(
+        "SELECT location_id, location_type, wh_id FROM locations "
+        "WHERE COALESCE(active::text, 'true') NOT IN ('false', '0')"
+    )
+    loc_meta: dict[int, dict] = {}
+    for loc, ltype, wh in cur.fetchall():
+        loc_meta[int(loc)] = {"type": ltype, "wh": int(wh) if wh is not None else None}
+
+    # 3. inventory for these isbns
+    cur.execute(
+        """
+        SELECT isbn13, location_id, on_hand, reserved_qty, COALESCE(safety_stock, 0)
+          FROM inventory
+         WHERE isbn13 = ANY(%s)
+        """,
+        (isbns,),
+    )
+    inventory: dict[str, dict[int, dict]] = {}
+    for isbn, loc, oh, res, safety in cur.fetchall():
+        inventory.setdefault(isbn, {})[int(loc)] = {
+            "on_hand": int(oh or 0),
+            "reserved": int(res or 0),
+            "safety": int(safety or 0),
+        }
+
+    # 4. in-transit (already PENDING/APPROVED, not executed) per (isbn, target_loc)
+    cur.execute(
+        """
+        SELECT isbn13, target_location_id, COALESCE(SUM(qty), 0)
+          FROM pending_orders
+         WHERE status IN ('PENDING', 'APPROVED', 'AUTO_EXECUTED')
+           AND executed_at IS NULL
+           AND target_location_id IS NOT NULL
+           AND isbn13 = ANY(%s)
+         GROUP BY isbn13, target_location_id
+        """,
+        (isbns,),
+    )
+    in_transit: dict[str, dict[int, int]] = {}
+    for isbn, tgt, qty in cur.fetchall():
+        in_transit.setdefault(isbn, {})[int(tgt)] = int(qty or 0)
+
+    # Pre-compute same-wh store map (for WH desired aggregation)
+    wh_to_stores: dict[int, list[int]] = {}
+    wh_body: dict[int, int] = {}  # wh_id → WH body location_id
+    for loc, m in loc_meta.items():
+        if m["wh"] is None:
+            continue
+        if m["type"] == "STORE_OFFLINE":
+            wh_to_stores.setdefault(m["wh"], []).append(loc)
+        elif m["type"] == "WH":
+            wh_body[m["wh"]] = loc
+
+    plan: list[dict] = []
+
+    for isbn in isbns:
+        inv = inventory.get(isbn, {})
+        fc = forecast[isbn]
+
+        # Compute gap per location
+        gaps: dict[int, dict] = {}
+        for loc, meta in loc_meta.items():
+            if meta["type"] not in ("STORE_OFFLINE", "WH"):
+                continue  # online virtual skip
+            i = inv.get(loc, {"on_hand": 0, "reserved": 0, "safety": 0})
+            in_in = in_transit.get(isbn, {}).get(loc, 0)
+            effective = i["on_hand"] - i["reserved"] + in_in
+
+            if meta["type"] == "STORE_OFFLINE":
+                pred = fc.get(loc, 0.0)
+                desired = math.ceil(pred * PLAN_SAFETY_DAYS) + i["safety"]
+            else:  # WH
+                same_wh_stores = wh_to_stores.get(meta["wh"], [])
+                wh_pred = sum(fc.get(s, 0.0) for s in same_wh_stores)
+                desired = math.ceil(wh_pred * PLAN_WH_BUFFER_DAYS) + i["safety"]
+
+            gap = desired - effective
+            gaps[loc] = {
+                "gap": gap, "effective": effective, "desired": desired,
+                "type": meta["type"], "wh": meta["wh"],
+            }
+
+        # Phase A: same-wh store-to-store REBALANCE
+        for wh_id, store_list in wh_to_stores.items():
+            shorts = sorted(
+                [(l, gaps[l]) for l in store_list if l in gaps and gaps[l]["gap"] > 0],
+                key=lambda x: -x[1]["gap"],
+            )
+            surplus = sorted(
+                [(l, gaps[l]) for l in store_list if l in gaps and gaps[l]["gap"] < 0],
+                key=lambda x: x[1]["gap"],
+            )
+            si = 0  # short index
+            for src_loc, src_g in surplus:
+                if si >= len(shorts):
+                    break
+                avail = -src_g["gap"]  # positive surplus
+                while avail > 0 and si < len(shorts):
+                    tgt_loc, tgt_g = shorts[si]
+                    if tgt_g["gap"] <= 0:
+                        si += 1
+                        continue
+                    take = min(avail, tgt_g["gap"])
+                    if take >= PLAN_MIN_ROW_QTY:
+                        plan.append({
+                            "order_type": "REBALANCE", "isbn": isbn,
+                            "src": src_loc, "tgt": tgt_loc, "qty": take, "stage": 1,
+                            "rationale": {
+                                "phase": "stage1_rebalance",
+                                "src_effective": src_g["effective"], "src_desired": src_g["desired"],
+                                "tgt_effective": tgt_g["effective"], "tgt_desired": tgt_g["desired"],
+                            },
+                        })
+                    avail -= take
+                    tgt_g["gap"] -= take
+                    if tgt_g["gap"] <= 0:
+                        si += 1
+                src_g["gap"] = -avail
+
+        # Phase B: cross-wh WH_TRANSFER (WH body ↔ WH body)
+        wh_short = sorted(
+            [(l, g) for l, g in gaps.items() if g["type"] == "WH" and g["gap"] > 0],
+            key=lambda x: -x[1]["gap"],
+        )
+        wh_surplus = sorted(
+            [(l, g) for l, g in gaps.items() if g["type"] == "WH" and g["gap"] < 0],
+            key=lambda x: x[1]["gap"],
+        )
+        si = 0
+        for src_loc, src_g in wh_surplus:
+            if si >= len(wh_short):
+                break
+            avail = -src_g["gap"]
+            while avail > 0 and si < len(wh_short):
+                tgt_loc, tgt_g = wh_short[si]
+                if loc_meta[src_loc]["wh"] == loc_meta[tgt_loc]["wh"]:
+                    si += 1
+                    continue
+                if tgt_g["gap"] <= 0:
+                    si += 1
+                    continue
+                take = min(avail, tgt_g["gap"])
+                if take >= PLAN_MIN_ROW_QTY:
+                    plan.append({
+                        "order_type": "WH_TRANSFER", "isbn": isbn,
+                        "src": src_loc, "tgt": tgt_loc, "qty": take, "stage": 2,
+                        "rationale": {
+                            "phase": "stage2_wh_transfer",
+                            "src_effective": src_g["effective"], "src_desired": src_g["desired"],
+                            "tgt_effective": tgt_g["effective"], "tgt_desired": tgt_g["desired"],
+                        },
+                    })
+                avail -= take
+                tgt_g["gap"] -= take
+                if tgt_g["gap"] <= 0:
+                    si += 1
+            src_g["gap"] = -avail
+
+        # Phase C: PUBLISHER_ORDER — residual per wh (aggregate store shortage to WH body)
+        for wh_id, store_list in wh_to_stores.items():
+            residual = 0
+            for l in store_list:
+                g = gaps.get(l)
+                if g and g["gap"] > 0:
+                    residual += g["gap"]
+            # WH body residual
+            wb = wh_body.get(wh_id)
+            if wb is not None and wb in gaps and gaps[wb]["gap"] > 0:
+                residual += gaps[wb]["gap"]
+            if residual < PLAN_MIN_ROW_QTY or wb is None:
+                continue
+            plan.append({
+                "order_type": "PUBLISHER_ORDER", "isbn": isbn,
+                "src": None, "tgt": wb, "qty": max(residual, MIN_EOQ), "stage": 3,
+                "rationale": {
+                    "phase": "stage3_publisher",
+                    "residual_aggregate": residual,
+                    "wh_id": wh_id,
+                },
+            })
+
+    return plan
+
+
+@router.post("/plan-daily")
+def plan_daily(
+    body: dict = Body(default={}),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """D+1 forecast 기반 일괄 익일 배치 발의.
+
+    매일 03:30 KST cron 또는 HQ 가 수동 trigger. 1 query → in-memory plan → bulk INSERT.
+
+    Body (optional): {"snapshot_date": "YYYY-MM-DD"}  default = tomorrow KST.
+    Response: {snapshot_date, rows_created, by_stage{1,2,3}, isbns_planned}
+    """
+    if ctx.role not in ("hq-admin", "wh-manager"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hq-admin/wh-manager only")
+
+    snap = body.get("snapshot_date")
+    if snap:
+        try:
+            snapshot_date = date.fromisoformat(snap)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"snapshot_date 형식 오류: {snap}")
+    else:
+        snapshot_date = datetime.utcnow().date() + timedelta(days=1)
+
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            plan = _build_daily_plan(cur, snapshot_date)
+            if not plan:
+                return {"snapshot_date": str(snapshot_date), "rows_created": 0, "by_stage": {}, "isbns_planned": 0}
+
+            # Urgency: Stage 3 (PUBLISHER) URGENT + auto_exec, 나머지 NORMAL
+            insert_rows = []
+            audit_rows = []
+            for p in plan:
+                order_id = str(uuid4())
+                urgency = "URGENT" if p["stage"] == 3 else "NORMAL"
+                auto_exec = (p["stage"] == 3 and urgency in ("URGENT", "CRITICAL"))
+                rationale = {
+                    **p["rationale"],
+                    "stage": p["stage"],
+                    "selected_order_type": p["order_type"],
+                    "source_location_id": p["src"],
+                    "plan_snapshot_date": str(snapshot_date),
+                }
+                insert_rows.append((
+                    order_id, p["order_type"], p["isbn"], p["src"], p["tgt"],
+                    p["qty"], urgency, auto_exec, json.dumps(rationale),
+                ))
+                audit_rows.append((
+                    ctx.user_id, order_id, json.dumps({
+                        "order_type": p["order_type"], "isbn13": p["isbn"], "qty": p["qty"],
+                        "stage": p["stage"], "source": "plan-daily",
+                    }),
+                ))
+
+            cur.executemany(
+                """
+                INSERT INTO pending_orders
+                    (order_id, order_type, isbn13, source_location_id, target_location_id,
+                     qty, urgency_level, auto_execute_eligible, forecast_rationale, status)
+                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'PENDING')
+                """,
+                insert_rows,
+            )
+            cur.executemany(
+                """
+                INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
+                VALUES ('system', %s, 'decision.plan_daily', 'pending_orders', %s, %s::jsonb)
+                """,
+                audit_rows,
+            )
+        conn.commit()
+
+    by_stage: dict[int, int] = {1: 0, 2: 0, 3: 0}
+    isbns_set: set[str] = set()
+    for p in plan:
+        by_stage[p["stage"]] = by_stage.get(p["stage"], 0) + 1
+        isbns_set.add(p["isbn"])
+
+    return {
+        "snapshot_date": str(snapshot_date),
+        "rows_created": len(plan),
+        "by_stage": by_stage,
+        "isbns_planned": len(isbns_set),
+    }
