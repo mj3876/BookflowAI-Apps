@@ -133,6 +133,7 @@ export const fetchPending = (
   role: Role,
   opts: {
     limit?: number;
+    offset?: number;
     order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
     wh_id?: number;
     /** 특정 일자 (YYYY-MM-DD KST) detail · lazy fetch. summary count 와 함께 사용 권장. */
@@ -144,6 +145,7 @@ export const fetchPending = (
 ) => {
   const qs = new URLSearchParams();
   qs.set('limit', String(opts.limit ?? 200));
+  if (opts.offset) qs.set('offset', String(opts.offset));
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
   if (opts.date) {
@@ -152,7 +154,11 @@ export const fetchPending = (
     qs.set('include_history', 'true');
     qs.set('days', String(opts.days ?? 7));
   }
-  return getJson<{ items: PendingOrder[] }>(`/dashboard/pending?${qs.toString()}`, role);
+  return getJson<{
+    items: PendingOrder[];
+    total?: number;
+    stage_counts?: Record<string, number>;
+  }>(`/dashboard/pending?${qs.toString()}`, role);
 };
 
 // 일자별 status count summary — 가벼운 응답. DateHistoryTabs pill row 카운트.

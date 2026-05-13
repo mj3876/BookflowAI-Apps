@@ -47,6 +47,7 @@ async def get_forecast(store_id: int, snapshot_date: str, token: str) -> dict | 
 async def get_pending_orders(
     token: str,
     limit: int = 50,
+    offset: int = 0,
     order_type: str | None = None,
     wh_id: int | None = None,
     include_history: bool = False,
@@ -57,8 +58,11 @@ async def get_pending_orders(
 
     - date=YYYY-MM-DD: 그 일자만 (lazy detail · DateHistoryTabs 가 호출)
     - include_history=true (deprecated): PENDING + 최근 N일. summary+date 로 대체 권장.
+    - offset: 페이지네이션 (limit 이전 row skip).
     """
     qs = [f"limit={limit}"]
+    if offset:
+        qs.append(f"offset={offset}")
     if order_type:
         qs.append(f"order_type={order_type}")
     if wh_id is not None:

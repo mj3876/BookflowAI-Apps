@@ -41,15 +41,24 @@ export default function Decision() {
   const prefillQty = parseInt(searchParams.get('qty') ?? '50', 10) || 50;
   const prefillNote = searchParams.get('note') ?? '';
 
-  // Stage 별 카운트 — 현재 PENDING 만 (light · default 응답이 PENDING 만 반환).
+  // Stage 별 카운트 + 페이지네이션 — 백엔드 응답의 total/stage_counts 사용 (limit 무관 정확 카운트).
   // 일자별 detail 은 DateHistoryTabs 가 자체 lazy fetch — 여기서 fetchPending 으로 통째 365 일치 fetch 안 함.
+  const PAGE_SIZE = 100;
+  const [page, setPage] = useState(1);
   const pending = useQuery({
-    queryKey: ['pending-active', role],
-    queryFn: () => fetchPending(role, { limit: 5000 }),
+    queryKey: ['pending-active', role, page],
+    queryFn: () => fetchPending(role, { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
     refetchInterval: 5000,
   });
 
   const pendingOnly = (pending.data?.items ?? []).filter((o) => o.status === 'PENDING');
+  const totalPending = pending.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalPending / PAGE_SIZE));
+  const sc = pending.data?.stage_counts ?? {};
+  const stage1Count = sc.REBALANCE ?? 0;
+  const stage2Count = sc.WH_TRANSFER ?? 0;
+  const stage3Count = sc.PUBLISHER_ORDER ?? 0;
+  // 현재 페이지 안의 stage 별 list (table 렌더 + urgent 카운트용)
   const stage1 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 1);
   const stage2 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 2);
   const stage3 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 3);
@@ -77,9 +86,12 @@ export default function Decision() {
   const [bulkEscalateOpen, setBulkEscalateOpen] = useState(false);
   const bulkEscalate = useMutation({
     mutationFn: async () => {
-      if (!pendingOnly.length) return { total: 0, ok: 0, failed: 0, errors: [] as string[] };
+      // 페이지네이션과 무관하게 오늘 PENDING 전체 fetch 후 batch 호출
+      const all = await fetchPending(role, { limit: 10000 });
+      const all_pending = (all.items ?? []).filter((o) => o.status === 'PENDING');
+      if (!all_pending.length) return { total: 0, ok: 0, failed: 0, errors: [] as string[] };
       const items: { order_id: string; approval_side: string }[] = [];
-      for (const o of pendingOnly) {
+      for (const o of all_pending) {
         if (o.order_type === 'WH_TRANSFER') {
           items.push({ order_id: o.order_id, approval_side: 'SOURCE' });
           items.push({ order_id: o.order_id, approval_side: 'TARGET' });
@@ -180,14 +192,14 @@ export default function Decision() {
             >
               시연: 예측 자동 발의
             </button>
-            {pendingOnly.length > 0 && (
+            {totalPending > 0 && (
               <button
                 className="px-3 py-1.5 rounded-md text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white border border-rose-700 disabled:opacity-50"
                 title="오늘 PENDING 전체 (Stage 1+2+3) 를 본사 단독 강제 승인. WH_TRANSFER 는 양측 (SOURCE+TARGET) 자동 처리."
                 disabled={bulkEscalate.isPending}
                 onClick={() => setBulkEscalateOpen(true)}
               >
-                {bulkEscalate.isPending ? '처리 중…' : `🔥 본사 강제 승인 (${pendingOnly.length}건)`}
+                {bulkEscalate.isPending ? '처리 중…' : `🔥 본사 강제 승인 (${totalPending}건)`}
               </button>
             )}
           </div>
@@ -200,23 +212,44 @@ export default function Decision() {
         </div>
       )}
 
-      {/* Stage 별 카운트 */}
+      {/* Stage 별 카운트 — 백엔드 stage_counts (전체 합 · 페이지 무관) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {[1, 2, 3].map((s) => {
-          const list = s === 1 ? stage1 : s === 2 ? stage2 : stage3;
-          const urgent = list.filter((o) => o.urgency_level === 'URGENT' || o.urgency_level === 'CRITICAL').length;
+          const count = s === 1 ? stage1Count : s === 2 ? stage2Count : stage3Count;
+          const urgentList = s === 1 ? stage1 : s === 2 ? stage2 : stage3;
+          const urgentSeen = urgentList.filter((o) => o.urgency_level === 'URGENT' || o.urgency_level === 'CRITICAL').length;
           return (
             <div key={s} className="metric-card">
               <div className="flex items-center justify-between mb-2">
                 <span className={STAGE_LABEL[s].color}>{STAGE_LABEL[s].name}</span>
-                {urgent > 0 && <span className="text-[11px] text-bf-danger">긴급 {urgent}건</span>}
+                {urgentSeen > 0 && <span className="text-[11px] text-bf-danger">긴급 (현재 페이지) {urgentSeen}건</span>}
               </div>
-              <div className="metric-value">{list.length}건</div>
+              <div className="metric-value">{count}건</div>
               <div className="text-[11px] text-bf-muted mt-1">{STAGE_LABEL[s].desc}</div>
             </div>
           );
         })}
       </div>
+
+      {/* 페이지네이션 컨트롤 */}
+      {totalPending > PAGE_SIZE && (
+        <div className="flex items-center justify-center gap-3 text-xs">
+          <button
+            className="btn-secondary btn-sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >← 이전</button>
+          <span className="text-bf-muted">
+            페이지 <b className="text-bf-text">{page}</b> / {totalPages}
+            <span className="ml-2">(총 {totalPending}건 · {PAGE_SIZE}건씩)</span>
+          </span>
+          <button
+            className="btn-secondary btn-sm"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >다음 →</button>
+        </div>
+      )}
 
       {/* 처리 대기 + 일자별 처리 기록 */}
       <DateHistoryTabs

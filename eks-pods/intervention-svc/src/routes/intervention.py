@@ -387,6 +387,7 @@ def queue_summary(
 def queue(
     ctx: AuthContext = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0, description="페이지네이션 offset (0-based · LIMIT 이전 row skip)"),
     order_type: str | None = Query(default=None, description="REBALANCE | WH_TRANSFER | PUBLISHER_ORDER"),
     wh_id: int | None = Query(default=None, description="해당 wh 가 source 또는 target 인 주문만"),
     date: str | None = Query(default=None, description="특정 일자 (YYYY-MM-DD KST) · history detail 용. 주어지면 그 날 처리 row 만"),
@@ -437,6 +438,7 @@ def queue(
         params.append(order_type)
 
     params.append(limit)
+    params.append(offset)
     # date / history 모드: 최신 처리/생성 순. PENDING 모드: urgency 우선 + 오래된 것 먼저.
     order_clause = (
         "ORDER BY COALESCE(po.approved_at, po.executed_at, po.created_at) DESC"
@@ -457,9 +459,21 @@ def queue(
           LEFT JOIN books b ON b.isbn13 = po.isbn13
          WHERE {' AND '.join(where)}
          {order_clause}
-         LIMIT %s
+         LIMIT %s OFFSET %s
+    """
+    # COUNT(*) + per-order_type COUNT — limit/offset 무관 전체 (top stage cards 용)
+    count_params = params[:-2]  # exclude limit + offset
+    count_sql = f"""
+        SELECT po.order_type, COUNT(*)::int
+          FROM pending_orders po
+         WHERE {' AND '.join(where)}
+         GROUP BY po.order_type
     """
     with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(count_sql, count_params)
+        stage_counts = {str(r[0]): int(r[1]) for r in cur.fetchall()}
+        total_all = sum(stage_counts.values())
+
         cur.execute(sql, params)
         rows = cur.fetchall()
 
@@ -474,7 +488,7 @@ def queue(
         )
         for r in rows
     ]
-    return QueueResponse(items=items)
+    return QueueResponse(items=items, total=total_all, stage_counts=stage_counts)
 
 
 def _record_approval(conn, order_id: str, ctx: AuthContext, side: str, decision: str, reject_reason: str | None) -> tuple[str, datetime]:

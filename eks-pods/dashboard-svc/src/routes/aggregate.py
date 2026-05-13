@@ -75,6 +75,7 @@ async def pending_grouped(
 async def pending(
     ctx: AuthContext = Depends(require_auth),
     limit: int = 50,
+    offset: int = 0,
     order_type: str | None = None,
     wh_id: int | None = None,
     include_history: bool = False,
@@ -89,7 +90,7 @@ async def pending(
     intervention-svc 가 role/scope 자동 적용 (wh-manager 는 자기 wh 만, hq-admin 은 옵션 wh_id).
     """
     data = await get_pending_orders(
-        ctx.token, limit=limit, order_type=order_type, wh_id=wh_id,
+        ctx.token, limit=limit, offset=offset, order_type=order_type, wh_id=wh_id,
         include_history=include_history, days=days, date=date,
     )
     if data is None:

@@ -34,6 +34,9 @@ class QueueItem(BaseModel):
 
 class QueueResponse(BaseModel):
     items: list[QueueItem]
+    # 페이지네이션: total = 필터 적용된 전체 row 수 (limit/offset 무관), stage_counts = order_type 별 count
+    total: int = 0
+    stage_counts: dict[str, int] = {}
 
 
 class ApproveRequest(BaseModel):
