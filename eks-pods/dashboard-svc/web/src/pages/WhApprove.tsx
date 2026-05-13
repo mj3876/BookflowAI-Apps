@@ -63,13 +63,15 @@ export default function WhApprove() {
     },
   });
 
-  // PENDING 만 light fetch — WH_TRANSFER 다이어그램 tally + bulkApprove 용.
-  // 일자별 detail 은 DateHistoryTabs 가 lazy fetch (365일치 통째 fetch 안 함).
+  // PENDING 만 light fetch — 다이어그램 tally · button label (전체 total) 용.
+  // 일자별 detail 은 DateHistoryTabs 가 lazy fetch + 페이지네이션.
+  // 여기 limit=1 + total 만 받아오는 식이면 best 인데, 현재 응답 형식상 limit 줄여도 total 은 정확.
   const pending = useQuery({
     queryKey: ['pending-active', tab, role],
-    queryFn: () => fetchPending(role, { order_type: tab, limit: 500 }),
+    queryFn: () => fetchPending(role, { order_type: tab, limit: 1 }),  // total + stage_counts 만 필요
     refetchInterval: 5000,
   });
+  const totalMyPending = pending.data?.total ?? 0;
 
   const act = useMutation({
     mutationFn: async (a: { order_id: string; action: 'approve' | 'reject'; side: 'FINAL' | 'SOURCE' | 'TARGET'; reason?: string }) => {
@@ -99,10 +101,12 @@ export default function WhApprove() {
     );
   }
 
-  // 일괄 승인 — backend bulk endpoint 단일 호출 (sequential 폐기)
+  // 일괄 승인 — 클릭 시 전체 PENDING fetch (limit=10000) → bulk endpoint 단일 호출
   // WH_TRANSFER: side 는 sideForOrder() 가 결정 (null = 상대 측 → skip)
   const bulkApprove = async () => {
-    const items = (pending.data?.items ?? []) as any[];
+    setBulkBusy(true);
+    const all = await fetchPending(role, { order_type: tab, limit: 10000 });
+    const items = (all.items ?? []) as any[];
     const batchItems: { order_id: string; approval_side: 'FINAL' | 'SOURCE' | 'TARGET' }[] = [];
     for (const o of items) {
       if (o.status !== 'PENDING') continue;
@@ -114,9 +118,8 @@ export default function WhApprove() {
         batchItems.push({ order_id: o.order_id, approval_side: 'FINAL' });
       }
     }
-    if (!batchItems.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
-    if (!window.confirm(`내 측 PENDING ${batchItems.length}건을 일괄 승인합니다. 진행할까요?`)) return;
-    setBulkBusy(true);
+    if (!batchItems.length) { setBulkBusy(false); setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
+    if (!window.confirm(`내 측 PENDING ${batchItems.length}건을 일괄 승인합니다. 진행할까요?`)) { setBulkBusy(false); return; }
     try {
       const r = await postIntervenebatch(role, 'approve', batchItems);
       const tail = tab === 'WH_TRANSFER' ? ' · 상대 측 미승인 시 PENDING 유지' : '';
@@ -244,10 +247,10 @@ export default function WhApprove() {
               <button
                 className="btn-primary text-xs"
                 onClick={bulkApprove}
-                disabled={bulkBusy || myPending.length === 0}
-                title="오늘의 내 측 PENDING 일괄 승인"
+                disabled={bulkBusy || totalMyPending === 0}
+                title="오늘의 내 측 PENDING 전체 (페이지 무관) 일괄 승인"
               >
-                {bulkBusy ? '진행 중…' : `내 측 전체 승인 (${myPending.length}건)`}
+                {bulkBusy ? '진행 중…' : `내 측 전체 승인 (${totalMyPending}건)`}
               </button>
             </div>
           ) : null;

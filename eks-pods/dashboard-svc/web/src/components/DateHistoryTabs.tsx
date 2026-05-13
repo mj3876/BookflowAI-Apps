@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchPending, fetchPendingSummary, type PendingOrder, type Role } from '../api';
 
@@ -165,18 +165,21 @@ export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(pr
     enabled: lazyMode,
   });
 
-  // 2) detail — 선택된 일자만 (lazy)
+  // 2) detail — 선택된 일자만 (lazy) + 페이지네이션 (page=1 부터 · 100 row/page)
   //    isAll 모드: PENDING 만 보여줌 (오늘 처리 대기 + 시점 무관)
   //    isToday   : date 없이 PENDING default · 5초 refetch
   //    과거 일자 : date=key · 영구 cache (refetch 없음)
+  const PAGE_SIZE = 100;
+  const [page, setPage] = useState(1);
+  // 일자/필터 바뀌면 page 1 로 reset
+  useEffect(() => { setPage(1); }, [selectedKey, statusFilter, order_type, wh_id]);
   const detailKey = isAll || isToday ? '__today__' : selectedKey;
   const detail = useQuery({
-    queryKey: ['pending-detail', role, order_type ?? null, wh_id ?? null, detailKey],
+    queryKey: ['pending-detail', role, order_type ?? null, wh_id ?? null, detailKey, page],
     queryFn: () => {
-      if (isAll || isToday) {
-        return fetchPending(role!, { order_type, wh_id, limit: 200 });
-      }
-      return fetchPending(role!, { order_type, wh_id, date: selectedKey, limit: 200 });
+      const opts = { order_type, wh_id, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE };
+      if (isAll || isToday) return fetchPending(role!, opts);
+      return fetchPending(role!, { ...opts, date: selectedKey });
     },
     refetchInterval: isAll || isToday ? 5_000 : false,
     staleTime: isAll || isToday ? 0 : Infinity,
@@ -224,14 +227,34 @@ export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(pr
     return itemsDayStats.get(key) ?? 0;
   };
 
-  // 헤더 status 분포 — dayItems 기준
+  // 헤더 status 분포
+  //  - lazy 모드: summary 의 선택 일자 row 사용 (전체 day count · 페이지 무관)
+  //  - items 모드: 클라이언트 측 카운트 (items 통째 보유)
   const counts = useMemo(() => {
+    if (lazyMode && summary.data) {
+      const r = summary.data.items.find((i) => i.date === selectedKey);
+      if (r) {
+        return {
+          PENDING: r.PENDING ?? 0,
+          APPROVED: r.APPROVED ?? 0,
+          EXECUTED: r.EXECUTED ?? 0,
+          REJECTED: r.REJECTED ?? 0,
+          total: r.total ?? 0,
+        };
+      }
+    }
     const c = { PENDING: 0, APPROVED: 0, EXECUTED: 0, REJECTED: 0, total: dayItems.length };
     for (const it of dayItems) {
       if (it.status && it.status in c) (c as Record<string, number>)[it.status]++;
     }
     return c;
-  }, [dayItems]);
+  }, [lazyMode, summary.data, selectedKey, dayItems]);
+
+  // 페이지네이션 — detail 응답의 total (전체 row 수 · 필터 적용 후) 기반
+  const dayTotal = lazyMode
+    ? (detail.data?.total ?? counts.total ?? 0)
+    : dayItems.length;
+  const totalPages = Math.max(1, Math.ceil(dayTotal / PAGE_SIZE));
 
   // 전체 row count
   const totalAll = useMemo(() => {
@@ -371,6 +394,26 @@ export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(pr
         viewMode,
         isLoading: lazyMode ? detail.isLoading : false,
       })}
+
+      {/* 페이지네이션 컨트롤 — lazy 모드 + 전체 > PAGE_SIZE 일 때만 */}
+      {lazyMode && dayTotal > PAGE_SIZE && (
+        <div className="flex items-center justify-center gap-3 text-xs py-2">
+          <button
+            className="btn-secondary btn-sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >← 이전</button>
+          <span className="text-bf-muted">
+            페이지 <b className="text-bf-text">{page}</b> / {totalPages}
+            <span className="ml-2">(총 {dayTotal}건 · {PAGE_SIZE}건씩)</span>
+          </span>
+          <button
+            className="btn-secondary btn-sm"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >다음 →</button>
+        </div>
+      )}
     </div>
   );
 }
