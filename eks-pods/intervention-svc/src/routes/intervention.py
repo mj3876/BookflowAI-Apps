@@ -58,13 +58,32 @@ INVENTORY_SVC_URL = os.environ.get(
 )
 
 
+# Logic Apps 발송 대상 event_type (Notion 알람 명세 2026-05-13).
+# 그 외 (OrderApproved/OrderRejected/OrderPending/ReturnPending 등) 는 logic-apps 제외 → spam 방지 · digest 만.
+_LOGIC_APPS_EVENTS = {
+    "AutoExecutedUrgent", "DailyPlanFinalized", "SpikeUrgent",
+    "ApprovalDelayed", "InboundRejected", "NewBookRequest",
+    "LambdaAlarm", "DeploymentRollback",
+}
+
+
+def _channels_for(event_type: str, severity: str) -> str:
+    """severity 별 channel 자동 결정 — Logic Apps spam 방지."""
+    if event_type in _LOGIC_APPS_EVENTS:
+        if severity == "CRITICAL":
+            return "redis,websocket,logic-apps,sms"
+        return "websocket,logic-apps"
+    # 일반 OrderApproved/OrderRejected/OrderPending/ReturnPending 등 → digest 만
+    return "redis,websocket"
+
+
 def _notify(token: str, event_type: str, severity: str, payload: dict, correlation_id: str | None = None) -> None:
     """notification-svc /send 호출 (실패 비치명 · log only)."""
     body = {
         "event_type": event_type,
         "severity": severity,
         "recipients": [],
-        "channels": "redis,websocket" if event_type == "OrderPending" else "websocket,logic-apps",
+        "channels": _channels_for(event_type, severity),
         "payload_summary": payload,
     }
     if correlation_id:
