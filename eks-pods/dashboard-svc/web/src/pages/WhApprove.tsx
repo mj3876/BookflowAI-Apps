@@ -33,6 +33,9 @@ export default function WhApprove() {
     if (t === 'REBALANCE' || t === 'WH_TRANSFER' || t === 'PUBLISHER_ORDER') setTab(t);
   }, [searchParams]);
   const [busy, setBusy] = useState<string | null>(null);
+  // 사용자가 방금 자기 측 승인/거절한 row — WH_TRANSFER 한쪽만 처리 시 row 가 PENDING 유지되어
+  // 화면에 그대로 보이는 게 헷갈림. selfDone 으로 "내 측 ✓ 처리 끝" 강조 + 액션 버튼 비활성.
+  const [selfDone, setSelfDone] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<{ order_id: string; side: 'FINAL' | 'SOURCE' | 'TARGET' } | null>(null);
@@ -78,7 +81,9 @@ export default function WhApprove() {
     onMutate: (v) => { setBusy(v.order_id); setFeedback(null); },
     onSuccess: (d, v) => {
       setBusy(null);
-      setFeedback(`${v.action === 'approve' ? '✓' : '✓'} ${v.side} ${v.action} · ${d.approval_id ?? d.order_id ?? d.detail}`);
+      setFeedback(`✓ ${v.side} ${v.action === 'approve' ? '승인' : '거절'} 완료 · ${d.approval_id ?? d.order_id ?? d.detail}`);
+      // 내 측 처리 완료 — UI 에 "✓ 내 측 끝" 표시 + 버튼 비활성. 양측 모두 완료되면 backend status=APPROVED → list 빠짐.
+      setSelfDone((prev) => new Set(prev).add(v.order_id));
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
@@ -310,7 +315,7 @@ export default function WhApprove() {
                               return (
                                 <div className={`px-2 py-1 rounded border ${isMine ? 'border-bf-primary bg-bf-primary/5' : 'border-bf-border bg-bf-panel2'}`}>
                                   <div className={`text-[10px] mb-1 ${isMine ? 'text-bf-primary font-semibold' : 'text-bf-muted'}`}>{label}</div>
-                                  {isMine && isPending && !readonly ? (
+                                  {isMine && isPending && !readonly && !selfDone.has(o.order_id) ? (
                                     <div className="flex gap-1">
                                       <button
                                         className="btn-primary btn-sm"
@@ -327,6 +332,8 @@ export default function WhApprove() {
                                         거부
                                       </button>
                                     </div>
+                                  ) : isMine && isPending && !readonly && selfDone.has(o.order_id) ? (
+                                    <span className="text-[10px] text-bf-success font-medium">✓ 내 측 처리 끝 · 상대 측 대기</span>
                                   ) : isMine && isPending && readonly ? (
                                     <span className="text-[10px] text-bf-muted">D-0 에서만 처리</span>
                                   ) : (
@@ -346,7 +353,7 @@ export default function WhApprove() {
                               return (
                                 <div className={`px-2 py-1 rounded border ${isMine ? 'border-bf-primary bg-bf-primary/5' : 'border-bf-border bg-bf-panel2'}`}>
                                   <div className={`text-[10px] mb-1 ${isMine ? 'text-bf-primary font-semibold' : 'text-bf-muted'}`}>{label}</div>
-                                  {isMine && isPending && !readonly ? (
+                                  {isMine && isPending && !readonly && !selfDone.has(o.order_id) ? (
                                     <div className="flex gap-1">
                                       <button
                                         className="btn-primary btn-sm"
@@ -363,6 +370,8 @@ export default function WhApprove() {
                                         거부
                                       </button>
                                     </div>
+                                  ) : isMine && isPending && !readonly && selfDone.has(o.order_id) ? (
+                                    <span className="text-[10px] text-bf-success font-medium">✓ 내 측 처리 끝 · 상대 측 대기</span>
                                   ) : isMine && isPending && readonly ? (
                                     <span className="text-[10px] text-bf-muted">D-0 에서만 처리</span>
                                   ) : (
