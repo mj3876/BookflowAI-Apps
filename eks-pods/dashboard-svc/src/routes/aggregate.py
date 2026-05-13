@@ -14,6 +14,7 @@ from ..clients import (
     get_intervention_queue,
     get_notifications_recent,
     get_pending_orders,
+    get_pending_summary,
     get_warehouse_inventory,
     post_decision_decide,
     patch_intervention_pending_order,
@@ -78,17 +79,37 @@ async def pending(
     wh_id: int | None = None,
     include_history: bool = False,
     days: int = 7,
+    date: str | None = None,
 ) -> Any:
     """V6.2 3-stage 의사결정 큐.
 
     - default: PENDING 만
-    - include_history=true: PENDING + 최근 N일 처리 row (일자별 history view 용)
+    - date=YYYY-MM-DD: 그 일자 (KST) 의 row 만 (lazy detail · DateHistoryTabs 가 호출)
+    - include_history=true (deprecated): PENDING + 최근 N일. /pending/summary + date 권장.
     intervention-svc 가 role/scope 자동 적용 (wh-manager 는 자기 wh 만, hq-admin 은 옵션 wh_id).
     """
     data = await get_pending_orders(
         ctx.token, limit=limit, order_type=order_type, wh_id=wh_id,
-        include_history=include_history, days=days,
+        include_history=include_history, days=days, date=date,
     )
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="intervention-svc unavailable")
+    return data
+
+
+@router.get("/pending/summary")
+async def pending_summary(
+    ctx: AuthContext = Depends(require_auth),
+    days: int = 7,
+    order_type: str | None = None,
+    wh_id: int | None = None,
+) -> Any:
+    """일자별 카운트 가벼운 summary — DateHistoryTabs pill row count 용.
+
+    intervention-svc /intervention/queue/summary 프록시.
+    응답 = {days, items: [{date, PENDING, APPROVED, EXECUTED, REJECTED, AUTO_EXECUTED, total}]}
+    """
+    data = await get_pending_summary(ctx.token, days=days, order_type=order_type, wh_id=wh_id)
     if data is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="intervention-svc unavailable")
     return data

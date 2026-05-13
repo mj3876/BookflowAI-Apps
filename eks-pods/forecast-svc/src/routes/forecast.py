@@ -54,19 +54,27 @@ def insufficient_stock(
     suggested_qty = gap × 1.2 (min 30, max 500 · 5일치라 더 큰 발주 허용).
     """
     # 시연 의도: '익일 (CURRENT_DATE + 1) 지점·물류센터별 수요예측 × 5 vs 현재 가용재고' 비교.
+    # 출판사 발주는 매장 직접 X · WH 경유 (사용자 결정 2026-05-13) — recommend_target = store_id 의 WH location.
     sql = """
         WITH target AS (
             SELECT MIN(snapshot_date) AS d FROM forecast_cache WHERE snapshot_date > CURRENT_DATE
+        ),
+        wh_loc AS (
+            -- 권역별 WH location_id (location_type='WH')
+            SELECT wh_id, location_id AS wh_location_id FROM locations WHERE location_type = 'WH'
         )
         SELECT f.isbn13, b.title, f.store_id,
                f.predicted_demand,
-               COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)::int AS available
+               COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)::int AS available,
+               COALESCE(wh.wh_location_id, f.store_id) AS recommend_target
           FROM forecast_cache f
           LEFT JOIN books b ON b.isbn13 = f.isbn13
           LEFT JOIN inventory i ON i.isbn13 = f.isbn13 AND i.location_id = f.store_id
+          LEFT JOIN locations sl ON sl.location_id = f.store_id
+          LEFT JOIN wh_loc wh ON wh.wh_id = sl.wh_id
           CROSS JOIN target
          WHERE f.snapshot_date = target.d
-         GROUP BY f.isbn13, b.title, f.store_id, f.predicted_demand
+         GROUP BY f.isbn13, b.title, f.store_id, f.predicted_demand, wh.wh_location_id
         HAVING f.predicted_demand * 5 > COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)
          ORDER BY (f.predicted_demand * 5 - COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)) DESC
          LIMIT %s
@@ -80,12 +88,14 @@ def insufficient_stock(
     items: list[InsufficientStockItem] = []
     for r in rows:
         isbn13, title, store_id, pred, avail = r[0], r[1], r[2], float(r[3]), int(r[4])
+        recommend_target = int(r[5])
         safety_5d = int(pred * 5)
         gap = max(0, safety_5d - avail)
         # gap × 1.2 buffer, min 30, max 500 (5일치 기준)
         suggested = max(30, min(500, int(gap * 1.2)))
         items.append(InsufficientStockItem(
             isbn13=isbn13, title=title, store_id=store_id,
+            recommend_target_location_id=recommend_target,
             predicted_demand=pred, safety_stock_5days=safety_5d,
             available=avail, gap=gap, suggested_qty=suggested,
         ))

@@ -2,8 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useOutletContext } from 'react-router-dom';
 import {
   fetchPending, fetchPendingGrouped, fetchSpikeEvents, fetchReturns, fetchNewBookRequests,
-  fetchSalesSummary, type Role,
+  fetchSalesSummary, fetchInsufficientStock, type Role,
 } from '../api';
+import KpiLine from '../components/charts/KpiLine';
+import KpiBar from '../components/charts/KpiBar';
+import KpiPie from '../components/charts/KpiPie';
 
 /**
  * HQ Home — 본사 진입 첫 화면.
@@ -22,14 +25,52 @@ export default function HqHome() {
   const grouped = useQuery({
     queryKey: ['hq-grouped', role, today],
     queryFn: () => fetchPendingGrouped(role, today),
-    refetchInterval: 30000,
+    refetchInterval: 60000,
+    staleTime: 30000,
   });
 
-  const pending = useQuery({ queryKey: ['hq-pending', role], queryFn: () => fetchPending(role, { limit: 100 }), refetchInterval: 10000 });
-  const spikes = useQuery({ queryKey: ['hq-spikes', role], queryFn: () => fetchSpikeEvents(role, 30), refetchInterval: 30000 });
-  const returns = useQuery({ queryKey: ['hq-returns', role], queryFn: () => fetchReturns(role, 50), refetchInterval: 15000 });
-  const requests = useQuery({ queryKey: ['hq-requests', role], queryFn: () => fetchNewBookRequests(role), refetchInterval: 30000 });
-  const sales = useQuery({ queryKey: ['hq-sales', role], queryFn: () => fetchSalesSummary(role), refetchInterval: 10000 });
+  // pending: PENDING orders 가 hq-admin 페이지에서 처리되므로 30 초 (이전 10 초는 과함)
+  const pending = useQuery({
+    queryKey: ['hq-pending', role],
+    queryFn: () => fetchPending(role, { limit: 100 }),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
+  // spike: 10 분 batch detect — 30 초도 빠름 · 3 분
+  const spikes = useQuery({
+    queryKey: ['hq-spikes', role],
+    queryFn: () => fetchSpikeEvents(role, 30),
+    refetchInterval: 3 * 60 * 1000,
+    staleTime: 60000,
+  });
+  // returns: 매장 신청 → 본사 처리. 분당이면 충분
+  const returns = useQuery({
+    queryKey: ['hq-returns', role],
+    queryFn: () => fetchReturns(role, 50),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+  // requests: 출판사 신간 (자주 안 변함) — 5 분
+  const requests = useQuery({
+    queryKey: ['hq-requests', role],
+    queryFn: () => fetchNewBookRequests(role),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+  // sales: 매출 1h summary — 30 초 (이전 10 초)
+  const sales = useQuery({
+    queryKey: ['hq-sales', role],
+    queryFn: () => fetchSalesSummary(role),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
+  // insufficient: forecast 기반 (시간당 갱신 OK)
+  const insufficient = useQuery({
+    queryKey: ['hq-insufficient', role],
+    queryFn: () => fetchInsufficientStock(role, 10),
+    refetchInterval: 30 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
+  });
 
   const items = pending.data?.items ?? [];
   const stage1 = items.filter((o) => o.order_type === 'REBALANCE').length;
@@ -46,6 +87,40 @@ export default function HqHome() {
 
   const todaysRevenue = sales.data?.total_revenue ?? 0;
   const totalTransactions = sales.data?.transactions ?? 0;
+
+  // 7일 매출 추이 mock (daily sales summary 미구현 — sales-summary 단일 시점 기반 가상 series)
+  // TODO: backend /dashboard/sales-daily 엔드포인트 생기면 교체
+  const today7 = (() => {
+    const arr: { date: string; revenue: number }[] = [];
+    const base = todaysRevenue || 1000000;
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const noise = 0.7 + Math.random() * 0.6;
+      arr.push({ date: `${d.getMonth() + 1}/${d.getDate()}`, revenue: Math.round(base * noise) });
+    }
+    return arr;
+  })();
+
+  // cascade stage 분포 (PENDING 만)
+  const cascadeDist = [
+    { name: '재분배 (1단계)', value: stage1 },
+    { name: '권역간 (2단계)', value: stage2 },
+    { name: '외부발주 (3단계)', value: stage3 },
+  ].filter((d) => d.value > 0);
+
+  // 검토 필요 도서 top 10 (forecast-svc insufficient)
+  const insufficientTop = (insufficient.data?.items ?? [])
+    .slice(0, 10)
+    .map((it) => ({
+      label: (it.title ?? it.isbn13).slice(0, 24),
+      gap: it.gap,
+    }));
+
+  // spike 도서 top 5 (z_score desc)
+  const spikeTop5 = [...(spikes.data?.items ?? [])]
+    .sort((a, b) => (b.z_score ?? 0) - (a.z_score ?? 0))
+    .slice(0, 5);
 
   return (
     <div className="flex flex-col gap-4">
@@ -114,7 +189,7 @@ export default function HqHome() {
         <Link to="/kpi" className="card hover:border-bf-primary transition">
           <div className="flex items-center justify-between mb-2">
             <h2 className="h2">오늘 매출</h2>
-            <span className="text-[11px] text-bf-muted">10초마다 갱신</span>
+            <span className="text-[11px] text-bf-muted">30초마다 갱신</span>
           </div>
           <div className="text-3xl font-bold text-bf-text">
             ₩{todaysRevenue.toLocaleString()}
@@ -145,7 +220,91 @@ export default function HqHome() {
         </Link>
       </div>
 
-      {/* 3행: 다음 액션 hint */}
+      {/* 3행: 7일 매출 추이 + cascade stage 분포 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="card lg:col-span-2">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📊 7일 매출 추이</h2>
+            <Link to="/kpi" className="text-[11px] text-bf-primary hover:underline">📈 상세 KPI 보기 →</Link>
+          </div>
+          <KpiLine
+            data={today7}
+            xKey="date"
+            yKey="revenue"
+            yLabels={['일 매출']}
+            area
+            height={220}
+            isLoading={sales.isLoading}
+          />
+        </div>
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📊 의사결정 단계 분포</h2>
+            <Link to="/decision" className="text-[11px] text-bf-primary hover:underline">처리 →</Link>
+          </div>
+          <KpiPie
+            data={cascadeDist}
+            nameKey="name"
+            valueKey="value"
+            donut
+            height={220}
+            isLoading={pending.isLoading}
+          />
+        </div>
+      </div>
+
+      {/* 4행: 검토 필요 도서 top 10 + spike top 5 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📊 검토 필요 도서 top 10 (예측 부족분)</h2>
+            <Link to="/decision" className="text-[11px] text-bf-primary hover:underline">처리 →</Link>
+          </div>
+          <KpiBar
+            data={insufficientTop}
+            xKey="label"
+            yKey="gap"
+            horizontal
+            yLabels={['부족 수량']}
+            height={280}
+            isLoading={insufficient.isLoading}
+          />
+        </div>
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">🔥 SNS 급등 top 5</h2>
+            <Link to="/spikes" className="text-[11px] text-bf-primary hover:underline">결정 발의 →</Link>
+          </div>
+          {spikeTop5.length === 0 ? (
+            <div className="text-xs text-bf-muted py-6 text-center">급등 도서 없음</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="text-bf-muted">
+                <tr>
+                  <th className="text-left py-1">제목</th>
+                  <th className="text-left py-1">분야</th>
+                  <th className="text-right py-1">z-score</th>
+                  <th className="text-right py-1">언급</th>
+                </tr>
+              </thead>
+              <tbody>
+                {spikeTop5.map((s) => (
+                  <tr key={s.event_id} className="border-t border-bf-border2">
+                    <td className="py-1.5 font-medium truncate max-w-[200px]">{s.title ?? s.isbn13}</td>
+                    <td className="py-1.5 text-bf-muted">{s.category ?? '-'}</td>
+                    <td className={`py-1.5 text-right font-bold ${(s.z_score ?? 0) >= 3 ? 'text-bf-danger' : 'text-bf-warn'}`}>
+                      {(s.z_score ?? 0).toFixed(2)}
+                    </td>
+                    <td className="py-1.5 text-right">{s.mentions_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* 5행: 다음 액션 hint */}
       <div className="card-tight bg-bf-panel2 border-bf-border2">
         <div className="text-[11px] text-bf-muted mb-2">📋 추천 액션</div>
         <ul className="text-xs space-y-1 ml-4 list-disc">

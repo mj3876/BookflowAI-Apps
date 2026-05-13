@@ -38,7 +38,14 @@ export default function WhInstructions() {
         {items.map((o) => (
           <tr key={o.order_id}>
             <td className="text-bf-muted">{o.approved_at ? new Date(o.approved_at).toLocaleString('ko-KR') : '-'}</td>
-            <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
+            <td>
+              {ko(ORDER_TYPE_KO, o.order_type)}
+              {o.order_type === 'PUBLISHER_ORDER' && (
+                <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 7~14일)">
+                  📦 출판사→WH (D+7~14)
+                </span>
+              )}
+            </td>
             {!hideUrgency && (
               <td>
                 <span className={

@@ -317,6 +317,7 @@ export default function BatchMapView({ items, nameOf, whIdOf }: Props) {
         <div className="flex items-center gap-1.5 mb-1">
           <span className="inline-block w-4 h-0.5 rounded" style={{ background: ORDER_TYPE_COLOR.PUBLISHER_ORDER }} />
           <span className="text-bf-text">출판사 발주</span>
+          <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배">lead time D+7~14</span>
         </div>
         <div className="mt-1.5 pt-1.5 border-t border-bf-border/40 text-bf-muted">
           점선 = 거절 우세 · 클릭 시 상세

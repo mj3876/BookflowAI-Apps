@@ -37,15 +37,21 @@ export default function WhInventory() {
   const whLoc = useMemo(() => locItems.find((l) => l.wh_id === wh_id && l.location_type === 'WH'), [locItems, wh_id]);
   const whLocId = whLoc?.location_id;
 
-  const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
+  // overview: queryKey 통일 — WhDashboard/BranchInventory/KPI 공유. 30 초 (재고 셀 변동 Redis 실시간)
+  const ov = useQuery({
+    queryKey: ['ov', wh_id, role],
+    queryFn: () => fetchOverview(wh_id, role),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
   const { flashed, availableOf } = useStockUpdates(role);
 
-  // D+1 AI 수요예측 (전 매장 batch) — 거점창고는 자기 location_id 기준
+  // D+1 AI 수요예측 batch — 하루 1회. 30 분
   const fcQ = useQuery({
     queryKey: ['forecast-all', role],
     queryFn: () => fetchAllForecast(role),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
   });
   const forecastMap = useMemo(() => {
     const m = new Map<string, number>();

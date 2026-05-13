@@ -1,19 +1,23 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchPending, fetchPendingSummary, type PendingOrder, type Role } from '../api';
 
 /**
  * 일자별 상세 history view — Approval/Decision/WhApprove/WhInstructions 공통.
  *
- * 사용자 요구 (2026-05-13):
- *   "매일 매일 하는 업무니까 과거기록을 상세하게 볼 수 가 있어야하잖아"
- * → summary 가 아니라 일자 selector + 그 날의 전체 row 상세 테이블.
+ * 효율 설계 (사용자 지적 2026-05-13):
+ *   "일자별로 들어갈 때 그 날짜만 불러와야 함. 통째로 365일 불러오는 거 미친짓."
+ * → 2 query 분리:
+ *    1) summary  : 일자별 status count (가벼움 · 365일 OK · 60s stale)
+ *    2) detail   : 선택된 일자만 row fetch (오늘만 5s refetch · 과거는 영구 cache)
  *
  * 디자인:
  *  - 상단 pill row: [전체] [오늘 (D-0)] [5/12 (D-1)] ... [5/07 (D-6)]
- *  - 일자 선택 시: children 에 그 날 filtered items 전달 + status 토글 적용
+ *  - 일자 선택 시: detail query 가 lazy fetch
  *  - D-0 선택 시: 부모가 전달한 todayActions 영역 표시 (전체 승인 / 일괄 발의 등)
- *
- * 데이터 모델: pending_orders 의 처리 시점 = approved_at | executed_at | created_at 폴백.
  */
+
+type OrderTypeOpt = 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
 
 type HistoryItem = {
   status?: string | null;
@@ -22,18 +26,46 @@ type HistoryItem = {
   executed_at?: string | null;
 };
 
-type Props<T extends HistoryItem> = {
+/**
+ * 2 가지 모드:
+ *  - "lazy" (role 지정): summary + 일자별 detail 을 컴포넌트가 직접 fetch (pending_orders 전용)
+ *  - "items" (items 지정): 부모가 통째 items 전달 후 클라이언트 측 일자별 filter (WhInstructions 등 다른 endpoint 용 fallback)
+ */
+type LazyProps = {
+  role: Role;
+  /** PUBLISHER_ORDER | REBALANCE | WH_TRANSFER · 미지정 시 전체 */
+  order_type?: OrderTypeOpt;
+  /** hq-admin 이 명시한 wh scope (wh-manager 는 backend 자동) */
+  wh_id?: number;
+  items?: never;
+};
+type ItemsProps<T extends HistoryItem> = {
+  /** 부모가 통째 items 전달 (lazy 모드 X · WhInstructions fallback 등) */
   items: T[];
+  role?: never;
+  order_type?: never;
+  wh_id?: never;
+};
+
+type CommonProps<T> = {
   days?: number;          // 과거 일자 수 (default 6 — 오늘 D-0 포함 시 7일치)
   children: (
-    filtered: T[],
-    meta: { selectedKey: string; isToday: boolean; isAll: boolean; viewMode: 'list' | 'map' },
+    items: T[],
+    meta: {
+      selectedKey: string;
+      isToday: boolean;
+      isAll: boolean;
+      viewMode: 'list' | 'map';
+      isLoading: boolean;
+    },
   ) => ReactNode;
   /** D-0 선택 시 children 위에 표시할 액션 영역 (전체 승인 버튼 등) */
   todayActions?: ReactNode;
   /** 페이지 제목 (헤더 우측 pill 옆) */
   pageLabel?: string;
 };
+
+type Props<T extends HistoryItem> = CommonProps<T> & (LazyProps | ItemsProps<T>);
 
 const STATUSES = ['all', 'PENDING', 'APPROVED', 'EXECUTED', 'REJECTED'] as const;
 type StatusFilter = typeof STATUSES[number];
@@ -53,28 +85,33 @@ function dateKey(iso: string | null | undefined): string | null {
   return kst.toISOString().slice(0, 10);
 }
 
-function pickTimestamp<T extends HistoryItem>(item: T): string | null | undefined {
-  // 처리 시점 우선순위: approved_at → executed_at → created_at
-  return item.approved_at ?? item.executed_at ?? item.created_at ?? null;
+function todayKstKey(): string {
+  return dateKey(new Date().toISOString())!;
 }
 
 function dayLabel(key: string, offset: number): { primary: string; secondary: string } {
-  // 오늘 = D-0, 어제 = D-1, ...
   if (offset === 0) return { primary: '오늘', secondary: 'D-0' };
-  // YYYY-MM-DD → MM/DD
   const [, mm, dd] = key.split('-');
-  // 다른 달 일자 (offset === -1) — MM/DD 만 표시, secondary 없음
   if (offset === -1) return { primary: `${parseInt(mm)}/${parseInt(dd)}`, secondary: '' };
   return { primary: `${parseInt(mm)}/${parseInt(dd)}`, secondary: `D-${offset}` };
 }
 
-export default function DateHistoryTabs<T extends HistoryItem>({
-  items,
-  days = 6,
-  children,
-  todayActions,
-  pageLabel,
-}: Props<T>) {
+function pickTimestamp<T extends HistoryItem>(it: T): string | null | undefined {
+  return it.approved_at ?? it.executed_at ?? it.created_at ?? null;
+}
+
+export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(props: Props<T>) {
+  const {
+    days = 6,
+    children,
+    pageLabel,
+    todayActions,
+  } = props;
+  const lazyMode = props.items === undefined;
+  const role = (props as LazyProps).role;
+  const order_type = (props as LazyProps).order_type;
+  const wh_id = (props as LazyProps).wh_id;
+  const providedItems = (props as ItemsProps<T>).items;
   // 최근 12개월 list (월 picker 드롭다운용)
   const monthOptions = useMemo(() => {
     const now = new Date();
@@ -111,48 +148,99 @@ export default function DateHistoryTabs<T extends HistoryItem>({
     return list;
   }, [days, selectedMonth, isCurrentMonth]);
 
-  const todayKey = isCurrentMonth ? dayKeys[0].key : dateKey(new Date().toISOString())!;
+  const todayKey = todayKstKey();
   const [selectedKey, setSelectedKey] = useState<string>(todayKey);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
 
-  // 일자별 stats (모든 status · pill 옆 카운트용)
-  const dayStats = useMemo(() => {
+  const isAll = selectedKey === 'all';
+  const isToday = selectedKey === todayKey;
+
+  // 1) summary — 일자별 카운트만 (lazy 모드 전용 · 가벼움)
+  const summary = useQuery({
+    queryKey: ['pending-summary', role, order_type ?? null, wh_id ?? null],
+    queryFn: () => fetchPendingSummary(role!, { days: 365, order_type, wh_id }),
+    staleTime: 60_000,
+    refetchInterval: 30_000,
+    enabled: lazyMode,
+  });
+
+  // 2) detail — 선택된 일자만 (lazy)
+  //    isAll 모드: PENDING 만 보여줌 (오늘 처리 대기 + 시점 무관)
+  //    isToday   : date 없이 PENDING default · 5초 refetch
+  //    과거 일자 : date=key · 영구 cache (refetch 없음)
+  const detailKey = isAll || isToday ? '__today__' : selectedKey;
+  const detail = useQuery({
+    queryKey: ['pending-detail', role, order_type ?? null, wh_id ?? null, detailKey],
+    queryFn: () => {
+      if (isAll || isToday) {
+        return fetchPending(role!, { order_type, wh_id, limit: 200 });
+      }
+      return fetchPending(role!, { order_type, wh_id, date: selectedKey, limit: 200 });
+    },
+    refetchInterval: isAll || isToday ? 5_000 : false,
+    staleTime: isAll || isToday ? 0 : Infinity,
+    enabled: lazyMode,
+  });
+
+  // lazy 모드: detail.data?.items / items 모드: 부모가 전달 + 클라이언트 측 일자 filter
+  const allRawItems: T[] = useMemo(() => {
+    if (lazyMode) return (detail.data?.items ?? []) as unknown as T[];
+    return providedItems ?? [];
+  }, [lazyMode, detail.data, providedItems]);
+
+  // items 모드에서는 클라이언트 측에서 일자별 filter (lazy 모드는 이미 그 일자 row 만 들어 있음)
+  const dayItems = useMemo(() => {
+    if (lazyMode) return allRawItems;  // 이미 그 일자만 fetch 됨
+    if (isAll) return allRawItems;
+    return allRawItems.filter((it) => dateKey(pickTimestamp(it)) === selectedKey);
+  }, [lazyMode, allRawItems, selectedKey, isAll]);
+
+  // status 토글 적용
+  const filtered = useMemo(() => {
+    if (statusFilter === 'all') return dayItems;
+    return dayItems.filter((it) => it.status === statusFilter);
+  }, [dayItems, statusFilter]);
+
+  // pill row count
+  //  - lazy 모드: summary 의 그 일자 total
+  //  - items 모드: 클라이언트 측 카운트 (items 통째 가지고 있음)
+  const itemsDayStats = useMemo(() => {
+    if (lazyMode) return new Map<string, number>();
     const m = new Map<string, number>();
-    for (const it of items) {
+    for (const it of allRawItems) {
       const k = dateKey(pickTimestamp(it));
       if (!k) continue;
       m.set(k, (m.get(k) ?? 0) + 1);
     }
     return m;
-  }, [items]);
+  }, [lazyMode, allRawItems]);
 
-  const isAll = selectedKey === 'all';
-  const isToday = selectedKey === todayKey;
+  const dayCount = (key: string): number => {
+    if (lazyMode) {
+      const r = summary.data?.items.find((i) => i.date === key);
+      return r?.total ?? 0;
+    }
+    return itemsDayStats.get(key) ?? 0;
+  };
 
-  // 선택된 일자 + status 로 필터
-  const filtered = useMemo(() => {
-    return items.filter((it) => {
-      if (!isAll) {
-        const k = dateKey(pickTimestamp(it));
-        if (k !== selectedKey) return false;
-      }
-      if (statusFilter !== 'all' && it.status !== statusFilter) return false;
-      return true;
-    });
-  }, [items, selectedKey, statusFilter, isAll]);
-
-  // 선택된 일자의 status 분포 (헤더 표시)
+  // 헤더 status 분포 — dayItems 기준
   const counts = useMemo(() => {
-    const dayItems = isAll
-      ? items
-      : items.filter((it) => dateKey(pickTimestamp(it)) === selectedKey);
     const c = { PENDING: 0, APPROVED: 0, EXECUTED: 0, REJECTED: 0, total: dayItems.length };
     for (const it of dayItems) {
       if (it.status && it.status in c) (c as Record<string, number>)[it.status]++;
     }
     return c;
-  }, [items, selectedKey, isAll]);
+  }, [dayItems]);
+
+  // 전체 row count
+  const totalAll = useMemo(() => {
+    if (lazyMode) {
+      if (!summary.data) return 0;
+      return summary.data.items.reduce((acc, i) => acc + i.total, 0);
+    }
+    return allRawItems.length;
+  }, [lazyMode, summary.data, allRawItems]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -175,12 +263,15 @@ export default function DateHistoryTabs<T extends HistoryItem>({
             isAll ? 'bg-bf-primary text-white' : 'bg-bf-panel2 text-bf-muted hover:bg-bf-panel'
           }`}
           onClick={() => setSelectedKey('all')}
+          title={lazyMode ? '현재 처리 대기 (PENDING) 만 표시' : '전체 표시'}
         >
-          전체 ({items.length})
+          {lazyMode
+            ? `처리 대기 (${summary.data?.items.find((i) => i.date === todayKey)?.PENDING ?? counts.PENDING})`
+            : `전체 (${allRawItems.length})`}
         </button>
         {dayKeys.map(({ key, offset }) => {
           const { primary, secondary } = dayLabel(key, offset);
-          const count = dayStats.get(key) ?? 0;
+          const count = dayCount(key);
           const selected = selectedKey === key;
           return (
             <button
@@ -203,29 +294,38 @@ export default function DateHistoryTabs<T extends HistoryItem>({
             </button>
           );
         })}
+        <span className="ml-2 text-[10px] text-bf-muted">
+          {lazyMode
+            ? `(요약 ${totalAll}건 · ${summary.isLoading ? '집계 중…' : `${summary.data?.items.length ?? 0}일`})`
+            : `(총 ${totalAll}건)`}
+        </span>
       </div>
 
       {/* 선택된 일자 헤더 + status 토글 */}
       <div className="card !py-2 !px-3 flex items-center gap-3 flex-wrap">
         <span className="text-sm font-semibold text-bf-text">
           {isAll
-            ? `📅 전체 (최근 ${days + 1}일)`
+            ? (lazyMode ? `📅 현재 처리 대기` : `📅 전체 (최근 ${days + 1}일)`)
             : isToday
               ? `📅 오늘 (D-0)`
               : `📅 ${selectedKey}`}
         </span>
         <span className="text-xs text-bf-muted">
-          처리 {counts.total}건
-          {counts.total > 0 && (
+          {lazyMode && detail.isLoading ? '조회 중…' : (
             <>
-              {' · '}
-              <span className="text-bf-warning">대기 {counts.PENDING}</span>
-              {' · '}
-              <span className="text-bf-success">승인 {counts.APPROVED}</span>
-              {' · '}
-              <span className="text-bf-muted">실행 {counts.EXECUTED}</span>
-              {' · '}
-              <span className="text-bf-danger">거절 {counts.REJECTED}</span>
+              처리 {counts.total}건
+              {counts.total > 0 && (
+                <>
+                  {' · '}
+                  <span className="text-bf-warning">대기 {counts.PENDING}</span>
+                  {' · '}
+                  <span className="text-bf-success">승인 {counts.APPROVED}</span>
+                  {' · '}
+                  <span className="text-bf-muted">실행 {counts.EXECUTED}</span>
+                  {' · '}
+                  <span className="text-bf-danger">거절 {counts.REJECTED}</span>
+                </>
+              )}
             </>
           )}
         </span>
@@ -264,7 +364,13 @@ export default function DateHistoryTabs<T extends HistoryItem>({
       {isToday && todayActions}
 
       {/* children 으로 filtered items 전달 */}
-      {children(filtered, { selectedKey, isToday, isAll, viewMode })}
+      {children(filtered, {
+        selectedKey,
+        isToday,
+        isAll,
+        viewMode,
+        isLoading: lazyMode ? detail.isLoading : false,
+      })}
     </div>
   );
 }

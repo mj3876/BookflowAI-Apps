@@ -41,7 +41,8 @@ class RefreshResponse(BaseModel):
 class InsufficientStockItem(BaseModel):
     isbn13: str
     title: str | None = None
-    store_id: int
+    store_id: int                      # 부족 매장
+    recommend_target_location_id: int  # 발주 대상 WH location_id (store_id 가 속한 권역 WH = 15 또는 16)
     predicted_demand: float       # 1일치 (참고용)
     safety_stock_5days: int = 0   # predicted_demand × 5 (안전재고 기준)
     available: int

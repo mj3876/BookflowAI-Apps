@@ -677,6 +677,246 @@ def instructions(
     }
 
 
+@router.get("/kpi/by-category")
+def kpi_by_category(
+    days: int = Query(default=30, ge=1, le=365),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """카테고리별 매출 (sales_realtime + books JOIN). role-scope 자동.
+
+    - wh-manager: 자기 권역 매장 (locations.wh_id) 만
+    - branch-clerk: 자기 매장 (scope_store_id) 만
+    """
+    where = ["s.event_ts >= NOW() - INTERVAL %s", "s.event_ts <= NOW()"]
+    params: list = [f"{days} days"]
+    if store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(store_id)
+
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+
+    sql = f"""
+        SELECT COALESCE(b.category_name, '미분류') AS category,
+               SUM(s.revenue)::bigint AS revenue,
+               SUM(s.qty)::int        AS qty,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+          LEFT JOIN books b ON b.isbn13 = s.isbn13
+         WHERE {' AND '.join(where)}
+         GROUP BY category
+         ORDER BY revenue DESC
+         LIMIT 20
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {"category": r[0], "revenue": int(r[1] or 0), "qty": r[2] or 0, "tx_count": r[3] or 0}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/bestsellers")
+def sales_bestsellers(
+    days: int = Query(default=7, ge=1, le=365),
+    limit: int = Query(default=20, ge=1, le=200),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """베스트셀러 (sales_realtime GROUP BY isbn13 ORDER BY qty DESC). role-scope 자동."""
+    where = ["s.event_ts >= NOW() - INTERVAL %s", "s.event_ts <= NOW()"]
+    params: list = [f"{days} days"]
+    if store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(store_id)
+
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+
+    sql = f"""
+        SELECT s.isbn13,
+               b.title, b.author,
+               SUM(s.qty)::int        AS qty,
+               SUM(s.revenue)::bigint AS revenue,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+          LEFT JOIN books b ON b.isbn13 = s.isbn13
+         WHERE {' AND '.join(where)}
+         GROUP BY s.isbn13, b.title, b.author
+         ORDER BY qty DESC
+         LIMIT %s
+    """
+    params_with_limit = params + [limit]
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params_with_limit)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {
+                "isbn13":   r[0],
+                "title":    r[1],
+                "author":   r[2],
+                "qty":      r[3] or 0,
+                "revenue":  int(r[4] or 0),
+                "tx_count": r[5] or 0,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/hourly")
+def sales_hourly(
+    store_id: int = Query(...),
+    date: str | None = Query(default=None, description="YYYY-MM-DD · 생략 시 오늘 KST"),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """시간대별 매출 (0~23 시 GROUP BY · 특정 매장 · 특정 날짜).
+
+    branch-clerk 는 자기 매장만 (FR-A7.3).
+    """
+    _check_store_scope(ctx, store_id)
+    target_date = date or datetime.now(_KST).date().isoformat()
+
+    sql = """
+        SELECT EXTRACT(HOUR FROM event_ts AT TIME ZONE 'Asia/Seoul')::int AS hour,
+               SUM(qty)::int        AS qty,
+               SUM(revenue)::bigint AS revenue,
+               COUNT(*)::int        AS tx_count
+          FROM sales_realtime
+         WHERE store_id = %s
+           AND (event_ts AT TIME ZONE 'Asia/Seoul')::date = %s
+         GROUP BY hour
+         ORDER BY hour
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (store_id, target_date))
+        rows = cur.fetchall()
+    return {
+        "date": target_date,
+        "store_id": store_id,
+        "items": [
+            {"hour": r[0], "qty": r[1] or 0, "revenue": int(r[2] or 0), "tx_count": r[3] or 0}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/cascade/funnel")
+def cascade_funnel(
+    days: int = Query(default=7, ge=1, le=90),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """cascade 단계별 통계 (pending_orders).
+
+    summary: 전체 status 분포 (AUTO_EXECUTED = status=APPROVED AND auto_execute_eligible=TRUE)
+    by_stage: order_type × status 매트릭스
+    daily: 일자별 status 분포 (최근 N일)
+    role-scope (wh-manager 자기 권역 / branch-clerk 자기 매장).
+    """
+    scope_clauses: list[str] = []
+    scope_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        scope_clauses.append(
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+        )
+        scope_params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        scope_clauses.append(
+            "(po.source_location_id = %s OR po.target_location_id = %s)"
+        )
+        scope_params.extend([ctx.scope_store_id, ctx.scope_store_id])
+
+    scope_sql = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
+
+    # 기간 (최근 N일) 필터 — created_at 기준
+    period_clause = "po.created_at >= NOW() - INTERVAL %s"
+    period_param = f"{days} days"
+
+    # status 라벨 (AUTO_EXECUTED 는 APPROVED + auto_execute_eligible 파생)
+    status_expr = (
+        "CASE WHEN po.status = 'APPROVED' AND po.auto_execute_eligible = TRUE "
+        "     THEN 'AUTO_EXECUTED' ELSE po.status END"
+    )
+
+    summary: dict[str, int] = {}
+    by_stage: dict[str, dict[str, int]] = {}
+    daily: list[dict] = []
+
+    with db_conn() as conn, conn.cursor() as cur:
+        # 1. summary (status 분포)
+        cur.execute(
+            f"""
+            SELECT {status_expr} AS s, COUNT(*)::int
+              FROM pending_orders po
+             WHERE {period_clause}{scope_sql}
+             GROUP BY s
+            """,
+            [period_param] + scope_params,
+        )
+        summary = {r[0]: r[1] for r in cur.fetchall() if r[0] is not None}
+
+        # 2. by_stage (order_type × status)
+        cur.execute(
+            f"""
+            SELECT po.order_type, {status_expr} AS s, COUNT(*)::int
+              FROM pending_orders po
+             WHERE {period_clause}{scope_sql}
+             GROUP BY po.order_type, s
+            """,
+            [period_param] + scope_params,
+        )
+        for order_type, st, n in cur.fetchall():
+            if order_type is None or st is None:
+                continue
+            by_stage.setdefault(order_type, {})[st] = n
+
+        # 3. daily (date × status)
+        cur.execute(
+            f"""
+            SELECT po.created_at::date AS d, {status_expr} AS s, COUNT(*)::int
+              FROM pending_orders po
+             WHERE {period_clause}{scope_sql}
+             GROUP BY d, s
+             ORDER BY d
+            """,
+            [period_param] + scope_params,
+        )
+        daily_map: dict[str, dict[str, int]] = {}
+        for d, st, n in cur.fetchall():
+            if d is None or st is None:
+                continue
+            key = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            daily_map.setdefault(key, {})[st] = n
+        daily = [{"date": k, **v} for k, v in sorted(daily_map.items())]
+
+    return {
+        "days": days,
+        "summary": summary,
+        "by_stage": by_stage,
+        "daily": daily,
+    }
+
+
 @router.get("/curation/{store_id}")
 def curation(store_id: int, ctx: AuthContext = Depends(require_auth)):
     """매장 큐레이션 - spike_events (인기 도서) + 매장 재고 가용성 (Branch Curation).

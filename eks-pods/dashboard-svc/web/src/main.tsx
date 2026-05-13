@@ -13,7 +13,6 @@ import Returns from './pages/Returns';
 import Requests from './pages/Requests';
 import Spikes from './pages/Spikes';
 import HqHome from './pages/HqHome';
-import WhHome from './pages/WhHome';
 import BranchHome from './pages/BranchHome';
 import WhDashboard from './pages/WhDashboard';
 import WhInventory from './pages/WhInventory';
@@ -46,7 +45,7 @@ function HomeRedirect() {
   const role = getRole();
   if (!role) return <Navigate to="/login" replace />;
   const group = roleGroup(role);
-  const home = group === 'HQ' ? '/home/hq' : group === 'WH' ? '/home/wh' : '/home/branch';
+  const home = group === 'HQ' ? '/home/hq' : group === 'WH' ? '/wh-dashboard' : '/home/branch';
   return <Navigate to={home} replace />;
 }
 
@@ -62,7 +61,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* 홈 3 페이지 (role 별 진입) */}
             <Route path="/home/hq"     element={<HqHome />} />
-            <Route path="/home/wh"     element={<WhHome />} />
+            {/* 2026-05-13 WhHome 폐기 · WhDashboard 가 권역 진입점. 기존 링크/북마크 보존을 위해 redirect 유지. */}
+            <Route path="/home/wh"     element={<Navigate to="/wh-dashboard" replace />} />
             <Route path="/home/branch" element={<BranchHome />} />
 
             {/* HQ */}

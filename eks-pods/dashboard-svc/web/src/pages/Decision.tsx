@@ -41,15 +41,15 @@ export default function Decision() {
   const prefillQty = parseInt(searchParams.get('qty') ?? '50', 10) || 50;
   const prefillNote = searchParams.get('note') ?? '';
 
+  // Stage 별 카운트 — 현재 PENDING 만 (light · default 응답이 PENDING 만 반환).
+  // 일자별 detail 은 DateHistoryTabs 가 자체 lazy fetch — 여기서 fetchPending 으로 통째 365 일치 fetch 안 함.
   const pending = useQuery({
-    queryKey: ['pending-all', role],
-    queryFn: () => fetchPending(role, { limit: 5000, include_history: true, days: 365 }),
+    queryKey: ['pending-active', role],
+    queryFn: () => fetchPending(role, { limit: 500 }),
     refetchInterval: 5000,
   });
 
-  const items = pending.data?.items ?? [];
-  // Stage 별 카운트는 현재 처리 대기 (PENDING) 기준 — history 포함 응답에서 PENDING 만 추출.
-  const pendingOnly = items.filter((o) => o.status === 'PENDING');
+  const pendingOnly = (pending.data?.items ?? []).filter((o) => o.status === 'PENDING');
   const stage1 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 1);
   const stage2 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 2);
   const stage3 = pendingOnly.filter((o) => STAGE_FROM_TYPE(o.order_type) === 3);
@@ -60,7 +60,9 @@ export default function Decision() {
     mutationFn: (order_id: string) =>
       postIntervene(role, 'approve', { order_id, approval_side: 'FINAL', note: 'HQ escalation' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pending-all'] });
+      qc.invalidateQueries({ queryKey: ['pending-active'] });
+      qc.invalidateQueries({ queryKey: ['pending-detail'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary'] });
       showToast({ type: 'success', message: '강제 승인 완료' });
     },
     onError: (e) => {
@@ -89,7 +91,9 @@ export default function Decision() {
     },
     onSuccess: (r) => {
       showToast({ type: 'success', message: `발의 성공 — ${r.stage}단계 (${r.order_type})` });
-      qc.invalidateQueries({ queryKey: ['pending-all'] });
+      qc.invalidateQueries({ queryKey: ['pending-active'] });
+      qc.invalidateQueries({ queryKey: ['pending-detail'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary'] });
       setPrefillTarget(null);
       setSearchParams({});
     },
@@ -115,9 +119,9 @@ export default function Decision() {
         try {
           const r = await postDecide(role, {
             isbn13: it.isbn13,
-            target_location_id: it.store_id,
+            target_location_id: it.recommend_target_location_id,  // store_id 의 WH 로 발주 (출판사→WH→매장 분배)
             qty: it.suggested_qty,
-            note: '시연용 자동 cascade · 예측 부족',
+            note: `시연용 자동 cascade · 예측 부족 (출판사→WH→매장 ${nameOf(it.store_id)})`,
           });
           if (r.stage === 1) s1++;
           else if (r.stage === 2) s2++;
@@ -129,7 +133,9 @@ export default function Decision() {
     onSuccess: (r) => {
       setDemoResult(`${r.total}건 처리 — 1단계 ${r.s1} · 2단계 ${r.s2} · 3단계 ${r.s3}`);
       setDemoOpen(false);
-      qc.invalidateQueries({ queryKey: ['pending-all'] });
+      qc.invalidateQueries({ queryKey: ['pending-active'] });
+      qc.invalidateQueries({ queryKey: ['pending-detail'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary'] });
       setTimeout(() => setDemoResult(null), 8000);
     },
     onError: (e) => alert(`자동 발의 실패: ${String(e)}`),
@@ -187,20 +193,21 @@ export default function Decision() {
 
       {/* 처리 대기 + 일자별 처리 기록 */}
       <DateHistoryTabs
-        items={items}
+        role={role}
         days={6}
         pageLabel="의사결정 처리 기록 7일"
-        todayActions={
-          <div className="card-tight flex items-center gap-2 text-xs">
-            <HelpHint text="자동 cascade 결과 또는 매장/SNS 발의 결과. 본사는 필요 시 강제 승인 (escalation) 으로 즉시 통과시킬 수 있어요." />
-            <span className="text-bf-muted">오늘 처리 대기 {pendingOnly.length}건</span>
-            <span className="label-tag ml-auto">5초마다 자동 갱신</span>
-          </div>
-        }
       >
-        {(filtered, { isToday, viewMode }) => viewMode === 'map' ? (
-          <BatchMapView items={filtered as any} nameOf={nameOf} />
-        ) : (
+        {(filtered, { isToday, viewMode, isLoading }) => {
+          const todayBar = isToday ? (
+            <div className="card-tight flex items-center gap-2 text-xs">
+              <HelpHint text="자동 cascade 결과 또는 매장/SNS 발의 결과. 본사는 필요 시 강제 승인 (escalation) 으로 즉시 통과시킬 수 있어요." />
+              <span className="text-bf-muted">오늘 처리 대기 {pendingOnly.length}건</span>
+              <span className="label-tag ml-auto">5초마다 자동 갱신</span>
+            </div>
+          ) : null;
+          const body = viewMode === 'map' ? (
+            <BatchMapView items={filtered as any} nameOf={nameOf} />
+          ) : (
           <div className="card">
             <table className="data-table">
               <thead>
@@ -231,6 +238,11 @@ export default function Decision() {
                       <td>
                         <span className={STAGE_LABEL[stage].color}>{stage}단계</span>
                         <span className="text-[11px] text-bf-muted ml-1">{ko(ORDER_TYPE_KO, o.order_type)}</span>
+                        {o.order_type === 'PUBLISHER_ORDER' && (
+                          <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 7~14일)">
+                            📦 출판사→WH (D+7~14)
+                          </span>
+                        )}
                       </td>
                       <td>
                         <div className="text-sm">{o.title ?? o.isbn13}</div>
@@ -271,7 +283,7 @@ export default function Decision() {
                     </tr>
                   );
                 })}
-                {filtered.length === 0 && !pending.isLoading && (
+                {filtered.length === 0 && !isLoading && (
                   <tr>
                     <td colSpan={role === 'hq-admin' && isToday ? 8 : 7}>
                       <EmptyState
@@ -284,7 +296,14 @@ export default function Decision() {
               </tbody>
             </table>
           </div>
-        )}
+          );
+          return (
+            <>
+              {todayBar}
+              {body}
+            </>
+          );
+        }}
       </DateHistoryTabs>
 
       {/* 시연 trigger 모달 — 예측 부족 도서 list 보여주고 일괄 cascade 발의 */}

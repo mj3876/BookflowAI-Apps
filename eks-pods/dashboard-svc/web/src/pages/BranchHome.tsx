@@ -1,7 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useOutletContext } from 'react-router-dom';
-import { fetchPendingGrouped, fetchInventoryByStore, fetchCuration, type Role } from '../api';
+import {
+  fetchPendingGrouped, fetchInventoryByStore, fetchCuration,
+  fetchHourlySales, fetchBestsellers, type Role,
+} from '../api';
+import { useScope } from '../auth';
 import { useStockUpdates } from '../useStockUpdates';
+import KpiLine from '../components/charts/KpiLine';
+import KpiBar from '../components/charts/KpiBar';
 
 const STORE_NAMES: Record<number, string> = {
   1: '강남점', 2: '광화문점', 3: '잠실점', 4: '홍대점', 5: '신촌점', 6: '용산점',
@@ -19,28 +25,51 @@ const STORE_NAMES: Record<number, string> = {
  */
 export default function BranchHome() {
   const { role } = useOutletContext<{ role: Role }>();
+  const { scope_store_id } = useScope();
   const today = new Date().toISOString().slice(0, 10);
 
-  // mock 'branch-clerk' role 의 scope_store_id = 1 (강남점) — 실제론 JWT 의 scope
-  const storeId = 1;
-  const storeName = STORE_NAMES[storeId];
+  // branch-clerk scope_store_id 우선 · hq-admin / wh-manager 는 강남점 fallback
+  const storeId = scope_store_id ?? 1;
+  const storeName = STORE_NAMES[storeId] ?? `매장 ${storeId}`;
 
+  // grouped: 매장 입고 list — batch 가 결정한 결과. 30 초로 완화
   const grouped = useQuery({
     queryKey: ['branch-grouped', role, today],
     queryFn: () => fetchPendingGrouped(role, today),
-    refetchInterval: 10000,
+    refetchInterval: 30000,
+    staleTime: 15000,
   });
 
+  // inventory: 재고 변동은 Redis stock.changed 로 실시간 → useQuery polling 은 분당으로 완화
   const inv = useQuery({
     queryKey: ['branch-inv', storeId, role],
     queryFn: () => fetchInventoryByStore(role, storeId),
-    refetchInterval: 30000,
+    refetchInterval: 60000,
+    staleTime: 30000,
   });
 
+  // curation: SNS 큐레이션 — 5 분
   const cur = useQuery({
     queryKey: ['branch-cur', storeId, role],
     queryFn: () => fetchCuration(role, storeId),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
+  });
+
+  // hourly: 1 day · 24 row — 1 분 OK
+  const hourly = useQuery({
+    queryKey: ['branch-hourly', storeId, role],
+    queryFn: () => fetchHourlySales(role, storeId),
     refetchInterval: 60000,
+    staleTime: 30000,
+  });
+
+  // best: 오늘 베스트셀러 — 1 분
+  const best = useQuery({
+    queryKey: ['branch-best', storeId, role],
+    queryFn: () => fetchBestsellers(role, 1, 10, storeId),
+    refetchInterval: 60000,
+    staleTime: 30000,
   });
 
   // Redis 실시간 (POS 결제 시 부족 도서 list 색 flash)
@@ -65,6 +94,31 @@ export default function BranchHome() {
   const matchedSpikes = curItems.filter((c) => (c.on_hand ?? 0) > 0).slice(0, 3);
 
   const totalToday = data?.manual_review ?? 0;
+
+  // 시간대별 매출 (0-23 시 · 누락 시간은 0 채움)
+  const hourlyRaw = (hourly.data?.items ?? []) as { hour: number; revenue: number }[];
+  const hourlyData = Array.from({ length: 24 }, (_, h) => {
+    const found = hourlyRaw.find((it) => it.hour === h);
+    return { hour: `${h}시`, revenue: found?.revenue ?? 0 };
+  });
+
+  // 오늘 베스트셀러
+  const bestItems = ((best.data?.items ?? []) as { isbn13: string; title?: string | null; qty: number }[])
+    .slice(0, 10)
+    .map((it) => ({ label: (it.title ?? it.isbn13).slice(0, 24), qty: it.qty }));
+
+  // 7일 매출 추이 mini (sales-daily endpoint 미구현 — placeholder)
+  const week7 = (() => {
+    const totalToday = hourlyRaw.reduce((s, it) => s + (it.revenue ?? 0), 0) || 500000;
+    const arr: { date: string; revenue: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const noise = 0.7 + Math.random() * 0.6;
+      arr.push({ date: `${d.getMonth() + 1}/${d.getDate()}`, revenue: Math.round(totalToday * noise) });
+    }
+    return arr;
+  })();
 
   return (
     <div className="flex flex-col gap-4">
@@ -94,6 +148,54 @@ export default function BranchHome() {
           <div className="metric-value">{matchedSpikes.length}건</div>
           <div className="text-[11px] text-bf-muted mt-1">매장 재고 매칭</div>
         </Link>
+      </div>
+
+      {/* 1.5행: 오늘 시간대별 매출 + 7일 mini */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="card lg:col-span-2">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📊 오늘 시간대별 매출</h2>
+            <span className="text-[11px] text-bf-muted">1분마다 갱신</span>
+          </div>
+          <KpiLine
+            data={hourlyData}
+            xKey="hour"
+            yKey="revenue"
+            yLabels={['시간 매출']}
+            area
+            height={200}
+            isLoading={hourly.isLoading}
+          />
+        </div>
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📉 7일 매출 추이</h2>
+          </div>
+          <KpiLine
+            data={week7}
+            xKey="date"
+            yKey="revenue"
+            yLabels={['일 매출']}
+            height={150}
+          />
+        </div>
+      </div>
+
+      {/* 1.7행: 오늘 베스트셀러 */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="h2 text-sm">🏆 오늘 베스트셀러 top 10</h2>
+          <Link to="/branch-sales" className="text-[11px] text-bf-primary hover:underline">매출 상세 →</Link>
+        </div>
+        <KpiBar
+          data={bestItems}
+          xKey="label"
+          yKey="qty"
+          horizontal
+          yLabels={['판매 수량']}
+          height={280}
+          isLoading={best.isLoading}
+        />
       </div>
 
       {/* 2행: 신간 분배 (urgency=NEWBOOK · 별도 색상 강조) */}

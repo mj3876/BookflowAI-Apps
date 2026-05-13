@@ -293,24 +293,102 @@ def grouped(
     }
 
 
+@router.get("/queue/summary")
+def queue_summary(
+    ctx: AuthContext = Depends(require_auth),
+    days: int = Query(default=7, ge=1, le=400),
+    order_type: str | None = Query(default=None),
+    wh_id: int | None = Query(default=None),
+):
+    """일자별 status count — 가벼운 응답. DateHistoryTabs pill row + 일자 stats 용.
+
+    효율 설계 (사용자 지적 2026-05-13):
+      "일자별로 들어갈 때 그 날짜만 불러와야 함. 통째로 365일 불러오는 거 미친짓."
+    → summary 는 일자×status 카운트만 (1행=1일×1status · ~30 rows / week).
+      detail row 는 selected date 만 별도 /queue?date=… 호출.
+
+    응답: {"days": N, "items": [{"date": "YYYY-MM-DD", "PENDING": N, "APPROVED": N, ...}]}
+    """
+    where = [
+        "((po.status = 'PENDING') OR "
+        f"(po.created_at >= NOW() - INTERVAL '{days} days'))"
+    ]
+    params: list = []
+
+    # role-scope (queue endpoint 와 동일)
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+        )
+        params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+
+    if wh_id is not None and ctx.role == "hq-admin":
+        where.append(
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+        )
+        params.extend([wh_id, wh_id])
+
+    if order_type:
+        where.append("po.order_type = %s")
+        params.append(order_type)
+
+    sql = f"""
+        SELECT
+            DATE(COALESCE(po.approved_at, po.executed_at, po.created_at) AT TIME ZONE 'Asia/Seoul') AS d,
+            CASE WHEN po.status = 'APPROVED' AND po.auto_execute_eligible THEN 'AUTO_EXECUTED' ELSE po.status END AS effective_status,
+            COUNT(*) AS cnt
+        FROM pending_orders po
+        WHERE {' AND '.join(where)}
+        GROUP BY d, effective_status
+        ORDER BY d DESC
+    """
+
+    from collections import defaultdict
+    grouped: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"PENDING": 0, "APPROVED": 0, "EXECUTED": 0, "REJECTED": 0, "AUTO_EXECUTED": 0, "total": 0}
+    )
+
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        for r in cur.fetchall():
+            d = r[0].isoformat() if r[0] else "unknown"
+            st = r[1]
+            cnt = r[2]
+            if st in grouped[d]:
+                grouped[d][st] = cnt
+            grouped[d]["total"] += cnt
+
+    items = [{"date": d, **counts} for d, counts in sorted(grouped.items(), reverse=True)]
+    return {"days": days, "items": items}
+
+
 @router.get("/queue", response_model=QueueResponse)
 def queue(
     ctx: AuthContext = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=500),
     order_type: str | None = Query(default=None, description="REBALANCE | WH_TRANSFER | PUBLISHER_ORDER"),
     wh_id: int | None = Query(default=None, description="해당 wh 가 source 또는 target 인 주문만"),
-    include_history: bool = Query(default=False, description="과거 처리 row 포함 (APPROVED/EXECUTED/REJECTED · 최근 N일)"),
+    date: str | None = Query(default=None, description="특정 일자 (YYYY-MM-DD KST) · history detail 용. 주어지면 그 날 처리 row 만"),
+    include_history: bool = Query(default=False, description="(deprecated) 과거 처리 row 포함 — 사용 자제. /queue/summary + date 조합 권장"),
     days: int = Query(default=7, ge=1, le=400, description="include_history=true 일 때 조회 기간 (일 · 최대 400)"),
 ):
     """주문 큐. role 기반 자동 필터:
 
     - default: PENDING 만 (오늘 처리 대기)
-    - include_history=true: PENDING + 최근 N일 처리 row 포함 (일자별 history view 용)
-    - hq-admin: 명시적 wh_id/order_type 없으면 전체
-    - wh-manager: scope_wh_id 자동 (자기 wh 가 source 또는 target)
+    - date=YYYY-MM-DD: 그 일자 (KST · approved_at|executed_at|created_at) 의 row 만
+    - include_history=true (deprecated): PENDING + 최근 N일 처리 row. summary+date 로 대체.
     """
-    if include_history:
-        # PENDING (시점 무관) OR 최근 N일 처리 row
+    params: list = []
+    if date is not None:
+        # 특정 일자 detail mode — KST 기준 그 날의 처리/생성 row 만
+        where = [
+            "DATE(COALESCE(po.approved_at, po.executed_at, po.created_at) AT TIME ZONE 'Asia/Seoul') = %s"
+        ]
+        params.append(date)
+    elif include_history:
+        # PENDING (시점 무관) OR 최근 N일 처리 row (deprecated · 호환)
         where = [
             "(po.status = 'PENDING' "
             "OR (po.status IN ('APPROVED','EXECUTED','REJECTED') "
@@ -318,7 +396,6 @@ def queue(
         ]
     else:
         where = ["po.status = 'PENDING'"]
-    params: list = []
 
     # role 자동 scope
     if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
@@ -341,17 +418,21 @@ def queue(
         params.append(order_type)
 
     params.append(limit)
-    # history 모드: 최신 처리/생성 순. PENDING 모드: urgency 우선 + 오래된 것 먼저.
+    # date / history 모드: 최신 처리/생성 순. PENDING 모드: urgency 우선 + 오래된 것 먼저.
     order_clause = (
         "ORDER BY COALESCE(po.approved_at, po.executed_at, po.created_at) DESC"
-        if include_history else
+        if (include_history or date is not None) else
         "ORDER BY po.urgency_level DESC, po.created_at ASC"
     )
+    # 응답 size 줄이기: forecast_rationale 은 detail 호출 시만 (date 또는 PENDING 모드).
+    # summary 호환 모드 (include_history 만) 는 rationale 제외 — 가벼운 응답.
+    select_rationale = (date is not None) or (not include_history)
+    rationale_col = "po.forecast_rationale" if select_rationale else "NULL::jsonb"
     sql = f"""
         SELECT po.order_id, po.order_type, po.isbn13,
                po.source_location_id, po.target_location_id, po.qty,
                po.urgency_level, po.auto_execute_eligible, po.status, po.created_at,
-               po.forecast_rationale, b.title,
+               {rationale_col}, b.title,
                po.approved_at, po.executed_at
           FROM pending_orders po
           LEFT JOIN books b ON b.isbn13 = po.isbn13
