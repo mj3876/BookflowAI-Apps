@@ -688,8 +688,9 @@ def kpi_by_category(
     - wh-manager: 자기 권역 매장 (locations.wh_id) 만
     - branch-clerk: 자기 매장 (scope_store_id) 만
     """
-    where = ["s.event_ts >= NOW() - INTERVAL %s", "s.event_ts <= NOW()"]
-    params: list = [f"{days} days"]
+    # PostgreSQL INTERVAL 은 parameter binding 불가 → f-string (days 는 int 라 safe)
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
     if store_id is not None:
         where.append("s.store_id = %s")
         params.append(store_id)
@@ -735,8 +736,8 @@ def sales_bestsellers(
     ctx: AuthContext = Depends(require_auth),
 ):
     """베스트셀러 (sales_realtime GROUP BY isbn13 ORDER BY qty DESC). role-scope 자동."""
-    where = ["s.event_ts >= NOW() - INTERVAL %s", "s.event_ts <= NOW()"]
-    params: list = [f"{days} days"]
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
     if store_id is not None:
         where.append("s.store_id = %s")
         params.append(store_id)
@@ -848,9 +849,8 @@ def cascade_funnel(
 
     scope_sql = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
 
-    # 기간 (최근 N일) 필터 — created_at 기준
-    period_clause = "po.created_at >= NOW() - INTERVAL %s"
-    period_param = f"{days} days"
+    # 기간 (최근 N일) 필터 — created_at 기준 (INTERVAL 은 parameter binding 불가)
+    period_clause = f"po.created_at >= NOW() - INTERVAL '{int(days)} days'"
 
     # status 라벨 (AUTO_EXECUTED 는 APPROVED + auto_execute_eligible 파생)
     status_expr = (
@@ -871,7 +871,7 @@ def cascade_funnel(
              WHERE {period_clause}{scope_sql}
              GROUP BY s
             """,
-            [period_param] + scope_params,
+            scope_params,
         )
         summary = {r[0]: r[1] for r in cur.fetchall() if r[0] is not None}
 
@@ -883,7 +883,7 @@ def cascade_funnel(
              WHERE {period_clause}{scope_sql}
              GROUP BY po.order_type, s
             """,
-            [period_param] + scope_params,
+            scope_params,
         )
         for order_type, st, n in cur.fetchall():
             if order_type is None or st is None:
@@ -899,7 +899,7 @@ def cascade_funnel(
              GROUP BY d, s
              ORDER BY d
             """,
-            [period_param] + scope_params,
+            scope_params,
         )
         daily_map: dict[str, dict[str, int]] = {}
         for d, st, n in cur.fetchall():
