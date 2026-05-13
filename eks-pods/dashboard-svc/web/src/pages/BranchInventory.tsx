@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { ApiError, fetchOverview, postBranchFeedback, postReturnsRequest, type Role } from '../api';
+import { ApiError, fetchAllForecast, fetchOverview, postBranchFeedback, postReturnsRequest, type Role } from '../api';
 import { useToast } from '../components/Toast';
 import { useLocations } from '../useLocations';
 import { useScope } from '../auth';
@@ -13,10 +13,32 @@ const RETURN_REASONS = ['파손', '불량', '누락', '계약 종료', '기타']
 
 export default function BranchInventory() {
   const { role } = useOutletContext<{ role: Role }>();
-  const { scope_store_id } = useScope();
-  const wh_id = 1;
-  const my_store = scope_store_id ?? 1;
-  const { nameOf, byId } = useLocations(role);
+  const { scope_store_id, scope_wh_id } = useScope();
+  const { nameOf, byId, items: locItems } = useLocations(role);
+
+  // 2026-05-13 role 기반 매장 selector (hq-admin: 전체 offline+WH · wh-manager: 자기 권역 · branch-clerk: selector 숨김)
+  const isHq = role === 'hq-admin';
+  const isWhMgr = role === 'wh-manager-1' || role === 'wh-manager-2';
+  const accessibleStores = useMemo(() => {
+    const offlineAndWh = locItems.filter(
+      (l: any) => l.location_type === 'STORE_OFFLINE' || l.location_type === 'WH'
+    );
+    if (isHq) return offlineAndWh;
+    if (isWhMgr && scope_wh_id != null) {
+      return offlineAndWh.filter((l: any) => l.wh_id === scope_wh_id);
+    }
+    if (scope_store_id) return offlineAndWh.filter((l: any) => l.location_id === scope_store_id);
+    return [];
+  }, [isHq, isWhMgr, locItems, scope_wh_id, scope_store_id]);
+
+  const [selectedLocId, setSelectedLocId] = useState<number | null>(null);
+  const effectiveLocId =
+    selectedLocId ?? scope_store_id ?? accessibleStores[0]?.location_id ?? 1;
+  const effectiveLoc = locItems.find((l: any) => l.location_id === effectiveLocId);
+  const effectiveWhId = effectiveLoc?.wh_id ?? 1;
+
+  const my_store = effectiveLocId;
+  const wh_id = effectiveWhId;
   // D1-4 Notion 1.1: 온라인 매장 = WH 본체 재고 출처 (별도 inventory row 없음 · backend UNION ALL 으로 노출)
   const myLoc = byId.get(my_store);
   const isOnlineStore = myLoc?.location_type === 'STORE_ONLINE';
@@ -24,6 +46,22 @@ export default function BranchInventory() {
   const qc = useQueryClient();
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
+
+  // D+1 AI 수요예측 (전 매장 batch · isbn|store_id 키로 map)
+  const fcQ = useQuery({
+    queryKey: ['forecast-all', role],
+    queryFn: () => fetchAllForecast(role),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+  const forecastMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of fcQ.data?.items ?? []) {
+      m.set(`${f.isbn13}|${f.store_id}`, f.predicted_demand);
+    }
+    return m;
+  }, [fcQ.data?.items]);
+  const forecastOf = (isbn: string, locId: number) => forecastMap.get(`${isbn}|${locId}`);
 
   // Redis stock.changed 실시간 (cell flash + 가용 즉시 갱신)
   const { flashed, availableOf } = useStockUpdates(role);
@@ -119,6 +157,26 @@ export default function BranchInventory() {
           현재 보유한 도서 SKU와 가용량 — POS 판매 시 자동 감소 (pos-ingestor Lambda).
           파손/불량/누락 등이 발견되면 SKU 우측 "반품 신청" 으로 본사에 신청할 수 있어요.
         </p>
+        {(isHq || isWhMgr) && accessibleStores.length > 1 && (
+          <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-bf-panel/60 border border-bf-border/40">
+            <span className="text-xs text-bf-muted">
+              {isHq ? '🔧 본사 모드' : '🏬 권역 매니저'}
+            </span>
+            <span className="text-xs">·</span>
+            <span className="text-xs text-bf-muted">보는 매장:</span>
+            <select
+              className="ipt text-sm px-2 py-1 rounded bg-bf-panel border border-bf-border"
+              value={effectiveLocId}
+              onChange={(e) => setSelectedLocId(parseInt(e.target.value, 10))}
+            >
+              {accessibleStores.map((l: any) => (
+                <option key={l.location_id} value={l.location_id}>
+                  {l.name}{l.location_type === 'WH' ? ' (온라인 포함)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {isOnlineStore && (
           <div className="mt-2 p-3 rounded-md bg-blue-50 border border-blue-300 text-xs text-blue-900">
             <span className="font-semibold">ℹ️ 온라인 매장 재고 안내</span> — 표시되는 재고는
@@ -196,6 +254,10 @@ export default function BranchInventory() {
               <th className="text-right">예약</th>
               <th className="text-right">가용</th>
               <th className="text-right">안전재고</th>
+              <th className="text-right" title="forecast-svc D+1 예측 수요 (권/일) · 5일치 = 안전재고 권장선">
+                AI 수요예측<br/>
+                <span className="text-[10px] font-normal text-bf-muted">D+1 권/일</span>
+              </th>
               <th>상태</th>
               <th className="text-right">처리</th>
             </tr>
@@ -233,6 +295,25 @@ export default function BranchInventory() {
                     {av}
                   </td>
                   <td className="text-right text-bf-muted">{safety}</td>
+                  <td className="text-right">
+                    {(() => {
+                      const pred = forecastOf(it.isbn13, my_store);
+                      if (pred == null) return <span className="text-bf-muted">-</span>;
+                      const safety5 = Math.round(pred * 5);
+                      // 가용 < 5일치 예측 = 안전선 미만 → 강조
+                      const insufficient = av < safety5;
+                      return (
+                        <>
+                          <span className={`font-mono ${insufficient ? 'text-orange-600 font-semibold' : ''}`}>
+                            {pred.toFixed(1)}
+                          </span>
+                          <div className="text-[10px] text-bf-muted">
+                            5일치 <span className={insufficient ? 'text-orange-600' : ''}>{safety5}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td>
                     {av === 0
                       ? <span className="pill-rejected">SOLD OUT</span>

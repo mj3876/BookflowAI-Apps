@@ -44,12 +44,13 @@ def get_forecast(store_id: int, snapshot_date: date, _: AuthContext = Depends(re
 
 @router.get("/insufficient-stock", response_model=InsufficientStockResponse)
 def insufficient_stock(
-    limit: int = 20,
+    limit: int = 2000,
     _: AuthContext = Depends(require_auth),
 ):
     """P1-4b 시연 trigger: 안전재고 5일치 (predicted_demand × 5) > 가용재고 인 도서 list.
 
-    안전재고 = 익일 forecast × 5 (사용자 결정 2026-05-13: forecast 는 권/일 단위 · 5일치를 안전선).
+    매일 배치성 처리 가정 (사용자 결정 2026-05-13) — limit default 2000 = 전수 검사.
+    안전재고 = 익일 forecast × 5 (forecast 는 권/일 단위 · 5일치를 안전선).
     suggested_qty = gap × 1.2 (min 30, max 500 · 5일치라 더 큰 발주 허용).
     """
     # 시연 의도: '익일 (CURRENT_DATE + 1) 지점·물류센터별 수요예측 × 5 vs 현재 가용재고' 비교.

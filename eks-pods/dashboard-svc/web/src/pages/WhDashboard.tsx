@@ -1,9 +1,11 @@
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchInventoryHeatmap, fetchOverview, fetchSalesByStore, type LocationCell, type Role } from '../api';
+import { fetchAllForecast, fetchInventoryHeatmap, fetchOverview, fetchSalesByStore, type LocationCell, type Role } from '../api';
 import { useStockUpdates } from '../useStockUpdates';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import { useLocations } from '../useLocations';
+import { useScope } from '../auth';
 
 // 부족률 (low_count / sku_count) 기반 히트맵 색상.
 // 0% green / <5% yellow / <15% orange / 15%+ red. 데이터 없으면 회색.
@@ -24,8 +26,23 @@ function locationLabel(c: LocationCell): string {
 
 export default function WhDashboard() {
   const { role } = useOutletContext<{ role: Role }>();
-  const wh_id = role === 'wh-manager-2' ? 2 : 1;
-  const { nameOf } = useLocations(role);
+  const { nameOf, items: locItems } = useLocations(role);
+  const { scope_wh_id } = useScope();
+
+  // 2026-05-13 role 기반 WH selector — hq-admin 두 권역 / wh-manager 자기 권역 고정
+  const isHq = role === 'hq-admin';
+  const isWhMgr = role === 'wh-manager-1' || role === 'wh-manager-2';
+  const accessibleWhs = useMemo(() => {
+    const whs = locItems.filter((l: any) => l.location_type === 'WH');
+    if (isHq) return whs;
+    if (isWhMgr && scope_wh_id != null) return whs.filter((l: any) => l.wh_id === scope_wh_id);
+    return [];
+  }, [isHq, isWhMgr, locItems, scope_wh_id]);
+
+  const [selectedWhId, setSelectedWhId] = useState<number | null>(null);
+  const fallbackWhId = role === 'wh-manager-2' ? 2 : 1;
+  const wh_id =
+    selectedWhId ?? scope_wh_id ?? accessibleWhs[0]?.wh_id ?? fallbackWhId;
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
   // Notion 2.1: 타 센터 재고 조회 (수도권 ↔ 영남 상호 가시성 · 2단계 의사결정용)
@@ -37,6 +54,22 @@ export default function WhDashboard() {
   });
   const byStore = useQuery({ queryKey: ['byStore', role], queryFn: () => fetchSalesByStore(role), refetchInterval: 5000 });
   const heat = useQuery({ queryKey: ['heatmap', role], queryFn: () => fetchInventoryHeatmap(role), refetchInterval: 30000 });
+
+  // D+1 AI 수요예측 (전 매장 batch · 권역 매장별 예측 셀에 표시)
+  const fcQ = useQuery({
+    queryKey: ['forecast-all', role],
+    queryFn: () => fetchAllForecast(role),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+  const forecastMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of fcQ.data?.items ?? []) {
+      m.set(`${f.isbn13}|${f.store_id}`, f.predicted_demand);
+    }
+    return m;
+  }, [fcQ.data?.items]);
+  const forecastOf = (isbn: string, locId: number) => forecastMap.get(`${isbn}|${locId}`);
 
   // Redis 실시간 (cell flash)
   const { flashed, availableOf } = useStockUpdates(role);
@@ -58,6 +91,20 @@ export default function WhDashboard() {
       <div>
         <h1 className="h1">{wh_id === 1 ? '수도권' : '영남'} 권역 대시보드</h1>
         <p className="text-bf-muted text-xs mt-1">관할 매장 매출 · 재고 · 대기 중인 주문 한눈에</p>
+        {isHq && accessibleWhs.length > 1 && (
+          <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-bf-panel/60 border border-bf-border/40">
+            <span className="text-xs text-bf-muted">🔧 본사 모드 · 보는 권역:</span>
+            <select
+              className="ipt text-sm px-2 py-1 rounded bg-bf-panel border border-bf-border"
+              value={wh_id}
+              onChange={(e) => setSelectedWhId(parseInt(e.target.value, 10))}
+            >
+              {accessibleWhs.map((l: any) => (
+                <option key={l.wh_id} value={l.wh_id}>{l.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -228,7 +275,8 @@ export default function WhDashboard() {
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="h2">권역 부족 도서 × 매장 (책 단위 실시간)</h2>
               <div className="text-[11px] text-bf-muted">
-                POS 결제 시 cell <span className="px-1 bg-yellow-100">flash</span> · 가용 ≤ 2× 안전재고 만 표시
+                POS 결제 시 cell <span className="px-1 bg-yellow-100">flash</span> · 가용 ≤ 2× 안전재고 만 표시 ·
+                <span className="ml-1">셀 아래 작은 숫자 = <b>AI D+1 예측 (5일치)</b></span>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -251,9 +299,17 @@ export default function WhDashboard() {
                         const av = availableOf(isbn, s.location_id) ?? it.available;
                         const safety = it.safety_stock ?? 10;
                         const cls = av === 0 ? 'text-red-600 font-bold' : av <= safety ? 'text-orange-600 font-bold' : 'text-yellow-700';
+                        const pred = forecastOf(isbn, s.location_id);
+                        const safety5 = pred != null ? Math.round(pred * 5) : null;
+                        const insufficient = safety5 != null && av < safety5;
                         return (
                           <td key={s.location_id} className={`py-1.5 px-2 text-right ${cls} ${flashed(isbn, s.location_id) ? 'animate-flash' : ''}`}>
                             {av}
+                            {pred != null && (
+                              <div className={`text-[10px] font-normal ${insufficient ? 'text-orange-600' : 'text-bf-muted'}`}>
+                                {pred.toFixed(1)} / {safety5}
+                              </div>
+                            )}
                           </td>
                         );
                       })}

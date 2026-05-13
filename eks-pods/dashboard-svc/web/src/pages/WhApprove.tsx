@@ -60,7 +60,7 @@ export default function WhApprove() {
 
   const pending = useQuery({
     queryKey: ['pending', tab, role, 'history'],
-    queryFn: () => fetchPending(role, { order_type: tab, limit: 500, include_history: true, days: 7 }),
+    queryFn: () => fetchPending(role, { order_type: tab, limit: 5000, include_history: true, days: 365 }),
     refetchInterval: 5000,
   });
 

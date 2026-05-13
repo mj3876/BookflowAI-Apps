@@ -300,7 +300,7 @@ def queue(
     order_type: str | None = Query(default=None, description="REBALANCE | WH_TRANSFER | PUBLISHER_ORDER"),
     wh_id: int | None = Query(default=None, description="해당 wh 가 source 또는 target 인 주문만"),
     include_history: bool = Query(default=False, description="과거 처리 row 포함 (APPROVED/EXECUTED/REJECTED · 최근 N일)"),
-    days: int = Query(default=7, ge=1, le=30, description="include_history=true 일 때 조회 기간 (일)"),
+    days: int = Query(default=7, ge=1, le=400, description="include_history=true 일 때 조회 기간 (일 · 최대 400)"),
 ):
     """주문 큐. role 기반 자동 필터:
 

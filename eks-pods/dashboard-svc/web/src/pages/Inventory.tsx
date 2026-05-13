@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchInventoryHeatmap, fetchSpikeEvents, type LocationCell, type Role, type SpikeEvent } from '../api';
+import { fetchAllForecast, fetchInventoryHeatmap, fetchSpikeEvents, type LocationCell, type Role, type SpikeEvent } from '../api';
 import AnomalyBanner from '../components/AnomalyBanner';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
@@ -19,6 +19,26 @@ export default function Inventory() {
   const { role } = useOutletContext<{ role: Role }>();
   const heat = useQuery({ queryKey: ['inv-heatmap', role], queryFn: () => fetchInventoryHeatmap(role), refetchInterval: 8000 });
   const spike = useQuery({ queryKey: ['spike-24h', role], queryFn: () => fetchSpikeEvents(role, 20), refetchInterval: 30000 });
+
+  // D+1 AI 수요예측 batch · location 단위로 합산 (전사 합 + 카드별 표시)
+  const fcQ = useQuery({
+    queryKey: ['forecast-all', role],
+    queryFn: () => fetchAllForecast(role),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+  const predByLoc = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const f of fcQ.data?.items ?? []) {
+      m.set(f.store_id, (m.get(f.store_id) ?? 0) + f.predicted_demand);
+    }
+    return m;
+  }, [fcQ.data?.items]);
+  const totalPred = useMemo(() => {
+    let s = 0;
+    for (const v of predByLoc.values()) s += v;
+    return s;
+  }, [predByLoc]);
 
   const items = heat.data?.items ?? [];
   const totalSku = items.reduce((s, c) => s + c.sku_count, 0);
@@ -61,7 +81,7 @@ export default function Inventory() {
         onClickSpikes={() => scrollTo(refSpike, null)}
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="metric-card">
           <div className="metric-label flex items-center">총 SKU<HelpHint text="현재 등록된 (위치 × 도서) 조합 수. 14 위치 × 1000책 ≒ 14000 SKU." /></div>
           <div className="metric-value">{totalSku.toLocaleString()}</div>
@@ -79,6 +99,11 @@ export default function Inventory() {
           <div className="metric-label flex items-center">완전 소진<HelpHint text="on_hand = 0 인 SKU 의 위치별 합. 즉시 발주 필요." /></div>
           <div className="metric-value text-bf-danger">{totalZero.toLocaleString()}</div>
         </div>
+        <div className="metric-card">
+          <div className="metric-label flex items-center">AI D+1 예측 수요<HelpHint text="forecast-svc D+1 forecast_cache 전 매장 합 (권/일). 5일치 = 안전재고 권장선." /></div>
+          <div className="metric-value">{Math.round(totalPred).toLocaleString()}</div>
+          <div className="text-[10px] text-bf-muted mt-1">권/일 · 5일치 {Math.round(totalPred * 5).toLocaleString()}</div>
+        </div>
       </div>
 
       <div ref={refWh}>
@@ -88,8 +113,8 @@ export default function Inventory() {
             <button className="ml-2 underline" onClick={() => setHighlightFilter(null)}>전체 보기</button>
           </div>
         )}
-        <WarehouseSection title="수도권 권역 (창고 1)" cells={byWh(1)} highlightFilter={highlightFilter} />
-        <WarehouseSection title="영남 권역 (창고 2)" cells={byWh(2)} highlightFilter={highlightFilter} />
+        <WarehouseSection title="수도권 권역 (창고 1)" cells={byWh(1)} highlightFilter={highlightFilter} predByLoc={predByLoc} />
+        <WarehouseSection title="영남 권역 (창고 2)" cells={byWh(2)} highlightFilter={highlightFilter} predByLoc={predByLoc} />
       </div>
 
       <div ref={refSpike} className="card">
@@ -128,10 +153,12 @@ function WarehouseSection({
   title,
   cells,
   highlightFilter,
+  predByLoc,
 }: {
   title: string;
   cells: LocationCell[];
   highlightFilter: 'zero' | 'low' | null;
+  predByLoc: Map<number, number>;
 }) {
   if (cells.length === 0) return null;
   // 필터 모드: 해당 항목 위치만 dim 해제 (전체 표시는 유지하되 강조만 변경)
@@ -168,7 +195,7 @@ function WarehouseSection({
                   {c.zero_count > 0 ? '주의' : c.low_count > 5 ? '경고' : '정상'}
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-4 gap-2 text-center">
                 <div>
                   <div className="text-[10px] text-bf-muted">SKU</div>
                   <div className="text-sm font-semibold">{c.sku_count}</div>
@@ -180,6 +207,21 @@ function WarehouseSection({
                 <div>
                   <div className="text-[10px] text-bf-muted">부족</div>
                   <div className={`text-sm font-semibold ${c.low_count > 0 ? 'text-bf-warn' : ''}`}>{c.low_count}</div>
+                </div>
+                <div title="forecast-svc D+1 예측 수요 합 (권/일)">
+                  <div className="text-[10px] text-bf-muted">AI 예측</div>
+                  {(() => {
+                    const p = predByLoc.get(c.location_id);
+                    if (p == null) return <div className="text-sm font-semibold text-bf-muted">-</div>;
+                    const safety5 = Math.round(p * 5);
+                    const insufficient = c.total_qty < safety5;
+                    return (
+                      <div className={`text-sm font-semibold ${insufficient ? 'text-orange-600' : ''}`}>
+                        {Math.round(p).toLocaleString()}
+                        <span className="text-[10px] font-normal text-bf-muted"> /일</span>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
               <div className="mt-2 h-1.5 bg-bf-bg rounded overflow-hidden">

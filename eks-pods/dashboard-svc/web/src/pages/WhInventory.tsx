@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchOverview, type Role } from '../api';
+import { fetchAllForecast, fetchOverview, type Role } from '../api';
 import { useLocations } from '../useLocations';
+import { useScope } from '../auth';
 import { useStockUpdates } from '../useStockUpdates';
 import Pagination, { pageSlice } from '../components/Pagination';
 
@@ -15,7 +16,22 @@ import Pagination, { pageSlice } from '../components/Pagination';
 export default function WhInventory() {
   const { role } = useOutletContext<{ role: Role }>();
   const { byId, items: locItems } = useLocations(role);
-  const wh_id = role === 'wh-manager-2' ? 2 : 1;
+  const { scope_wh_id } = useScope();
+
+  // 2026-05-13 role 기반 WH selector — hq-admin: 두 권역 선택 가능 · wh-manager: 자기 권역만
+  const isHq = role === 'hq-admin';
+  const isWhMgr = role === 'wh-manager-1' || role === 'wh-manager-2';
+  const accessibleWhs = useMemo(() => {
+    const whs = locItems.filter((l: any) => l.location_type === 'WH');
+    if (isHq) return whs;
+    if (isWhMgr && scope_wh_id != null) return whs.filter((l: any) => l.wh_id === scope_wh_id);
+    return [];
+  }, [isHq, isWhMgr, locItems, scope_wh_id]);
+
+  const [selectedWhId, setSelectedWhId] = useState<number | null>(null);
+  const fallbackWhId = role === 'wh-manager-2' ? 2 : 1;
+  const wh_id =
+    selectedWhId ?? scope_wh_id ?? accessibleWhs[0]?.wh_id ?? fallbackWhId;
 
   // 내 거점창고 location (각 wh 당 1개) — locations 의 wh_id × type=WH
   const whLoc = useMemo(() => locItems.find((l) => l.wh_id === wh_id && l.location_type === 'WH'), [locItems, wh_id]);
@@ -23,6 +39,22 @@ export default function WhInventory() {
 
   const ov = useQuery({ queryKey: ['ov', wh_id, role], queryFn: () => fetchOverview(wh_id, role), refetchInterval: 5000 });
   const { flashed, availableOf } = useStockUpdates(role);
+
+  // D+1 AI 수요예측 (전 매장 batch) — 거점창고는 자기 location_id 기준
+  const fcQ = useQuery({
+    queryKey: ['forecast-all', role],
+    queryFn: () => fetchAllForecast(role),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+  const forecastMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of fcQ.data?.items ?? []) {
+      m.set(`${f.isbn13}|${f.store_id}`, f.predicted_demand);
+    }
+    return m;
+  }, [fcQ.data?.items]);
+  const forecastOf = (isbn: string, locId: number) => forecastMap.get(`${isbn}|${locId}`);
 
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<'available' | 'on_hand' | 'title'>('available');
@@ -66,6 +98,20 @@ export default function WhInventory() {
           자기 권역 거점창고의 도서 1,000종 재고를 실시간으로 봅니다. 온라인 매장 주문도 이 창고에서 출하 (Notion 1.1).
           관할 지점으로의 권역 내 재분배·외부 발주 의사결정에 활용.
         </p>
+        {isHq && accessibleWhs.length > 1 && (
+          <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-bf-panel/60 border border-bf-border/40">
+            <span className="text-xs text-bf-muted">🔧 본사 모드 · 보는 권역:</span>
+            <select
+              className="ipt text-sm px-2 py-1 rounded bg-bf-panel border border-bf-border"
+              value={wh_id}
+              onChange={(e) => setSelectedWhId(parseInt(e.target.value, 10))}
+            >
+              {accessibleWhs.map((l: any) => (
+                <option key={l.wh_id} value={l.wh_id}>{l.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -96,6 +142,10 @@ export default function WhInventory() {
               <th className="text-right">예약</th>
               <th className="text-right">가용</th>
               <th className="text-right">안전재고</th>
+              <th className="text-right" title="forecast-svc D+1 권역 예측 수요 (권/일)">
+                AI 수요예측<br/>
+                <span className="text-[10px] font-normal text-bf-muted">D+1 권/일</span>
+              </th>
               <th>상태</th>
             </tr>
           </thead>
@@ -118,12 +168,30 @@ export default function WhInventory() {
                   <td className="text-right font-mono text-bf-muted">{it.reserved_qty}</td>
                   <td className={`text-right font-mono ${tone.c}`}>{av}</td>
                   <td className="text-right font-mono text-bf-muted">{safety}</td>
+                  <td className="text-right">
+                    {(() => {
+                      const pred = whLocId != null ? forecastOf(it.isbn13, whLocId) : undefined;
+                      if (pred == null) return <span className="text-bf-muted">-</span>;
+                      const safety5 = Math.round(pred * 5);
+                      const insufficient = av < safety5;
+                      return (
+                        <>
+                          <span className={`font-mono ${insufficient ? 'text-orange-600 font-semibold' : ''}`}>
+                            {pred.toFixed(1)}
+                          </span>
+                          <div className="text-[10px] text-bf-muted">
+                            5일치 <span className={insufficient ? 'text-orange-600' : ''}>{safety5}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td><span className={`text-[10px] px-1.5 py-0.5 rounded ${tone.c}`}>{tone.label}</span></td>
                 </tr>
               );
             })}
             {pageItems.length === 0 && (
-              <tr><td colSpan={7} className="text-center py-6 text-bf-muted">{search ? '검색 결과 없음' : '재고 데이터 없음'}</td></tr>
+              <tr><td colSpan={8} className="text-center py-6 text-bf-muted">{search ? '검색 결과 없음' : '재고 데이터 없음'}</td></tr>
             )}
           </tbody>
         </table>

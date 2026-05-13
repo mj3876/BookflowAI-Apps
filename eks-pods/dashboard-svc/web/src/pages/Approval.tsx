@@ -24,7 +24,7 @@ export default function Approval() {
   // PUBLISHER_ORDER 만 필터 (HQ 가 처리할 외부 발주)
   const pending = useQuery({
     queryKey: ['pending', 'PUBLISHER_ORDER', role],
-    queryFn: () => fetchPending(role, { order_type: 'PUBLISHER_ORDER', limit: 500, include_history: true, days: 7 }),
+    queryFn: () => fetchPending(role, { order_type: 'PUBLISHER_ORDER', limit: 5000, include_history: true, days: 365 }),
     refetchInterval: 5000,
   });
 

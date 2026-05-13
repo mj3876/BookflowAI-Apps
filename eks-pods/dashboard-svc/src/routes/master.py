@@ -3,12 +3,52 @@
 .pen Service Mesh: dashboard-bff/svc reads books/kpi_mart/sales master tables directly,
 not via inventory-svc. These pages don't need transactional consistency.
 """
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Query
 
 from ..auth import AuthContext, _check_store_scope, require_auth
 from ..db import db_conn
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard-master"])
+
+_KST = timezone(timedelta(hours=9))
+
+
+@router.get("/forecast/all")
+def forecast_all(
+    _: AuthContext = Depends(require_auth),
+    snapshot_date: str | None = Query(default=None, description="YYYY-MM-DD · 생략 시 D+1 KST"),
+):
+    """전 매장 × 전 ISBN forecast_cache batch read (inventory 페이지 AI 수요예측 컬럼용).
+
+    기존 /dashboard/forecast/{store_id}/{date} 는 단일 매장 1일치. 14 매장 × 1000 ISBN
+    grid view 에서는 호출 폭증 → 한 번에 모든 row 반환. role-scope 무관 (read-only · 의사결정 미동반).
+    """
+    if snapshot_date is None:
+        snapshot_date = (datetime.now(_KST).date() + timedelta(days=1)).isoformat()
+
+    sql = """
+        SELECT snapshot_date, isbn13, store_id, predicted_demand
+          FROM forecast_cache
+         WHERE snapshot_date = %s
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (snapshot_date,))
+        rows = cur.fetchall()
+
+    return {
+        "snapshot_date": snapshot_date,
+        "items": [
+            {
+                "snapshot_date": r[0].isoformat() if hasattr(r[0], "isoformat") else r[0],
+                "isbn13": r[1],
+                "store_id": r[2],
+                "predicted_demand": float(r[3]),
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.get("/recent-sales")

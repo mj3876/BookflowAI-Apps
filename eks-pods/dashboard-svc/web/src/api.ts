@@ -530,3 +530,18 @@ export const fetchInsufficientStock = (role: Role, limit = 20) =>
   getJson<{ snapshot_date: string; items: InsufficientStockItem[] }>(
     `/dashboard/forecast/insufficient?limit=${limit}`, role,
   );
+
+// 전 매장 × 전 ISBN forecast batch (inventory 페이지 AI 수요예측 컬럼용).
+// snapshot_date 생략 시 backend D+1 KST 자동 계산.
+export type ForecastBatchItem = {
+  snapshot_date: string;
+  isbn13: string;
+  store_id: number;
+  predicted_demand: number;
+};
+export const fetchAllForecast = (role: Role, snapshot_date?: string) => {
+  const qs = snapshot_date ? `?snapshot_date=${snapshot_date}` : '';
+  return getJson<{ snapshot_date: string; items: ForecastBatchItem[] }>(
+    `/dashboard/forecast/all${qs}`, role,
+  );
+};

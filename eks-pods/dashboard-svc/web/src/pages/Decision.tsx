@@ -43,7 +43,7 @@ export default function Decision() {
 
   const pending = useQuery({
     queryKey: ['pending-all', role],
-    queryFn: () => fetchPending(role, { limit: 500, include_history: true, days: 7 }),
+    queryFn: () => fetchPending(role, { limit: 5000, include_history: true, days: 365 }),
     refetchInterval: 5000,
   });
 
@@ -104,7 +104,7 @@ export default function Decision() {
   const [demoResult, setDemoResult] = useState<string | null>(null);
   const insufficient = useQuery({
     queryKey: ['insufficient', role],
-    queryFn: () => fetchInsufficientStock(role, 10),
+    queryFn: () => fetchInsufficientStock(role, 2000),
     enabled: role === 'hq-admin' && demoOpen,
   });
 
