@@ -59,9 +59,7 @@ EVENT_CHANNEL = {
 
 
 _LOGIC_APPS_EVENTS = {
-    "AutoExecutedUrgent", "DailyPlanFinalized", "SpikeUrgent",
-    "ApprovalDelayed", "InboundRejected", "NewBookRequest",
-    "LambdaAlarm", "DeploymentRollback",
+    "DailyPlanFinalized", "SpikeUrgent",
 }
 
 
