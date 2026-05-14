@@ -110,6 +110,23 @@ export default function BranchHome() {
     }
     return [...m.values()].sort((a, b) => a.date.localeCompare(b.date));
   })();
+  // 출고 대기 (우리 매장이 source · APPROVED · 운송 차 출발 대기) — 날짜별 group
+  const myUpcomingOutbound = items.filter(
+    (o) => o.source_location_id === storeId && (o.status === 'PENDING' || o.status === 'APPROVED'),
+  );
+  const outboundBuckets: ArrivalBucket[] = (() => {
+    const m = new Map<string, ArrivalBucket>();
+    for (const o of myUpcomingOutbound) {
+      const r = (o.forecast_rationale ?? {}) as Record<string, unknown>;
+      const d = typeof r.expected_arrival_date === 'string' ? r.expected_arrival_date : null;
+      if (!d) continue;
+      if (!m.has(d)) m.set(d, { date: d, count: 0, orders: [] });
+      const b = m.get(d)!;
+      b.count += 1;
+      b.orders.push(o);
+    }
+    return [...m.values()].sort((a, b) => a.date.localeCompare(b.date));
+  })();
   // D+N 라벨 (오늘 대비 일 수 차이)
   const arrivalLabel = (iso: string): string => {
     const t = new Date(today + 'T00:00:00');
@@ -284,6 +301,49 @@ export default function BranchHome() {
                       to="/branch-inbound"
                       className="font-bold text-bf-primary hover:underline"
                       title={`${b.count}건 도착 예정`}
+                    >
+                      {b.count}건 →
+                    </Link>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* 3.7행: 📤 보낼 거 — 출고 대기 (우리 매장이 source) · 날짜별 group */}
+      {outboundBuckets.length > 0 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📤 보낼 거 — 출고 대기 (날짜별)</h2>
+            <span className="text-[10px] text-bf-muted">우리 매장에서 출고 예정 · 운송 차 routing</span>
+          </div>
+          <ul className="space-y-1.5">
+            {outboundBuckets.map((b) => {
+              const types = new Set(b.orders.map((o) => o.order_type));
+              const typeLabel = [...types]
+                .map((t) =>
+                  t === 'WH_TO_STORE'    ? '🏬 매장보충' :
+                  t === 'REBALANCE'      ? '🔄 재분배' :
+                  t === 'WH_TRANSFER'    ? '🚛 권역간' :
+                  t === 'PUBLISHER_ORDER'? '📦 외부발주' : t,
+                ).join(' · ');
+              return (
+                <li
+                  key={b.date}
+                  className="flex items-center justify-between p-2 rounded border border-bf-border2 bg-bf-panel2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-bf-warn">{arrivalLabel(b.date)}</span>
+                    <span className="text-[10px] text-bf-muted">{b.date}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-bf-muted">{typeLabel}</span>
+                    <Link
+                      to="/branch-inbound"
+                      className="font-bold text-bf-warn hover:underline"
+                      title={`${b.count}건 출고 예정`}
                     >
                       {b.count}건 →
                     </Link>
