@@ -30,7 +30,7 @@ job   = Job(glue)
 job.init(args["JOB_NAME"], args)
 
 SOURCE = f"s3://{args['RAW_BUCKET']}/sns/"
-TARGET = f"s3://{args['MART_BUCKET']}/sns_mentions/"
+TARGET = f"s3://{args['MART_BUCKET']}/mart/sns_mentions/"
 
 SNS_SCHEMA = StructType([
     StructField("isbn13",        StringType(),  False),
@@ -58,9 +58,11 @@ df = (
     .filter(F.col("isbn13").isNotNull())
 )
 
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
 (
     df.write
-    .mode("append")
+    .mode("overwrite")
     .partitionBy("mention_date")
     .parquet(TARGET)
 )

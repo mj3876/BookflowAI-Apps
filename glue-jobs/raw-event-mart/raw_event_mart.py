@@ -28,7 +28,7 @@ job   = Job(glue)
 job.init(args["JOB_NAME"], args)
 
 SOURCE = f"s3://{args['RAW_BUCKET']}/events/"
-TARGET = f"s3://{args['MART_BUCKET']}/calendar_events/"
+TARGET = f"s3://{args['MART_BUCKET']}/mart/calendar_events/"
 
 SCHEMA = StructType([
     StructField("event_id",    StringType(),              True),

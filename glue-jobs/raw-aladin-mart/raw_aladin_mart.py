@@ -47,12 +47,9 @@ spark = glue.spark_session
 job   = Job(glue)
 job.init(args["JOB_NAME"], args)
 
-from datetime import datetime, timezone
-_batch_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-SOURCE      = f"s3://{args['RAW_BUCKET']}/aladin/"
-_INTERNAL   = f"s3://{args['MART_BUCKET']}/aladin_books/"   # SCD 내부용
-TARGET      = f"s3://{args['MART_BUCKET']}/mart/books_static/{_batch_id}/"
+SOURCE    = f"s3://{args['RAW_BUCKET']}/aladin/"
+_INTERNAL = f"s3://{args['MART_BUCKET']}/aladin_books/"   # SCD 내부용
+TARGET    = f"s3://{args['MART_BUCKET']}/mart/aladin_books/"
 
 SCHEMA = StructType([
     StructField("isbn13",      StringType(),  False),
@@ -102,7 +99,6 @@ deduped = (
 deduped.cache()
 deduped.write.mode("overwrite").parquet(_INTERNAL)
 
-# GCS export 경로에 저장 → EventBridge → mart-to-gcs Lambda → GCS → BigQuery
 deduped.write.mode("overwrite").parquet(TARGET)
 
 book_count = deduped.count()

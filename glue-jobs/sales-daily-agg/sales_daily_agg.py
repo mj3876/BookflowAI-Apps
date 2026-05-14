@@ -22,32 +22,35 @@ spark = glue.spark_session
 job   = Job(glue)
 job.init(args["JOB_NAME"], args)
 
-POS_PATH    = f"s3://{args['MART_BUCKET']}/mart/sales_fact/*/"
-TARGET_PATH = f"s3://{args['MART_BUCKET']}/sales_daily/"
+POS_PATH    = f"s3://{args['MART_BUCKET']}/mart/sales_fact/"
+TARGET_PATH = f"s3://{args['MART_BUCKET']}/mart/sales_daily/"
 
 pos = spark.read.parquet(POS_PATH)
 
 daily = (
     pos
     .groupBy(
-        F.col("sale_date").alias("date"),
+        "sale_date",
         "isbn13",
-        "location_id",
+        F.col("location_id").alias("store_id"),
         "channel",
     )
     .agg(
-        F.sum("qty").alias("total_qty"),
-        F.sum("total_price").alias("total_revenue"),
+        F.sum("qty").alias("qty_sold"),
+        F.sum("total_price").alias("revenue"),
+        F.round(F.sum("total_price") / F.nullif(F.sum("qty"), F.lit(0)), 2).alias("avg_price"),
         F.count("tx_id").alias("tx_count"),
         F.max("ts").alias("last_tx_at"),
     )
     .withColumn("aggregated_at", F.current_timestamp())
 )
 
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
 (
     daily.write
     .mode("overwrite")
-    .partitionBy("date")
+    .partitionBy("sale_date")
     .parquet(TARGET_PATH)
 )
 
