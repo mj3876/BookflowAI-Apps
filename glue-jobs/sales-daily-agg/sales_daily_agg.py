@@ -62,7 +62,7 @@ daily = (
     .agg(
         F.sum("qty").alias("qty_sold"),
         F.sum("total_price").alias("revenue"),
-        F.round(F.sum("total_price") / F.nullif(F.sum("qty"), F.lit(0)), 2).alias("avg_price"),
+        F.round(F.when(F.sum("qty") != 0, F.sum("total_price") / F.sum("qty")), 2).alias("avg_price"),
         F.count("tx_id").alias("tx_count"),
         F.max("ts").alias("last_tx_at"),
     )
