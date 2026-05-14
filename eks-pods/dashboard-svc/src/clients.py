@@ -214,6 +214,36 @@ async def post_decision_plan_daily(body: dict, token: str) -> tuple[int, Any]:
     return await _safe_post(f"{settings.decision_svc_url}/decision/plan-daily", body, token, timeout=120.0)
 
 
+async def get_plan_summary(snapshot_date: str, token: str) -> dict | None:
+    """Final Plan summary — decision-svc /decision/plan-daily/{date}/summary 프록시."""
+    return await _safe_get(
+        f"{settings.decision_svc_url}/decision/plan-daily/{snapshot_date}/summary", token
+    )
+
+
+async def get_plan_items(
+    snapshot_date: str,
+    token: str,
+    status: str | None = None,
+    order_type: str | None = None,
+    q: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+) -> dict | None:
+    """Final Plan items — decision-svc /decision/plan-daily/{date}/items 프록시."""
+    qs = [f"offset={offset}", f"limit={limit}"]
+    if status:
+        qs.append(f"status={status}")
+    if order_type:
+        qs.append(f"order_type={order_type}")
+    if q:
+        qs.append(f"q={q}")
+    return await _safe_get(
+        f"{settings.decision_svc_url}/decision/plan-daily/{snapshot_date}/items?{'&'.join(qs)}",
+        token,
+    )
+
+
 async def post_intervention_inbound_batch_receive(body: dict, token: str) -> tuple[int, Any]:
     """일괄 입고 수령 (BranchInbound 전체 수령/발송 · WhInstructions 일괄)."""
     return await _safe_post(

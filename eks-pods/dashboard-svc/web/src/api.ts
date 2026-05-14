@@ -138,6 +138,8 @@ export const fetchPending = (
     wh_id?: number;
     /** 특정 일자 (YYYY-MM-DD KST) detail · lazy fetch. summary count 와 함께 사용 권장. */
     date?: string;
+    /** isbn13 / title / location 이름 검색 (intervention-svc /queue 의 q 파라미터) */
+    q?: string;
     /** @deprecated 365일치 통째 fetch — 사용 자제. summary + date 조합 권장. */
     include_history?: boolean;
     days?: number;
@@ -148,6 +150,7 @@ export const fetchPending = (
   if (opts.offset) qs.set('offset', String(opts.offset));
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
+  if (opts.q) qs.set('q', opts.q);
   if (opts.date) {
     qs.set('date', opts.date);
   } else if (opts.include_history) {
@@ -159,6 +162,63 @@ export const fetchPending = (
     total?: number;
     stage_counts?: Record<string, number>;
   }>(`/dashboard/pending?${qs.toString()}`, role);
+};
+
+// ─── Final Plan (decision-svc /plan-daily/{date}/{summary|items}) ────
+// /plan-daily 발의 결과 4-stage × 5-status 매트릭스 + 상세 list.
+// snapshot_date = D+1 KST (forecast_rationale.plan_snapshot_date).
+export type PlanSummary = {
+  snapshot_date: string;
+  by_stage_status: Array<{ order_type: string; status: string; cnt: number; qty_total: number }>;
+  totals: {
+    total_orders: number;
+    total_qty: number;
+    stages: Record<string, number>;
+    statuses: Record<string, number>;
+  };
+};
+export const fetchPlanSummary = (role: Role, snapshot_date: string) =>
+  getJson<PlanSummary>(`/dashboard/decision/plan-daily/${snapshot_date}/summary`, role);
+
+export type PlanItem = {
+  order_id: string;
+  isbn13: string;
+  title: string | null;
+  order_type: string;
+  status: string;
+  source_location_id: number | null;
+  source_location_name: string | null;
+  target_location_id: number | null;
+  target_location_name: string | null;
+  qty: number;
+  urgency_level: string | null;
+  approved_at: string | null;
+  executed_at: string | null;
+  reject_reason: string | null;
+  created_at: string;
+};
+export type PlanItemsResponse = { total: number; items: PlanItem[] };
+export const fetchPlanItems = (
+  role: Role,
+  snapshot_date: string,
+  params: {
+    status?: string;
+    order_type?: string;
+    q?: string;
+    offset?: number;
+    limit?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set('status', params.status);
+  if (params.order_type) qs.set('order_type', params.order_type);
+  if (params.q) qs.set('q', params.q);
+  if (params.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  return getJson<PlanItemsResponse>(
+    `/dashboard/decision/plan-daily/${snapshot_date}/items?${qs.toString()}`,
+    role,
+  );
 };
 
 // 일자별 status count summary — 가벼운 응답. DateHistoryTabs pill row 카운트.
@@ -433,7 +493,14 @@ export const fetchNotifications = (role: Role, limit = 50) =>
 
 // ─── Mutations ──────────────────────────────────────────────────────
 export const postIntervene = (role: Role, action: 'approve' | 'reject', body: unknown) =>
-  postJson<{ approval_id?: string; order_id?: string; decision?: string; detail?: string }>(
+  postJson<{
+    approval_id?: string;
+    order_id?: string;
+    decision?: string;
+    detail?: string;
+    /** 2026-05-14: 양측 협의 후 최종 상태 (PENDING / APPROVED / REJECTED) — UI Toast 분기용 */
+    final_status?: string;
+  }>(
     `/dashboard/intervene/${action}`, role, body,
   );
 

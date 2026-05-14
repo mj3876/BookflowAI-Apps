@@ -6,6 +6,7 @@ import { useLocations } from '../useLocations';
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
 import BatchMapView from '../components/BatchMapView';
+import StatusBadge from '../components/StatusBadge';
 
 /**
  * HQ Approval - Stage 3 (PUBLISHER_ORDER) 단독 최종 승인.
@@ -138,12 +139,11 @@ export default function Approval() {
                         <td>{o.qty}</td>
                         <td className="text-bf-muted text-[11px]">{ts ? new Date(ts).toLocaleString('ko-KR') : '-'}</td>
                         <td>
-                          <span className={
-                            o.status === 'PENDING' ? 'pill-pending' :
-                            o.status === 'APPROVED' ? 'pill-approved' :
-                            o.status === 'EXECUTED' ? 'pill-info' :
-                            o.status === 'REJECTED' ? 'pill-rejected' : 'pill-info'
-                          }>{o.status}</span>
+                          <StatusBadge
+                            status={o.status as any}
+                            orderType={o.order_type as any}
+                            approvedAt={o.approved_at}
+                          />
                         </td>
                         {isToday && (
                           <td className="text-right">

@@ -1,14 +1,19 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
-import { fetchInstructions, postInboundReceive, postInboundReject, postInboundBatchReceive, type Role } from '../api';
+import { fetchInstructions, postInboundReceive, postInboundReject, postInboundBatchReceive, postIntervene, type Role } from '../api';
+import { useScope } from '../auth';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import { groupByDate, dateGroupTone } from '../dateGroup';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
 import InlineMessage from '../components/InlineMessage';
+import SearchBox from '../components/SearchBox';
+import StatusBadge from '../components/StatusBadge';
+import SideProgress from '../components/SideProgress';
 import { useLocations } from '../useLocations';
+import { useToast } from '../components/Toast';
 
 /**
  * UX-6 매장 입·출고 처리 — FR-A6.6 (지점 수동 개입).
@@ -30,23 +35,50 @@ const REJECT_REASONS = [
 
 export default function BranchInbound() {
   const { role } = useOutletContext<{ role: Role }>();
-  const my_store = 1; // branch-clerk default store
+  const scope = useScope();
   const qc = useQueryClient();
   const { nameOf } = useLocations(role);
+  const { showToast } = useToast();
+
+  // role 별 my_store 결정:
+  //   - branch-clerk: scope.scope_store_id (Entra/mock 자동 주입)
+  //   - hq-admin    : null → 전체 매장 (input/output 필터 = target/source 가 STORE 타입인 row 전부)
+  //   - wh-manager  : 진입 차단 (매장 입고 화면 무관)
+  const my_store: number | null = role === 'branch-clerk' ? scope.scope_store_id : null;
+  const isWh = role === 'wh-manager-1' || role === 'wh-manager-2';
 
   const q = useQuery({
-    queryKey: ['instr-all', role],
+    queryKey: ['instr-all', role, my_store],
     queryFn: () => fetchInstructions(role),
     refetchInterval: 8000,
+    enabled: !isWh,
   });
-  const allInstr = q.data?.items ?? [];
+  const rawInstr = q.data?.items ?? [];
+  // 매장 직원: target/source = scope_store_id 만 표시.
+  // 본사: 전체 매장 (target/source 가 location_type=STORE_* 인 row 전부 — instructions endpoint 가 이미 role/scope 필터).
+  const matchTarget = (o: { target_location_id: number | null }) =>
+    my_store == null ? o.target_location_id != null : o.target_location_id === my_store;
+  const matchSource = (o: { source_location_id: number | null }) =>
+    my_store == null ? o.source_location_id != null : o.source_location_id === my_store;
+  // P1 검색 (client-side · instructions endpoint q 미지원)
+  const [searchQ, setSearchQ] = useState<string>('');
+  const allInstr = useMemo(() => {
+    if (!searchQ) return rawInstr;
+    const lo = searchQ.toLowerCase();
+    return rawInstr.filter((o) =>
+      o.isbn13.toLowerCase().includes(lo) ||
+      (o.title ?? '').toLowerCase().includes(lo) ||
+      (o.source_location_id != null && nameOf(o.source_location_id).toLowerCase().includes(lo)) ||
+      (o.target_location_id != null && nameOf(o.target_location_id).toLowerCase().includes(lo))
+    );
+  }, [rawInstr, searchQ, nameOf]);
   // 입고: target = 내 매장 + APPROVED
-  const myInbound = allInstr.filter((o) => o.target_location_id === my_store && o.status === 'APPROVED');
+  const myInbound = allInstr.filter((o) => matchTarget(o) && o.status === 'APPROVED');
   // 출고: source = 내 매장 + APPROVED (매장 간 REBALANCE 의 source 측)
-  const myOutbound = allInstr.filter((o) => o.source_location_id === my_store && o.status === 'APPROVED');
+  const myOutbound = allInstr.filter((o) => matchSource(o) && o.status === 'APPROVED');
   // PENDING 입고 — 본사 승인 대기 (별도 섹션)
   const myPending = allInstr.filter(
-    (o) => o.target_location_id === my_store && (o.status === 'PENDING' || o.status === 'AUTO_EXECUTED'),
+    (o) => matchTarget(o) && (o.status === 'PENDING' || o.status === 'AUTO_EXECUTED'),
   );
 
   const [tab, setTab] = useState<'inbound' | 'outbound'>('inbound');
@@ -59,6 +91,40 @@ export default function BranchInbound() {
   const [receiveTarget, setReceiveTarget] = useState<{ order_id: string; qty: number } | null>(null);
   const [shipTarget, setShipTarget] = useState<{ order_id: string; qty: number; dest: string } | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  // REBALANCE 양측 협의 — 내가 방금 자기 측 승인한 order_id (status PENDING 인 상태로 상대 측 대기)
+  const [selfDone, setSelfDone] = useState<Set<string>>(new Set());
+
+  // REBALANCE side 자동 추론 (WhApprove sideForOrder 패턴 차용)
+  //  - source_location_id == my_store → SOURCE (출고 동의)
+  //  - target_location_id == my_store → TARGET (입고 동의)
+  //  - 그 외 (hq-admin / 둘 다 매치 안 됨) → null (액션 불가)
+  const sideForOrderRebalance = (o: { source_location_id: number | null; target_location_id: number | null }): 'SOURCE' | 'TARGET' | null => {
+    if (my_store == null) return null;
+    if (o.source_location_id === my_store) return 'SOURCE';
+    if (o.target_location_id === my_store) return 'TARGET';
+    return null;
+  };
+
+  // REBALANCE 양측 협의 — PENDING row 자기 측 (SOURCE 또는 TARGET) 승인.
+  const approveMu = useMutation({
+    mutationFn: ({ order_id, side }: { order_id: string; side: 'SOURCE' | 'TARGET' }) =>
+      postIntervene(role, 'approve', { order_id, approval_side: side }),
+    onSuccess: (d, v) => {
+      setFeedback({ type: 'success', msg: `✓ 내 측 (${v.side === 'SOURCE' ? '출고' : '입고'}) 승인 완료` });
+      setSelfDone((prev) => new Set(prev).add(v.order_id));
+      const final = d.final_status;
+      if (final === 'APPROVED') {
+        showToast({ type: 'info', message: '🚚 양측 협의 완료 — 운송 시작 · 입고 대기' });
+      } else {
+        showToast({ type: 'warning', message: '내 측 처리 끝 · 상대 측 대기' });
+      }
+      qc.invalidateQueries({ queryKey: ['instr-all', role] });
+    },
+    onError: (e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFeedback({ type: 'error', msg: `승인 실패: ${msg}` });
+    },
+  });
 
   // P1-2 입고 거부 — intervention-svc /inbound/{order_id}/reject 호출 (별도 endpoint).
   const reject = useMutation({
@@ -66,6 +132,7 @@ export default function BranchInbound() {
       postInboundReject(role, order_id, reject_reason),
     onSuccess: () => {
       setFeedback({ type: 'success', msg: '거부 처리됨 — 물류센터에 통보되었습니다' });
+      showToast({ type: 'warning', message: '🔄 거부 · 발송 측 재고 복원됨' });
       setRejectTarget(null);
       setNote('');
       qc.invalidateQueries({ queryKey: ['instr-all', role] });
@@ -88,6 +155,7 @@ export default function BranchInbound() {
         type: 'success',
         msg: `수령 완료 (${r.qty ?? '?'}권) ${tail}`,
       });
+      showToast({ type: 'success', message: `✅ 실행 완료 · 매장 재고 +${r.qty ?? '?'}` });
       qc.invalidateQueries({ queryKey: ['instr-all', role] });
     },
     onError: (e: unknown) => {
@@ -148,16 +216,30 @@ export default function BranchInbound() {
     </button>
   );
 
+  if (isWh) {
+    return (
+      <div className="card text-center text-bf-muted text-xs py-10">
+        매장 입·출고 처리는 매장 직원 또는 본사 화면입니다. 권역 거점창고 처리는 <a href="/wh-instructions" className="text-bf-primary hover:underline">출고/입고 지시</a> 에서 확인하세요.
+      </div>
+    );
+  }
+
+  const headerLabel =
+    my_store != null ? `${nameOf(my_store)} · 입·출고 처리` : '전 매장 · 입·출고 처리';
+
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="h1">{nameOf(my_store)} · 입·출고 처리</h1>
-        <p className="text-bf-muted text-xs mt-1">
-          물류센터 → 우리 매장 도착 건은 <b>입고 대기</b>, 우리 매장 → 타 매장 재분배 (REBALANCE) 발송 건은 <b>출고 대기</b> 에서 처리합니다.
-        </p>
-        <div className="text-[11px] text-bf-muted mt-1">
-          처리 → 매장 재고 자동 갱신 → <a href="/branch-inventory" className="text-bf-primary hover:underline">매장 재고</a> 확인
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="h1">{headerLabel}</h1>
+          <p className="text-bf-muted text-xs mt-1">
+            물류센터 → 우리 매장 도착 건은 <b>입고 대기</b>, 우리 매장 → 타 매장 재분배 (REBALANCE) 발송 건은 <b>출고 대기</b> 에서 처리합니다.
+          </p>
+          <div className="text-[11px] text-bf-muted mt-1">
+            처리 → 매장 재고 자동 갱신 → <a href="/branch-inventory" className="text-bf-primary hover:underline">매장 재고</a> 확인
+          </div>
         </div>
+        <SearchBox placeholder="ISBN / 제목 / 매장 검색…" onSearch={setSearchQ} />
       </div>
 
       {feedback && (
@@ -367,25 +449,70 @@ export default function BranchInbound() {
       )}
 
       {tab === 'inbound' && myPending.length > 0 && (
-        <div className="card opacity-70">
+        <div className="card">
           <h2 className="h2">🕒 승인 대기 중 ({myPending.length})</h2>
           <p className="text-xs text-bf-muted mb-2">
-            본사가 발주 승인하면 자동으로 위 "입고 대기" 로 이동합니다. 수령은 APPROVED 상태에서만 가능.
+            REBALANCE 는 양측 (출고 매장 + 입고 매장) 모두 승인해야 운송이 시작됩니다.
+            아래 행에서 자기 측을 승인하면 상대 측 대기 상태로 전환되고, 양측 모두 승인되면 위 "입고 대기" 로 자동 이동합니다.
           </p>
           <table className="data-table">
-            <thead><tr><th>유형</th><th>긴급도</th><th>ISBN</th><th>제목</th><th>출발지</th><th>수량</th><th>현 상태</th></tr></thead>
+            <thead><tr><th>유형</th><th>긴급도</th><th>ISBN</th><th>제목</th><th>출발 → 도착</th><th>상태</th><th>수량</th><th>처리</th></tr></thead>
             <tbody>
-              {myPending.map((o) => (
-                <tr key={o.order_id}>
-                  <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
-                  <td>{ko(URGENCY_KO, o.urgency_level)}</td>
-                  <td className="font-mono text-[11px]">{o.isbn13}</td>
-                  <td>{o.title ?? '-'}</td>
-                  <td>{o.source_location_id != null ? nameOf(o.source_location_id) : '-'}</td>
-                  <td className="text-right">{o.qty}권</td>
-                  <td><span className="pill-pending">{o.status === 'AUTO_EXECUTED' ? '자동 실행됨' : '승인 대기'}</span></td>
-                </tr>
-              ))}
+              {myPending.map((o) => {
+                const side = o.order_type === 'REBALANCE' ? sideForOrderRebalance(o) : null;
+                const done = selfDone.has(o.order_id);
+                const isRebalance = o.order_type === 'REBALANCE';
+                const sideLabel = side === 'SOURCE' ? '출고 동의' : side === 'TARGET' ? '입고 동의' : null;
+                return (
+                  <tr key={o.order_id}>
+                    <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
+                    <td>{ko(URGENCY_KO, o.urgency_level)}</td>
+                    <td className="font-mono text-[11px]">{o.isbn13}</td>
+                    <td>{o.title ?? '-'}</td>
+                    <td className="text-[11px]">
+                      {isRebalance && o.source_location_id != null && o.target_location_id != null ? (
+                        <SideProgress
+                          source={{ name: nameOf(o.source_location_id), done: side === 'SOURCE' && done }}
+                          target={{ name: nameOf(o.target_location_id), done: side === 'TARGET' && done }}
+                          mySide={side}
+                        />
+                      ) : (
+                        <>
+                          {o.source_location_id != null ? nameOf(o.source_location_id) : '-'}
+                          {' → '}
+                          {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      <StatusBadge
+                        status={o.status}
+                        orderType={o.order_type}
+                        approvalSidesDone={done ? [side ?? 'SELF'] : []}
+                      />
+                    </td>
+                    <td className="text-right">{o.qty}권</td>
+                    <td>
+                      {o.status === 'AUTO_EXECUTED' ? (
+                        <span className="pill-pending">자동 실행됨</span>
+                      ) : isRebalance && side && !done ? (
+                        <button
+                          className="btn-primary btn-sm"
+                          disabled={approveMu.isPending}
+                          onClick={() => approveMu.mutate({ order_id: o.order_id, side })}
+                          title={`내 측 (${sideLabel}) 승인 — 상대 측 승인까지 대기`}
+                        >
+                          ✓ 내 측 ({side}) {sideLabel}
+                        </button>
+                      ) : isRebalance && side && done ? (
+                        <span className="text-[11px] text-bf-success font-medium">✓ 내 측 처리 끝 · 상대 측 대기</span>
+                      ) : (
+                        <span className="pill-pending">승인 대기</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

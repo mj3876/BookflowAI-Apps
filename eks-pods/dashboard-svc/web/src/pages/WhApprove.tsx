@@ -5,6 +5,8 @@ import { ApiError, fetchPending, patchPendingOrder, postApproveAllToday, postInt
 import ConfirmModal from '../components/ConfirmModal';
 import DateHistoryTabs from '../components/DateHistoryTabs';
 import BatchMapView from '../components/BatchMapView';
+import StatusBadge from '../components/StatusBadge';
+import SideProgress from '../components/SideProgress';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
 
@@ -12,9 +14,10 @@ import { useToast } from '../components/Toast';
  * 창고 승인 큐 - 자기 wh 의 Stage 1 (REBALANCE) + Stage 2 (WH_TRANSFER SOURCE/TARGET) 분리.
  *
  * 백엔드 intervention-svc /intervention/queue 가 role/scope_wh_id 자동 필터.
- * approval_side:
- *   - REBALANCE: FINAL (단독)
+ * approval_side (2026-05-14 REBALANCE 양측 협의 정정):
+ *   - REBALANCE: SOURCE/TARGET 양측 (자기 wh 사이드만 승인 가능)
  *   - WH_TRANSFER: SOURCE/TARGET 둘 중 자기 wh 사이드만 가능
+ *   - PUBLISHER_ORDER: FINAL (자기 권역만)
  */
 export default function WhApprove() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -78,14 +81,32 @@ export default function WhApprove() {
       const body = a.action === 'reject'
         ? { order_id: a.order_id, approval_side: a.side, reject_reason: a.reason ?? 'WH 거절' }
         : { order_id: a.order_id, approval_side: a.side };
-      return postIntervene(role, a.action, body);
+      const r = await postIntervene(role, a.action, body);
+      return { ...r, _ctx: a };
     },
     onMutate: (v) => { setBusy(v.order_id); setFeedback(null); },
-    onSuccess: (d, v) => {
+    onSuccess: (d) => {
       setBusy(null);
+      const v = d._ctx;
+      const final = d.final_status;
       setFeedback(`✓ ${v.side} ${v.action === 'approve' ? '승인' : '거절'} 완료 · ${d.approval_id ?? d.order_id ?? d.detail}`);
       // 내 측 처리 완료 — UI 에 "✓ 내 측 끝" 표시 + 버튼 비활성. 양측 모두 완료되면 backend status=APPROVED → list 빠짐.
       setSelfDone((prev) => new Set(prev).add(v.order_id));
+      // Toast — 시연 시 출고/입고/거부 명확화 (자기측만 처리 / 양측 완료 / 거부)
+      if (v.action === 'approve') {
+        if (final === 'APPROVED') {
+          showToast({ type: 'info', message: '🚚 양측 협의 완료 — 출고 시작 (source -qty) · 입고 대기' });
+        } else {
+          showToast({ type: 'warning', message: '내 측 처리 끝 · 상대 측 대기' });
+        }
+      } else {
+        // 거부
+        if (final === 'REJECTED') {
+          showToast({ type: 'warning', message: '🔄 거부 · APPROVED 였으면 source 재고 복원됨' });
+        } else {
+          showToast({ type: 'error', message: '❌ 계획 거부' });
+        }
+      }
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
@@ -251,13 +272,12 @@ export default function WhApprove() {
                   <th>긴급도</th>
                   <th>도서</th>
                   <th>출발 → 도착</th>
-                  {tab === 'WH_TRANSFER' ? (
+                  <th>상태</th>
+                  {tab === 'WH_TRANSFER' && (
                     <>
                       <th>출고 (내 측 / 상대 측)</th>
                       <th>입고 (내 측 / 상대 측)</th>
                     </>
-                  ) : (
-                    <th>액션</th>
                   )}
                   <th>수량</th>
                   <th>생성</th>
@@ -267,7 +287,8 @@ export default function WhApprove() {
               <tbody>
                 {filtered.map((o: any) => {
                   const isPublisher = tab === 'PUBLISHER_ORDER';
-                  const side = tab === 'WH_TRANSFER' ? sideForOrder(o) : 'FINAL' as const;
+                  // 2026-05-14: REBALANCE 도 양측 협의 → 자기 wh 측 (SOURCE/TARGET) 자동 추론
+                  const side = tab === 'PUBLISHER_ORDER' ? ('FINAL' as const) : sideForOrder(o);
                   const readonly = !isToday;
                   const srcWh = whIdOf(o.source_location_id);
                   const tgtWh = whIdOf(o.target_location_id);
@@ -292,11 +313,41 @@ export default function WhApprove() {
                         )}
                       </td>
                       <td className="text-[11px]">
-                        {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'}
-                        {' → '}
-                        {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
+                        {(o.order_type === 'REBALANCE' || o.order_type === 'WH_TRANSFER') && o.source_location_id != null && o.target_location_id != null ? (
+                          <SideProgress
+                            source={{
+                              name: nameOf(o.source_location_id),
+                              done: isApproved || isRejected || (isPending && side === 'SOURCE' && selfDone.has(o.order_id)),
+                            }}
+                            target={{
+                              name: nameOf(o.target_location_id),
+                              done: isApproved || (isPending && side === 'TARGET' && selfDone.has(o.order_id)),
+                            }}
+                            mySide={side === 'FINAL' ? null : side}
+                          />
+                        ) : (
+                          <>
+                            {o.source_location_id != null ? nameOf(o.source_location_id) : '(출판사)'}
+                            {' → '}
+                            {o.target_location_id != null ? nameOf(o.target_location_id) : '-'}
+                          </>
+                        )}
                       </td>
-                      {tab === 'WH_TRANSFER' ? (
+                      <td>
+                        <StatusBadge
+                          status={o.status}
+                          orderType={o.order_type}
+                          approvedAt={o.approved_at}
+                          approvalSidesDone={
+                            isApproved
+                              ? ['SOURCE', 'TARGET']
+                              : selfDone.has(o.order_id)
+                                ? [side ?? 'SELF']
+                                : []
+                          }
+                        />
+                      </td>
+                      {tab === 'WH_TRANSFER' && (
                         <>
                           {/* 출고 칸 (SOURCE) */}
                           <td className="text-[11px]">
@@ -375,16 +426,14 @@ export default function WhApprove() {
                             })()}
                           </td>
                         </>
-                      ) : (
-                        <td className="text-[11px] text-bf-muted">
-                          {isApproved ? '✓ 승인' : isRejected ? '✗ 거절' : isPending ? '⏳ 대기' : o.status}
-                        </td>
                       )}
                       <td>{o.qty}</td>
                       <td className="text-bf-muted text-[10px]">{new Date(o.created_at).toLocaleString()}</td>
                       {tab !== 'WH_TRANSFER' && (
                         <td className="text-right">
-                          {side && isPending && !readonly ? (
+                          {side && isPending && !readonly && selfDone.has(o.order_id) ? (
+                            <span className="text-[10px] text-bf-success font-medium">✓ 내 측 처리 끝 · 상대 측 대기</span>
+                          ) : side && isPending && !readonly ? (
                             <div className="flex gap-1 justify-end">
                               <button
                                 className="btn-primary btn-sm"
@@ -421,7 +470,7 @@ export default function WhApprove() {
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={tab === 'WH_TRANSFER' ? 7 : 7} className="text-center py-6 text-bf-muted">
+                    <td colSpan={tab === 'WH_TRANSFER' ? 8 : 7} className="text-center py-6 text-bf-muted">
                       {isLoading ? '조회 중…' : '해당 일자에 처리 건 없음'}
                     </td>
                   </tr>

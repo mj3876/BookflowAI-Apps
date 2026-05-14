@@ -84,6 +84,7 @@ const PAGE_LABEL: Record<string, string> = {
   inventory: '전사 재고',
   books: '도서 카탈로그',
   decision: '의사결정 현황',
+  'final-plan': '최종 계획안',
   approval: '승인 / 거절',
   returns: '반품 처리',
   requests: '신간 신청',
