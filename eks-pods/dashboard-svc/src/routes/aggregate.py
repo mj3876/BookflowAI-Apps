@@ -5,7 +5,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..auth import AuthContext, _check_store_scope, require_auth
+from ..auth import AuthContext, _check_location_scope, require_auth
+from ..db import db_conn
 from fastapi import Body
 from fastapi.responses import JSONResponse
 
@@ -47,8 +48,9 @@ async def inventory(wh_id: int, ctx: AuthContext = Depends(require_auth)) -> Any
 
 @router.get("/forecast/{store_id}/{snapshot_date}")
 async def forecast(store_id: int, snapshot_date: date, ctx: AuthContext = Depends(require_auth)) -> Any:
-    """FR-A7.3 매장 스코프 enforce — branch-clerk 자기 매장만."""
-    _check_store_scope(ctx, store_id)
+    """매장 스코프 enforce — branch-clerk 자기 매장 + wh-manager 자기 권역."""
+    with db_conn() as conn, conn.cursor() as cur:
+        _check_location_scope(ctx, store_id, cur)
     data = await get_forecast(store_id, str(snapshot_date), ctx.token)
     if data is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="forecast-svc unavailable")

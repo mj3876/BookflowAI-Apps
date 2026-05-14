@@ -37,8 +37,16 @@ export default function Approval() {
     onSuccess: (d, v) => {
       setBusy(null);
       setFeedback(`${v.action === 'approve' ? '✓ 승인' : '✓ 거절'} · ${d.approval_id ?? d.order_id ?? d.detail}`);
+      qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
+      qc.invalidateQueries({ queryKey: ['instr-all'] });
+      qc.invalidateQueries({ queryKey: ['instr'] });
     },
     onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
   });
@@ -60,8 +68,16 @@ export default function Approval() {
       setFeedback(`✗ 일괄 승인 실패: ${String(e)}`);
     }
     setBulkBusy(false);
+    qc.invalidateQueries({ queryKey: ['pending-active'] });
     qc.invalidateQueries({ queryKey: ['pending-detail'] });
     qc.invalidateQueries({ queryKey: ['pending-summary'] });
+    qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+    qc.invalidateQueries({ queryKey: ['plan-summary'] });
+    qc.invalidateQueries({ queryKey: ['plan-items'] });
+    qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+    qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
+    qc.invalidateQueries({ queryKey: ['instr-all'] });
+    qc.invalidateQueries({ queryKey: ['instr'] });
   };
 
   if (role !== 'hq-admin') {

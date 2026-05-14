@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
-from ..auth import AuthContext, _check_store_scope, require_auth
+from ..auth import AuthContext, _check_location_scope, require_auth
 from ..db import db_conn
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard-master"])
@@ -53,23 +53,34 @@ def forecast_all(
 
 @router.get("/recent-sales")
 def recent_sales(
-    _: AuthContext = Depends(require_auth),
+    ctx: AuthContext = Depends(require_auth),
     limit: int = Query(default=20, ge=1, le=200),
 ):
-    """sales_realtime 최근 N건 (POS 트랜잭션 실시간 흐름 모니터링).
+    """sales_realtime 최근 N건 (POS 트랜잭션 실시간 흐름 모니터링). role-scope 자동.
 
     pos-ingestor Lambda 가 INSERT 한 row 가 그대로 보임.
     """
     # 안전망: seed 데이터의 미래 시각 row 가 ORDER BY DESC top 에 잡혀 sim 새 INSERT 가 가려지는 것 방지
-    sql = """
-        SELECT txn_id, event_ts, isbn13, store_id, channel, qty, revenue
-          FROM sales_realtime
-         WHERE event_ts <= NOW()
-         ORDER BY event_ts DESC
+    where: list[str] = ["s.event_ts <= NOW()"]
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+    sql = f"""
+        SELECT s.txn_id, s.event_ts, s.isbn13, s.store_id, s.channel, s.qty, s.revenue
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
+         ORDER BY s.event_ts DESC
          LIMIT %s
     """
+    params.append(limit)
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql, (limit,))
+        cur.execute(sql, params)
         rows = cur.fetchall()
 
     return {
@@ -89,19 +100,29 @@ def recent_sales(
 
 
 @router.get("/sales-summary")
-def sales_summary(_: AuthContext = Depends(require_auth)):
-    """집계 요약 - 최근 1시간 매출 합 + 트랜잭션 수 + 채널별 비중."""
-    sql = """
+def sales_summary(ctx: AuthContext = Depends(require_auth)):
+    """집계 요약 - 최근 1시간 매출 합 + 트랜잭션 수 + 채널별 비중. role-scope 자동."""
+    where: list[str] = ["s.event_ts > NOW() - INTERVAL '1 hour'"]
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+    sql = f"""
         SELECT
             count(*)                       AS n,
-            COALESCE(sum(revenue), 0)      AS total_revenue,
-            count(*) FILTER (WHERE channel LIKE 'ONLINE%')  AS online_count,
-            count(*) FILTER (WHERE channel = 'OFFLINE')     AS offline_count
-          FROM sales_realtime
-         WHERE event_ts > NOW() - INTERVAL '1 hour'
+            COALESCE(sum(s.revenue), 0)    AS total_revenue,
+            count(*) FILTER (WHERE s.channel LIKE 'ONLINE%%')  AS online_count,
+            count(*) FILTER (WHERE s.channel = 'OFFLINE')      AS offline_count
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
     """
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, params)
         n, total_revenue, online_count, offline_count = cur.fetchone()
 
     return {
@@ -274,21 +295,38 @@ def spike_events(
 
 @router.get("/returns")
 def returns(
-    _: AuthContext = Depends(require_auth),
+    ctx: AuthContext = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=500),
 ):
-    """returns 큐 (HQ Returns 페이지)."""
-    sql = """
+    """returns 큐 (HQ Returns 페이지). role-scope 자동.
+
+    - wh-manager: 자기 권역 매장에서 발생한 반품만
+    - branch-clerk: 자기 매장만
+    """
+    where: list[str] = []
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = r.location_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("r.location_id = %s")
+        params.append(ctx.scope_store_id)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"""
         SELECT r.return_id, r.isbn13, r.location_id, r.qty, r.reason,
                r.status, r.requested_at, r.hq_approved_at, r.executed_at,
                b.title, b.author
           FROM returns r
           LEFT JOIN books b ON b.isbn13 = r.isbn13
+        {where_sql}
          ORDER BY r.requested_at DESC
          LIMIT %s
     """
+    params.append(limit)
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql, (limit,))
+        cur.execute(sql, params)
         rows = cur.fetchall()
 
     return {
@@ -425,20 +463,34 @@ def new_book_requests(
 
 
 @router.get("/sales-by-store")
-def sales_by_store(_: AuthContext = Depends(require_auth)):
-    """매장별 매출 1h - HQ KPI 차트용."""
-    sql = """
-        SELECT store_id,
+def sales_by_store(ctx: AuthContext = Depends(require_auth)):
+    """매장별 매출 1h - HQ KPI 차트용. role-scope 자동.
+
+    - wh-manager: 자기 권역 매장만
+    - branch-clerk: 자기 매장 한 row 만
+    """
+    where: list[str] = ["s.event_ts > NOW() - INTERVAL '1 hour'"]
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+    sql = f"""
+        SELECT s.store_id,
                count(*) AS transactions,
-               COALESCE(sum(revenue), 0) AS revenue,
-               count(*) FILTER (WHERE channel LIKE 'ONLINE%') AS online_count
-          FROM sales_realtime
-         WHERE event_ts > NOW() - INTERVAL '1 hour'
-         GROUP BY store_id
+               COALESCE(sum(s.revenue), 0) AS revenue,
+               count(*) FILTER (WHERE s.channel LIKE 'ONLINE%%') AS online_count
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
+         GROUP BY s.store_id
          ORDER BY revenue DESC
     """
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, params)
         rows = cur.fetchall()
 
     return {
@@ -460,18 +512,18 @@ def sales_by_specific_store(
     ctx: AuthContext = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=500),
 ):
-    """매장별 sales_realtime 상세 (Branch Sales 페이지). FR-A7.3 매장 스코프 enforce."""
-    _check_store_scope(ctx, store_id)
-    sql = """
-        SELECT s.txn_id, s.event_ts, s.isbn13, s.channel, s.qty, s.unit_price, s.revenue,
-               b.title, b.author
-          FROM sales_realtime s
-          LEFT JOIN books b ON b.isbn13 = s.isbn13
-         WHERE s.store_id = %s
-         ORDER BY s.event_ts DESC
-         LIMIT %s
-    """
+    """매장별 sales_realtime 상세 (Branch Sales 페이지). branch-clerk + wh-manager 스코프 enforce."""
     with db_conn() as conn, conn.cursor() as cur:
+        _check_location_scope(ctx, store_id, cur)
+        sql = """
+            SELECT s.txn_id, s.event_ts, s.isbn13, s.channel, s.qty, s.unit_price, s.revenue,
+                   b.title, b.author
+              FROM sales_realtime s
+              LEFT JOIN books b ON b.isbn13 = s.isbn13
+             WHERE s.store_id = %s
+             ORDER BY s.event_ts DESC
+             LIMIT %s
+        """
         cur.execute(sql, (store_id, limit))
         rows = cur.fetchall()
 
@@ -526,12 +578,22 @@ def locations(_: AuthContext = Depends(require_auth)):
 
 
 @router.get("/locations/heatmap")
-def inventory_heatmap(_: AuthContext = Depends(require_auth)):
+def inventory_heatmap(ctx: AuthContext = Depends(require_auth)):
     """전사 재고 히트맵 - location_id 별 SKU 수 + 보유 수량 + 부족(SKU 가용≤10) (HQ Inventory).
 
     44 위치 = WH 2 + 오프라인 매장 10 + 온라인 가상 2 (V3 plan), 시드 데이터 location_id 1-12.
+    role-scope: wh-manager → 자기 권역 location · branch-clerk → 자기 매장 한 row.
     """
-    sql = """
+    where: list[str] = []
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append("l.wh_id = %s")
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("i.location_id = %s")
+        params.append(ctx.scope_store_id)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"""
         SELECT i.location_id,
                l.name, l.location_type, l.region, l.wh_id,
                count(*) AS sku_count,
@@ -541,11 +603,12 @@ def inventory_heatmap(_: AuthContext = Depends(require_auth)):
                count(*) FILTER (WHERE i.on_hand = 0) AS zero_count
           FROM inventory i
           LEFT JOIN locations l ON l.location_id = i.location_id
+        {where_sql}
          GROUP BY i.location_id, l.name, l.location_type, l.region, l.wh_id
          ORDER BY i.location_id
     """
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, params)
         rows = cur.fetchall()
 
     return {
@@ -569,17 +632,17 @@ def inventory_heatmap(_: AuthContext = Depends(require_auth)):
 
 @router.get("/store-inventory/{store_id}")
 def inventory_by_store(store_id: int, ctx: AuthContext = Depends(require_auth)):
-    """특정 매장 재고 (Branch Inventory 페이지). FR-A7.3 매장 스코프 enforce."""
-    _check_store_scope(ctx, store_id)
-    sql = """
-        SELECT i.isbn13, i.on_hand, i.reserved_qty, COALESCE(i.safety_stock, 0) AS safety_stock,
-               i.updated_at, b.title, b.author, b.category_name, b.price_sales
-          FROM inventory i
-          LEFT JOIN books b ON b.isbn13 = i.isbn13
-         WHERE i.location_id = %s
-         ORDER BY (i.on_hand - i.reserved_qty) ASC, i.isbn13
-    """
+    """특정 매장 재고 (Branch Inventory 페이지). branch-clerk + wh-manager 스코프 enforce."""
     with db_conn() as conn, conn.cursor() as cur:
+        _check_location_scope(ctx, store_id, cur)
+        sql = """
+            SELECT i.isbn13, i.on_hand, i.reserved_qty, COALESCE(i.safety_stock, 0) AS safety_stock,
+                   i.updated_at, b.title, b.author, b.category_name, b.price_sales
+              FROM inventory i
+              LEFT JOIN books b ON b.isbn13 = i.isbn13
+             WHERE i.location_id = %s
+             ORDER BY (i.on_hand - i.reserved_qty) ASC, i.isbn13
+        """
         cur.execute(sql, (store_id,))
         rows = cur.fetchall()
 
@@ -605,54 +668,55 @@ def inventory_by_store(store_id: int, ctx: AuthContext = Depends(require_auth)):
 
 @router.get("/instructions")
 def instructions(
-    _: AuthContext = Depends(require_auth),
+    ctx: AuthContext = Depends(require_auth),
     wh_id: int | None = Query(default=None),
 ):
     """출고/입고 지시서 - APPROVED 된 pending_orders (WH Instructions / Branch Inbound).
 
-    `wh_id` 필터링 옵션 (WH manager 자기 창고 또는 매장 매니저 자기 매장).
+    `wh_id` 필터링 옵션 (hq-admin 전용 hint).
+    role-scope:
+      - wh-manager: 자기 권역 (scope_wh_id) 강제 (wh_id 파라미터 무시)
+      - branch-clerk: 자기 매장이 source 또는 target 인 row 만
     """
-    if wh_id is not None:
-        sql = """
-            SELECT po.order_id, po.order_type, po.isbn13, po.source_location_id, po.target_location_id,
-                   po.qty, po.urgency_level, po.status, po.approved_at, b.title
-              FROM pending_orders po
-              LEFT JOIN books b ON b.isbn13 = po.isbn13
-              LEFT JOIN locations sl ON sl.location_id = po.source_location_id
-              LEFT JOIN locations tl ON tl.location_id = po.target_location_id
-             WHERE po.status IN ('APPROVED', 'EXECUTED')
-               AND (sl.wh_id = %s OR tl.wh_id = %s)
-             ORDER BY
-               CASE po.urgency_level
-                 WHEN 'NEWBOOK'  THEN 0
-                 WHEN 'CRITICAL' THEN 1
-                 WHEN 'URGENT'   THEN 2
-                 WHEN 'NORMAL'   THEN 3
-                 ELSE 4
-               END,
-               po.approved_at DESC NULLS LAST
-             LIMIT 200
-        """
-        params = (wh_id, wh_id)
-    else:
-        sql = """
-            SELECT po.order_id, po.order_type, po.isbn13, po.source_location_id, po.target_location_id,
-                   po.qty, po.urgency_level, po.status, po.approved_at, b.title
-              FROM pending_orders po
-              LEFT JOIN books b ON b.isbn13 = po.isbn13
-             WHERE po.status IN ('APPROVED', 'EXECUTED')
-             ORDER BY
-               CASE po.urgency_level
-                 WHEN 'NEWBOOK'  THEN 0
-                 WHEN 'CRITICAL' THEN 1
-                 WHEN 'URGENT'   THEN 2
-                 WHEN 'NORMAL'   THEN 3
-                 ELSE 4
-               END,
-               po.approved_at DESC NULLS LAST
-             LIMIT 200
-        """
-        params = ()
+    where: list[str] = ["po.status IN ('APPROVED', 'EXECUTED')"]
+    params: list = []
+    effective_wh_id: int | None = None
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        effective_wh_id = ctx.scope_wh_id  # 자기 권역 강제
+    elif ctx.role == "hq-admin":
+        effective_wh_id = wh_id  # 옵션 hint
+    # branch-clerk 는 source/target 매장 일치 필터
+
+    join_sql = ""
+    if effective_wh_id is not None:
+        join_sql = (
+            "LEFT JOIN locations sl ON sl.location_id = po.source_location_id "
+            "LEFT JOIN locations tl ON tl.location_id = po.target_location_id"
+        )
+        where.append("(sl.wh_id = %s OR tl.wh_id = %s)")
+        params.extend([effective_wh_id, effective_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("(po.source_location_id = %s OR po.target_location_id = %s)")
+        params.extend([ctx.scope_store_id, ctx.scope_store_id])
+
+    sql = f"""
+        SELECT po.order_id, po.order_type, po.isbn13, po.source_location_id, po.target_location_id,
+               po.qty, po.urgency_level, po.status, po.approved_at, b.title
+          FROM pending_orders po
+          LEFT JOIN books b ON b.isbn13 = po.isbn13
+          {join_sql}
+         WHERE {' AND '.join(where)}
+         ORDER BY
+           CASE po.urgency_level
+             WHEN 'NEWBOOK'  THEN 0
+             WHEN 'CRITICAL' THEN 1
+             WHEN 'URGENT'   THEN 2
+             WHEN 'NORMAL'   THEN 3
+             ELSE 4
+           END,
+           po.approved_at DESC NULLS LAST
+         LIMIT 200
+    """
 
     with db_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
@@ -792,11 +856,9 @@ def sales_hourly(
 ):
     """시간대별 매출 (0~23 시 GROUP BY · 특정 매장 · 특정 날짜).
 
-    branch-clerk 는 자기 매장만 (FR-A7.3).
+    branch-clerk 자기 매장 + wh-manager 자기 권역 enforce.
     """
-    _check_store_scope(ctx, store_id)
     target_date = date or datetime.now(_KST).date().isoformat()
-
     sql = """
         SELECT EXTRACT(HOUR FROM event_ts AT TIME ZONE 'Asia/Seoul')::int AS hour,
                SUM(qty)::int        AS qty,
@@ -809,6 +871,7 @@ def sales_hourly(
          ORDER BY hour
     """
     with db_conn() as conn, conn.cursor() as cur:
+        _check_location_scope(ctx, store_id, cur)
         cur.execute(sql, (store_id, target_date))
         rows = cur.fetchall()
     return {
@@ -1465,9 +1528,8 @@ def curation(store_id: int, ctx: AuthContext = Depends(require_auth)):
     """매장 큐레이션 - spike_events (인기 도서) + 매장 재고 가용성 (Branch Curation).
 
     `spike_events` 와 `inventory(location=store)` JOIN 해서 "인기 + 매장 재고 OK" 도서 우선 표시.
-    FR-A7.3 매장 스코프 enforce.
+    branch-clerk 자기 매장 + wh-manager 자기 권역 enforce.
     """
-    _check_store_scope(ctx, store_id)
     sql = """
         SELECT s.isbn13, s.z_score, s.mentions_count, s.detected_at,
                b.title, b.author, b.category_name, b.price_sales, b.cover_url,
@@ -1480,6 +1542,7 @@ def curation(store_id: int, ctx: AuthContext = Depends(require_auth)):
          LIMIT 20
     """
     with db_conn() as conn, conn.cursor() as cur:
+        _check_location_scope(ctx, store_id, cur)
         cur.execute(sql, (store_id,))
         rows = cur.fetchall()
 

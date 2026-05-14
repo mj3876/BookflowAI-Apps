@@ -119,6 +119,11 @@ export default function BranchInbound() {
         showToast({ type: 'warning', message: '내 측 처리 끝 · 상대 측 대기' });
       }
       qc.invalidateQueries({ queryKey: ['instr-all', role] });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
@@ -136,6 +141,11 @@ export default function BranchInbound() {
       setRejectTarget(null);
       setNote('');
       qc.invalidateQueries({ queryKey: ['instr-all', role] });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
@@ -157,6 +167,11 @@ export default function BranchInbound() {
       });
       showToast({ type: 'success', message: `✅ 실행 완료 · 매장 재고 +${r.qty ?? '?'}` });
       qc.invalidateQueries({ queryKey: ['instr-all', role] });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
@@ -174,6 +189,11 @@ export default function BranchInbound() {
       }
       setFeedback({ type: 'success', msg: `발송 완료 (${r.qty ?? '?'}권) · 운송 시작` });
       qc.invalidateQueries({ queryKey: ['instr-all', role] });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
@@ -273,6 +293,11 @@ export default function BranchInbound() {
                     msg: `일괄 수령 완료 · ${r.ok}/${r.total}${r.failed ? ` · 실패 ${r.failed}` : ''}`,
                   });
                   qc.invalidateQueries({ queryKey: ['instr-all', role] });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
                 } catch (e) {
                   setFeedback({ type: 'error', msg: `일괄 수령 실패: ${String(e)}` });
                 }
@@ -371,6 +396,11 @@ export default function BranchInbound() {
                     msg: `일괄 발송 완료 · ${r.ok}/${r.total}${r.failed ? ` · 실패 ${r.failed}` : ''}`,
                   });
                   qc.invalidateQueries({ queryKey: ['instr-all', role] });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
                 } catch (e) {
                   setFeedback({ type: 'error', msg: `일괄 발송 실패: ${String(e)}` });
                 }

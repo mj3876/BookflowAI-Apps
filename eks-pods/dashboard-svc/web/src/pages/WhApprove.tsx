@@ -59,6 +59,13 @@ export default function WhApprove() {
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
+      qc.invalidateQueries({ queryKey: ['instr-all'] });
+      qc.invalidateQueries({ queryKey: ['instr'] });
     },
     onError: (e) => {
       const err = e as ApiError | Error;
@@ -110,6 +117,13 @@ export default function WhApprove() {
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
+      qc.invalidateQueries({ queryKey: ['instr-all'] });
+      qc.invalidateQueries({ queryKey: ['instr'] });
     },
     onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
   });
@@ -140,6 +154,13 @@ export default function WhApprove() {
     qc.invalidateQueries({ queryKey: ['pending-active'] });
     qc.invalidateQueries({ queryKey: ['pending-detail'] });
     qc.invalidateQueries({ queryKey: ['pending-summary'] });
+    qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+    qc.invalidateQueries({ queryKey: ['plan-summary'] });
+    qc.invalidateQueries({ queryKey: ['plan-items'] });
+    qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+    qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
+    qc.invalidateQueries({ queryKey: ['instr-all'] });
+    qc.invalidateQueries({ queryKey: ['instr'] });
   };
 
   // Stage 2 의 source/target 어느 쪽이 내 wh 인지 표시

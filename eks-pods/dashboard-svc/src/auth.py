@@ -85,7 +85,10 @@ def require_auth(
 
 
 def _check_store_scope(ctx: AuthContext, store_id: int) -> None:
-    """FR-A7.3 branch-clerk 매장 스코프 enforce."""
+    """FR-A7.3 branch-clerk 매장 스코프 enforce (path-param store_id 단독 검사).
+
+    wh-manager 권역 검사가 필요한 경우 `_check_location_scope(ctx, store_id, cur)` 사용.
+    """
     if ctx.role == "branch-clerk":
         if ctx.scope_store_id is None:
             raise HTTPException(
@@ -96,4 +99,36 @@ def _check_store_scope(ctx: AuthContext, store_id: int) -> None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"자기 매장만 조회 가능 (scope_store_id={ctx.scope_store_id} · 요청 store_id={store_id})",
+            )
+
+
+def _check_location_scope(ctx: "AuthContext", location_id: int, cur) -> None:
+    """확장 path-param 검사: branch-clerk 매장 + wh-manager 권역 동시 enforce.
+
+    - hq-admin: 통과
+    - wh-manager + scope_wh_id: locations.wh_id == scope_wh_id 인 location 만
+    - branch-clerk + scope_store_id: scope_store_id == location_id 만
+
+    `cur` 는 열려있는 psycopg cursor (locations.wh_id 조회용).
+    """
+    if ctx.role == "branch-clerk":
+        _check_store_scope(ctx, location_id)
+        return
+    if ctx.role == "wh-manager":
+        if ctx.scope_wh_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="wh-manager scope_wh_id 부재 (인증 토큰 손상)",
+            )
+        cur.execute("SELECT wh_id FROM locations WHERE location_id = %s", (location_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"location {location_id} 없음",
+            )
+        if row[0] != ctx.scope_wh_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"자기 권역만 조회 가능 (scope_wh_id={ctx.scope_wh_id} · location wh_id={row[0]})",
             )

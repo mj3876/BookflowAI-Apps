@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { postInventoryAdjust, type Role } from '../api';
 import InlineMessage from '../components/InlineMessage';
 import ConfirmModal from '../components/ConfirmModal';
@@ -24,6 +24,7 @@ export default function Manual({ scope }: { scope: 'WH' | 'BRANCH' }) {
   });
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const qc = useQueryClient();
   const { items: locItems, nameOf } = useLocations(role);
   const locOptions = locItems.filter((l) =>
     isWh ? l.location_type === 'WH' : l.location_type !== 'WH'
@@ -39,11 +40,16 @@ export default function Manual({ scope }: { scope: 'WH' | 'BRANCH' }) {
         reason: reasonText,
       });
     },
-    onSuccess: (r) =>
+    onSuccess: (r) => {
       setFeedback({
         type: 'success',
         msg: `조정 완료 — ${nameOf(r.location_id)} · 재고 ${r.on_hand_before} → ${r.on_hand_after}`,
-      }),
+      });
+      qc.invalidateQueries({ queryKey: ['ov'] });
+      qc.invalidateQueries({ queryKey: ['branch-inv'] });
+      qc.invalidateQueries({ queryKey: ['inv-heatmap'] });
+      qc.invalidateQueries({ queryKey: ['heatmap'] });
+    },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
       setFeedback({ type: 'error', msg });

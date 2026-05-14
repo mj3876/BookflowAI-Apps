@@ -117,26 +117,47 @@ async def _safe_post(url: str, body: dict, token: str, timeout: float | None = N
     """POST 프록시. (status_code, body_or_None) 반환. downstream pod 미배포면 503.
 
     timeout: None 이면 _client 기본값 · 큰 batch 요청은 60s 등 override.
+    transient connection error (cold start · pod rollout 중) 시 최대 3회 재시도 (0.3s/0.8s).
     """
-    try:
-        if timeout is not None:
-            r = await _client.post(url, json=body, headers={"Authorization": token}, timeout=timeout)
-        else:
-            r = await _client.post(url, json=body, headers={"Authorization": token})
-        return r.status_code, r.json() if r.content else None
-    except Exception as e:
-        log.warning("fan-in POST %s failed: %s", url, e)
-        return 503, None
+    import asyncio
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            if timeout is not None:
+                r = await _client.post(url, json=body, headers={"Authorization": token}, timeout=timeout)
+            else:
+                r = await _client.post(url, json=body, headers={"Authorization": token})
+            return r.status_code, r.json() if r.content else None
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+        except Exception as e:
+            log.warning("fan-in POST %s failed (non-retryable): %s", url, e)
+            return 503, None
+    log.warning("fan-in POST %s failed after 3 retries: %s", url, last_err)
+    return 503, None
 
 
 async def _safe_patch(url: str, body: dict, token: str) -> tuple[int, Any]:
-    """PATCH 프록시. D5-7 pending order 수정 proxy 용."""
-    try:
-        r = await _client.patch(url, json=body, headers={"Authorization": token})
-        return r.status_code, r.json() if r.content else None
-    except Exception as e:
-        log.warning("fan-in PATCH %s failed: %s", url, e)
-        return 503, None
+    """PATCH 프록시. D5-7 pending order 수정 proxy 용. transient retry 동일 패턴."""
+    import asyncio
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = await _client.patch(url, json=body, headers={"Authorization": token})
+            return r.status_code, r.json() if r.content else None
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+        except Exception as e:
+            log.warning("fan-in PATCH %s failed (non-retryable): %s", url, e)
+            return 503, None
+    log.warning("fan-in PATCH %s failed after 3 retries: %s", url, last_err)
+    return 503, None
 
 
 async def patch_intervention_pending_order(order_id: str, body: dict, token: str) -> tuple[int, Any]:

@@ -24,6 +24,45 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 REDIS_CHANNEL_STOCK = "stock.changed"
 
 
+def _check_inventory_read_scope(cur, ctx: AuthContext, wh_id: int) -> None:
+    """Inventory read 권한 (FR-A7.4 · 권한 매트릭스).
+
+    - hq-admin: 모든 wh OK (전권)
+    - wh-manager: scope_wh_id == wh_id 만 OK (자기 권역)
+    - branch-clerk: 자기 매장 (scope_store_id) 가 속한 wh 만 OK (locations.wh_id 매칭)
+
+    Raises HTTPException 403/404 on violation.
+    """
+    if ctx.role == "hq-admin":
+        return
+
+    if ctx.role == "wh-manager":
+        if ctx.scope_wh_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="wh-manager scope_wh_id 부재 (인증 토큰 손상)")
+        if ctx.scope_wh_id != wh_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"자기 권역만 조회 가능 (scope_wh_id={ctx.scope_wh_id} · 요청 wh_id={wh_id})")
+        return
+
+    if ctx.role == "branch-clerk":
+        if ctx.scope_store_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="branch-clerk scope_store_id 부재 (인증 토큰 손상)")
+        cur.execute("SELECT wh_id FROM locations WHERE location_id = %s", (ctx.scope_store_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"branch-clerk scope_store_id={ctx.scope_store_id} locations 미존재")
+        if row[0] != wh_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"자기 매장 권역만 조회 가능 (scope_store_id={ctx.scope_store_id} · wh_id={row[0]} · 요청 wh_id={wh_id})")
+        return
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"role '{ctx.role}' 는 inventory 조회 권한 없음")
+
+
 def _check_inventory_write_perm(cur, ctx: AuthContext, location_id: int) -> None:
     """Inventory mutation 권한 검증 (FR-A6.6 + 권한 매트릭스).
 
@@ -95,12 +134,14 @@ def _inventory_item_from_row(row: tuple) -> InventoryItem:
 def get_warehouse_inventory(wh_id: int, ctx: AuthContext = Depends(require_auth)):
     """FR-A7.4 실시간 재고 조회 — 현재고 + 안전재고 + 예상소진일 + 입출고 in-transit 합산.
 
-    Notion 2.1: WH-1↔WH-2 서로 read 가능 (2단계 의사결정용 · 상대 여유분 파악). mutate (/adjust /reserve) 만 자기 wh 제한.
-    BranchInventory 도 wh_id 단위 호출 후 frontend 에서 scope_store_id 필터 — branch-clerk read 도 OK.
+    권한 (사용자 권한 매트릭스 · 2026-05-14 정정 — 백엔드 필터 필수):
+    - hq-admin: 전권
+    - wh-manager: scope_wh_id == wh_id 만 (자기 권역 read)
+    - branch-clerk: 자기 매장이 속한 wh 만 (locations.wh_id 매칭)
+
+    Stage 2 (권역간 이동) 의사결정용 cross-wh 조회는 decision-svc 내부 SQL 이 직접 수행 ·
+    이 endpoint 는 UI/Dashboard 용으로 strict scope 적용.
     """
-    # read: 모든 role 허용 (wh-manager cross-wh OK / branch-clerk frontend filter / hq-admin 전권)
-    # mutate (adjust/reserve) 만 _check_inventory_write_perm 에서 자기 매장/wh 제한
-    _ = ctx
 
     # Notion 명세: 온라인 매장 재고 출처 = WH 본체 (is_virtual STORE_ONLINE 은 inventory row 없음)
     # → online 매장도 응답에 포함시키되 quantity 는 WH 본체 inventory 를 substitute (UNION)
@@ -144,6 +185,7 @@ def get_warehouse_inventory(wh_id: int, ctx: AuthContext = Depends(require_auth)
         ORDER BY 2, 1
     """
     with db_conn() as conn, conn.cursor() as cur:
+        _check_inventory_read_scope(cur, ctx, wh_id)
         cur.execute(sql, (wh_id, wh_id))
         rows = cur.fetchall()
 

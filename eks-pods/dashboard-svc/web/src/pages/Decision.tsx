@@ -85,6 +85,11 @@ export default function Decision() {
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
       showToast({ type: 'success', message: '강제 승인 완료' });
     },
     onError: (e) => {
@@ -108,6 +113,11 @@ export default function Decision() {
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
     },
     onError: (e) => showToast({ type: 'error', message: `본사 강제 승인 실패: ${String(e)}` }),
   });
@@ -135,6 +145,11 @@ export default function Decision() {
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
       setPrefillTarget(null);
       setSearchParams({});
     },
@@ -161,6 +176,11 @@ export default function Decision() {
       qc.invalidateQueries({ queryKey: ['pending-active'] });
       qc.invalidateQueries({ queryKey: ['pending-detail'] });
       qc.invalidateQueries({ queryKey: ['pending-summary'] });
+      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
+      qc.invalidateQueries({ queryKey: ['plan-summary'] });
+      qc.invalidateQueries({ queryKey: ['plan-items'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
+      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
       setTimeout(() => setDemoResult(null), 10000);
     },
     onError: (e) => alert(`plan 발의 실패: ${String(e)}`),

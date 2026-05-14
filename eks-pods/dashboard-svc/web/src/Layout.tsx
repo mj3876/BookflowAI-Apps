@@ -1,6 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { roleLabel, roleGroup, useRole, type Role } from './auth';
 import { useLiveStream } from './useLiveStream';
+import { useLiveInvalidate } from './useLiveInvalidate';
 import { useLocations } from './useLocations';
 
 type NavItem = { to: string; label: string; desc: string; allow: 'HQ' | 'WH' | 'BRANCH' | 'ALL' };
@@ -108,6 +109,8 @@ export default function Layout() {
   const nav = useNavigate();
   const loc = useLocation();
   const { status, counts } = useLiveStream(role);
+  // WS → TanStack Query 무효화 bridge — 다른 사용자의 행동도 sub-second 반영
+  useLiveInvalidate(role);
   const { nameOf } = useLocations(role ?? 'hq-admin');
 
   if (!role) return null;

@@ -524,20 +524,35 @@ def decide(req: DecideRequest, ctx: AuthContext = Depends(require_auth)):
 
 @router.get("/pending-orders", response_model=PendingOrdersResponse)
 def list_pending(
-    _: AuthContext = Depends(require_auth),
+    ctx: AuthContext = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=500),
 ):
-    """PENDING 큐 (raw · role 필터 없음). 권한 분리된 큐는 intervention-svc /intervention/queue 사용."""
-    sql = """
-        SELECT order_id, order_type, isbn13, source_location_id, target_location_id,
-               qty, urgency_level, status, created_at
-          FROM pending_orders
-         WHERE status = 'PENDING'
-         ORDER BY urgency_level DESC, created_at ASC
+    """PENDING 큐 — role/scope 자동 필터 (2026-05-14 정정).
+
+    - hq-admin: 전체
+    - wh-manager + scope_wh_id: source 또는 target wh = scope_wh_id
+    - branch-clerk + scope_store_id: target_location_id = scope_store_id
+
+    상세 승인 워크플로우 (PENDING/APPROVED/EXECUTED) 는 intervention-svc /intervention/queue.
+    """
+    where = ["po.status = 'PENDING'"]
+    params: list = []
+    scope_clause, scope_params = _plan_scope_clause(ctx)
+    if scope_clause:
+        where.append(scope_clause)
+        params.extend(scope_params)
+    params.append(limit)
+
+    sql = f"""
+        SELECT po.order_id, po.order_type, po.isbn13, po.source_location_id, po.target_location_id,
+               po.qty, po.urgency_level, po.status, po.created_at
+          FROM pending_orders po
+         WHERE {' AND '.join(where)}
+         ORDER BY po.urgency_level DESC, po.created_at ASC
          LIMIT %s
     """
     with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql, (limit,))
+        cur.execute(sql, params)
         rows = cur.fetchall()
 
     items = [
