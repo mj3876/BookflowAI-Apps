@@ -468,29 +468,29 @@ def decide(req: DecideRequest, ctx: AuthContext = Depends(require_auth)):
                     detail=f"비활성 도서 (active={book_row[0]} · discontinue_mode={book_row[1]}) 는 의사결정 불가",
                 )
 
-            # Cascade (4-stage · 2026-05-14: Stage 0 WH_TO_STORE 추가)
+            # Cascade (4-stage · 2026-05-14: REBALANCE 1순위 · WH_TO_STORE 2순위 폴백 정정)
             stage_num: Literal[0, 1, 2, 3]
             order_type: str
             source_loc: int | None
 
-            # Stage 0 (WH_TO_STORE) + Stage 1 (REBALANCE) 는 target=STORE_OFFLINE 일 때만.
+            # Stage 0 REBALANCE (1순위 · 매장↔매장) + Stage 1 WH_TO_STORE (2순위 폴백) 는 target=STORE_OFFLINE 일 때만.
             # target 이 WH 본체 / 온라인(virtual) 이면 Stage 2/3 만.
-            s0 = (
-                _stage0_source(cur, req.isbn13, target_wh, req.qty)
+            s_reb = (
+                _stage1_source(cur, req.isbn13, target_wh, req.target_location_id, req.qty)
                 if target_type == "STORE_OFFLINE"
                 else None
             )
             stage2_info: dict | None = None
-            if s0 is not None:
-                stage_num, order_type, source_loc = 0, "WH_TO_STORE", s0
+            if s_reb is not None:
+                stage_num, order_type, source_loc = 0, "REBALANCE", s_reb
             else:
-                s1 = (
-                    _stage1_source(cur, req.isbn13, target_wh, req.target_location_id, req.qty)
+                s_wts = (
+                    _stage0_source(cur, req.isbn13, target_wh, req.qty)
                     if target_type == "STORE_OFFLINE"
                     else None
                 )
-                if s1 is not None:
-                    stage_num, order_type, source_loc = 1, "REBALANCE", s1
+                if s_wts is not None:
+                    stage_num, order_type, source_loc = 1, "WH_TO_STORE", s_wts
                 else:
                     stage2_info = _stage2_source(cur, req.isbn13, target_wh, req.qty)
                     if stage2_info is not None:
@@ -819,42 +819,8 @@ def _build_daily_plan(cur, snapshot_date: date) -> list[dict]:
                 "type": meta["type"], "wh": meta["wh"],
             }
 
-        # Phase 0 (2026-05-14 신규): same-wh WH body → STORE (WH_TO_STORE).
-        # 자기 wh 본체 잉여로 매장 부족을 먼저 보충 (Stage 1 매장↔매장 보다 자연스러운 흐름).
-        for wh_id, store_list in wh_to_stores.items():
-            wb = wh_body.get(wh_id)
-            if wb is None or wb not in gaps:
-                continue
-            wb_g = gaps[wb]
-            if wb_g["gap"] >= 0:
-                continue  # wh 본체도 부족 (gap > 0) 이거나 정확히 desired = effective
-            wb_avail = -wb_g["gap"]  # positive surplus of wh body
-            # 매장 부족 (gap > 0) 큰 순으로 채움
-            shorts = sorted(
-                [(l, gaps[l]) for l in store_list if l in gaps and gaps[l]["gap"] > 0],
-                key=lambda x: -x[1]["gap"],
-            )
-            for tgt_loc, tgt_g in shorts:
-                if wb_avail <= 0:
-                    break
-                if tgt_g["gap"] <= 0:
-                    continue
-                take = min(wb_avail, tgt_g["gap"])
-                if take >= PLAN_MIN_ROW_QTY:
-                    plan.append({
-                        "order_type": "WH_TO_STORE", "isbn": isbn,
-                        "src": wb, "tgt": tgt_loc, "qty": take, "stage": 0,
-                        "rationale": {
-                            "phase": "stage0_wh_to_store",
-                            "src_effective": wb_g["effective"], "src_desired": wb_g["desired"],
-                            "tgt_effective": tgt_g["effective"], "tgt_desired": tgt_g["desired"],
-                        },
-                    })
-                wb_avail -= take
-                tgt_g["gap"] -= take
-            wb_g["gap"] = -wb_avail
-
-        # Phase A: same-wh store-to-store REBALANCE
+        # Phase A (2026-05-14 정정 · 1순위): same-wh store-to-store REBALANCE
+        # 매장 ↔ 매장 재분배 우선 시도. 안 되면 WH body 폴백 (Phase WB).
         for wh_id, store_list in wh_to_stores.items():
             shorts = sorted(
                 [(l, gaps[l]) for l in store_list if l in gaps and gaps[l]["gap"] > 0],
@@ -878,9 +844,9 @@ def _build_daily_plan(cur, snapshot_date: date) -> list[dict]:
                     if take >= PLAN_MIN_ROW_QTY:
                         plan.append({
                             "order_type": "REBALANCE", "isbn": isbn,
-                            "src": src_loc, "tgt": tgt_loc, "qty": take, "stage": 1,
+                            "src": src_loc, "tgt": tgt_loc, "qty": take, "stage": 0,
                             "rationale": {
-                                "phase": "stage1_rebalance",
+                                "phase": "stage0_rebalance",
                                 "src_effective": src_g["effective"], "src_desired": src_g["desired"],
                                 "tgt_effective": tgt_g["effective"], "tgt_desired": tgt_g["desired"],
                             },
@@ -890,6 +856,40 @@ def _build_daily_plan(cur, snapshot_date: date) -> list[dict]:
                     if tgt_g["gap"] <= 0:
                         si += 1
                 src_g["gap"] = -avail
+
+        # Phase A' (2026-05-14 정정 · 2순위 폴백): same-wh WH body → STORE (WH_TO_STORE).
+        # 매장 재분배 (Phase A) 후에도 매장 부족 잔존 시, 자기 wh 본체 잉여로 보충.
+        for wh_id, store_list in wh_to_stores.items():
+            wb = wh_body.get(wh_id)
+            if wb is None or wb not in gaps:
+                continue
+            wb_g = gaps[wb]
+            if wb_g["gap"] >= 0:
+                continue  # wh 본체도 부족 (gap > 0) 이거나 정확히 desired = effective
+            wb_avail = -wb_g["gap"]  # positive surplus of wh body
+            shorts = sorted(
+                [(l, gaps[l]) for l in store_list if l in gaps and gaps[l]["gap"] > 0],
+                key=lambda x: -x[1]["gap"],
+            )
+            for tgt_loc, tgt_g in shorts:
+                if wb_avail <= 0:
+                    break
+                if tgt_g["gap"] <= 0:
+                    continue
+                take = min(wb_avail, tgt_g["gap"])
+                if take >= PLAN_MIN_ROW_QTY:
+                    plan.append({
+                        "order_type": "WH_TO_STORE", "isbn": isbn,
+                        "src": wb, "tgt": tgt_loc, "qty": take, "stage": 1,
+                        "rationale": {
+                            "phase": "stage1_wh_to_store",
+                            "src_effective": wb_g["effective"], "src_desired": wb_g["desired"],
+                            "tgt_effective": tgt_g["effective"], "tgt_desired": tgt_g["desired"],
+                        },
+                    })
+                wb_avail -= take
+                tgt_g["gap"] -= take
+            wb_g["gap"] = -wb_avail
 
         # Phase B: cross-wh WH_TRANSFER (WH body ↔ WH body)
         wh_short = sorted(
