@@ -226,6 +226,26 @@ export default function WhDashboard() {
     }
     return [...m.values()].sort((a, b) => a.date.localeCompare(b.date));
   })();
+  // 출고 대기 (자기 wh 의 source · PENDING+APPROVED · 운송 대기) — 날짜별 group
+  const myUpcomingOutbound = (pending.data?.items ?? []).filter((o) => {
+    if (o.status !== 'PENDING' && o.status !== 'APPROVED') return false;
+    const s = o.source_location_id;
+    if (s == null) return false;
+    return myStoreIds.has(s) || s === wh?.location_id;
+  });
+  const whOutboundBuckets: WhArrivalBucket[] = (() => {
+    const m = new Map<string, WhArrivalBucket>();
+    for (const o of myUpcomingOutbound) {
+      const r = ((o as any).forecast_rationale ?? {}) as Record<string, unknown>;
+      const d = typeof r.expected_arrival_date === 'string' ? r.expected_arrival_date : null;
+      if (!d) continue;
+      if (!m.has(d)) m.set(d, { date: d, count: 0, orders: [] });
+      const b = m.get(d)!;
+      b.count += 1;
+      b.orders.push(o);
+    }
+    return [...m.values()].sort((a, b) => a.date.localeCompare(b.date));
+  })();
   const whArrivalLabel = (iso: string): string => {
     const t = new Date(todayIso + 'T00:00:00');
     const d = new Date(iso + 'T00:00:00');
@@ -391,6 +411,43 @@ export default function WhDashboard() {
                 >
                   <div className="flex items-baseline justify-between">
                     <span className="text-xs font-semibold text-bf-primary">{whArrivalLabel(b.date)}</span>
+                    <span className="text-[10px] text-bf-muted">{b.date}</span>
+                  </div>
+                  <div className="mt-1 text-lg font-bold text-bf-text">{b.count}건</div>
+                  <div className="text-[11px] text-bf-muted mt-1">{typeLabel}</div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* row 0.6 — 📤 출고 대기 (자기 wh source · 운송 대기) · 날짜별 group */}
+      {whOutboundBuckets.length > 0 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="h2 text-sm">📤 보낼 거 — 출고 대기 (날짜별)</h2>
+            <span className="text-[10px] text-bf-muted">우리 wh 또는 권역 매장 source · 운송 차 routing</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {whOutboundBuckets.map((b) => {
+              const types = new Set(b.orders.map((o) => o.order_type));
+              const typeLabel = [...types]
+                .map((t) =>
+                  t === 'WH_TO_STORE'    ? '🏬 매장보충' :
+                  t === 'REBALANCE'      ? '🔄 재분배' :
+                  t === 'WH_TRANSFER'    ? '🚛 권역간' :
+                  t === 'PUBLISHER_ORDER'? '📦 외부발주' : t,
+                ).join(' · ');
+              return (
+                <Link
+                  key={b.date}
+                  to="/wh-instructions"
+                  className="block p-2 rounded border border-bf-border2 bg-bf-panel2 hover:border-bf-warn transition"
+                  title={`${b.count}건 출고 예정`}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs font-semibold text-bf-warn">{whArrivalLabel(b.date)}</span>
                     <span className="text-[10px] text-bf-muted">{b.date}</span>
                   </div>
                   <div className="mt-1 text-lg font-bold text-bf-text">{b.count}건</div>
