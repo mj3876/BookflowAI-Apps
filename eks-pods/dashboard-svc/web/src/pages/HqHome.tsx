@@ -62,9 +62,9 @@ export default function HqHome() {
   });
 
   const items = pending.data?.items ?? [];
-  // 4-stage cascade (2026-05-14 Stage 0 WH_TO_STORE 추가)
-  const stage0 = items.filter((o) => o.order_type === 'WH_TO_STORE').length;
-  const stage1 = items.filter((o) => o.order_type === 'REBALANCE').length;
+  // 4-stage cascade (2026-05-14 정정: Stage 0=REBALANCE 1순위, Stage 1=WH_TO_STORE 2순위 폴백, Stage 2=WH_TRANSFER, Stage 3=PUBLISHER_ORDER)
+  const stage0 = items.filter((o) => o.order_type === 'REBALANCE').length;
+  const stage1 = items.filter((o) => o.order_type === 'WH_TO_STORE').length;
   const stage2 = items.filter((o) => o.order_type === 'WH_TRANSFER').length;
   const stage3 = items.filter((o) => o.order_type === 'PUBLISHER_ORDER').length;
   const totalPending = items.filter((o) => o.status === 'PENDING').length;
@@ -144,7 +144,7 @@ export default function HqHome() {
           <div className="metric-label">📋 의사결정 처리</div>
           <div className="metric-value text-bf-warn">{totalPending}건</div>
           <div className="text-[11px] text-bf-muted mt-1">
-            🏬 {stage0} · 🔄 {stage1} · 🚛 {stage2} · 📦 {stage3}
+            🔄 {stage0} · 🏬 {stage1} · 🚛 {stage2} · 📦 {stage3}
             {urgentPending > 0 && <span className="text-bf-danger ml-1">· 긴급 {urgentPending}</span>}
           </div>
         </Link>
