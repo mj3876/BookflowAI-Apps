@@ -70,19 +70,28 @@ def _needs_logic_apps(event_type: str) -> bool:
     return event_type in _LOGIC_APPS_EVENTS
 
 
+def _logic_apps_endpoint(event_type: str) -> str:
+    base = settings.logic_apps_url.rstrip("/")
+    if "/triggers/" in base or "sig=" in base:
+        return base
+    return f"{base}/workflow/{event_type}"
+
+
 async def _post_logic_apps(
     event_type: str,
+    severity: str,
     payload: dict,
     correlation_id,
     recipients: list[dict],
 ) -> tuple[bool, str | None]:
     body = {
         "event_type": event_type,
+        "severity": severity,
         "correlation_id": str(correlation_id) if correlation_id else None,
         "payload": payload,
         "recipients": recipients,  # [{address, displayName}] → ACS Email 수신자
     }
-    url = f"{settings.logic_apps_url}/workflow/{event_type}"
+    url = _logic_apps_endpoint(event_type)
     try:
         async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
             r = await c.post(url, json=body)
@@ -106,7 +115,13 @@ async def send(req: SendRequest, ctx: AuthContext = Depends(require_auth)) -> Se
         new_status = "BUFFERED" if ok else "FAILED"
     elif _needs_logic_apps(req.event_type):
         recipients = get_recipients(req.event_type, req.payload_summary)
-        ok, err = await _post_logic_apps(req.event_type, req.payload_summary, req.correlation_id, recipients)
+        ok, err = await _post_logic_apps(
+            req.event_type,
+            req.severity,
+            req.payload_summary,
+            req.correlation_id,
+            recipients,
+        )
         new_status = "SENT" if ok else "FAILED"
     else:
         ok, err, new_status = True, None, "SKIPPED"

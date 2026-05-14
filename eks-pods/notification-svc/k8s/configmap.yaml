@@ -10,8 +10,9 @@ data:
   NOTIFICATION_RDS_USER: "notification_svc"
   NOTIFICATION_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
   NOTIFICATION_REDIS_PORT: "6379"
-  # Phase 2-3: azure-logic-apps-mock (in-cluster). Phase 4 swap: real Azure Logic Apps URL via Egress NAT.
-  NOTIFICATION_LOGIC_APPS_URL: "http://azure-logic-apps-mock.stubs.svc.cluster.local"
+  # Phase 4: Azure Logic Apps HTTP trigger callback URL.
+  # TODO: move signed callback URL to Secret/ESO after integration testing.
+  NOTIFICATION_LOGIC_APPS_URL: "https://prod-06.japanwest.logic.azure.com:443/workflows/dd6cf919e5d5477ab09cd42eabe489ea/triggers/manual/paths/invoke?api-version=2019-05-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=o3SWHvMXcVJqUm4Sx85TWdx8QlfqPIk4WJM7qts-WJI"
   NOTIFICATION_LOGIC_APPS_TIMEOUT_SECONDS: "5.0"
   NOTIFICATION_AUTH_MODE: "mock"
   NOTIFICATION_LOG_LEVEL: "INFO"
