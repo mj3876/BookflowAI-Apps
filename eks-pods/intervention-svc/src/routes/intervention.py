@@ -27,7 +27,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from ..auth import AuthContext, require_auth
-from ..db import db_conn
+from ..db import db_conn, redis_client
 from ..models import (
     ApprovalResponse,
     ApproveRequest,
@@ -99,6 +99,46 @@ def _notify(token: str, event_type: str, severity: str, payload: dict, correlati
             )
     except Exception as e:
         log.warning("notification-svc /send (%s) failed (non-fatal): %s", event_type, e)
+
+
+
+def _check_and_notify_plan_finalized(token: str) -> None:
+    """오늘 PENDING=0 이면 DailyPlanFinalized 1회 발송 (Redis 플래그로 중복 방지)."""
+    from datetime import date
+    today = date.today().isoformat()
+    flag_key = f"daily_plan_finalized:{today}"
+    try:
+        rc = redis_client()
+        if rc.exists(flag_key):
+            return
+        with db_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM pending_orders WHERE status='PENDING'")
+            if cur.fetchone()[0] > 0:
+                return
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE status IN ('APPROVED','EXECUTED','REJECTED')),
+                    COUNT(*) FILTER (WHERE status IN ('APPROVED','EXECUTED')),
+                    COUNT(*) FILTER (WHERE status = 'REJECTED'),
+                    COUNT(*) FILTER (WHERE auto_execute_eligible AND status IN ('APPROVED','EXECUTED'))
+                FROM pending_orders WHERE created_at::date = %s
+                """,
+                (today,),
+            )
+            total, approved, rejected, auto = cur.fetchone()
+        rc.set(flag_key, "1", ex=86400)
+    except Exception as e:
+        log.warning("_check_and_notify_plan_finalized error: %s", e)
+        return
+    _notify(token, "DailyPlanFinalized", severity="INFO", payload={
+        "today": today,
+        "total": total,
+        "approved": approved,
+        "rejected": rejected,
+        "auto": auto,
+        "s1": 0, "s2": 0, "s3": 0,
+    })
 
 
 def _location_wh(cur, location_id: int | None) -> int | None:
@@ -484,7 +524,6 @@ def queue(
         "ORDER BY po.urgency_level DESC, po.created_at ASC"
     )
     # 응답 size 줄이기: forecast_rationale 은 detail 호출 시만 (date 또는 PENDING 모드).
-    # summary 호환 모드 (include_history 만) 는 rationale 제외 — 가벼운 응답.
     select_rationale = (date is not None) or (not include_history)
     rationale_col = "po.forecast_rationale" if select_rationale else "NULL::jsonb"
     sql = f"""
@@ -692,6 +731,7 @@ def approve(req: ApproveRequest, ctx: AuthContext = Depends(require_auth)):
         },
         correlation_id=str(req.order_id),
     )
+    _check_and_notify_plan_finalized(ctx.token)
     return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="APPROVED", decided_at=decided_at, final_status=final_status)
 
 
@@ -721,6 +761,7 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
         },
         correlation_id=str(req.order_id),
     )
+    _check_and_notify_plan_finalized(ctx.token)
     return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at, final_status=final_status)
 
 
