@@ -676,22 +676,37 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
 
 @router.post("/intervene/approve-all-today")
 def approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(require_auth)):
-    """오늘 PENDING 전체 일괄 승인 — 페이지네이션 / batch limit 우회 (서버측 fetch + bulk).
+    """오늘 PENDING 일괄 승인 — 자기 권한 범위 만. 페이지네이션·batch limit 우회.
 
-    role/scope 자동 필터. WH_TRANSFER 는 권한 있는 측 (SOURCE/TARGET) 자동 처리.
-    body: {order_type?: 'REBALANCE'|'WH_TRANSFER'|'PUBLISHER_ORDER'}
-    response: {total, ok, failed, errors}
+    role 별 strict 권한 (단건 escalation 과 달리 hq-admin 도 자기 stage 만):
+      - hq-admin    → PUBLISHER_ORDER (Stage 3 FINAL)
+      - wh-manager  → 자기 wh 의 REBALANCE/WH_TRANSFER/PUBLISHER_ORDER (target=자기)
+      - branch-clerk→ 자기 매장 target REBALANCE
+    body: {order_type?: 'REBALANCE'|'WH_TRANSFER'|'PUBLISHER_ORDER'} (UI 탭 필터)
+    response: {total_orders, ok, failed, errors}
     """
     order_type = body.get("order_type")
 
     where = ["po.status = 'PENDING'"]
     params: list = []
-    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+    if ctx.role == "hq-admin":
+        where.append("po.order_type = 'PUBLISHER_ORDER'")
+    elif ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        # REBALANCE 는 source/target 둘 다 자기 wh 안의 store · WH_TRANSFER/PUBLISHER_ORDER 는 자기 측 wh
         where.append(
-            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
-            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+            "((po.order_type = 'REBALANCE'"
+            "   AND EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            "   AND EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+            " OR (po.order_type IN ('WH_TRANSFER','PUBLISHER_ORDER')"
+            "   AND (EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            "    OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))))"
         )
-        params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+        params.extend([ctx.scope_wh_id, ctx.scope_wh_id, ctx.scope_wh_id, ctx.scope_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("po.order_type = 'REBALANCE' AND po.target_location_id = %s")
+        params.append(ctx.scope_store_id)
+    else:
+        return {"total_orders": 0, "ok": 0, "failed": 0, "errors": ["권한 부족 (scope 미지정)"]}
     if order_type:
         where.append("po.order_type = %s")
         params.append(order_type)
