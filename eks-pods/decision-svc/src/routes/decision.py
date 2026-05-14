@@ -932,3 +932,176 @@ def plan_daily(
         "isbns_planned": len(isbns_set),
         "cleared": cleared,
     }
+
+
+# =============================================================================
+# Final Plan 조회 — /plan-daily 발의 결과 (4×4 matrix + list)
+# =============================================================================
+# 시연 시 사용자가 plan_snapshot_date 별 처리 결과 (PENDING/APPROVED/EXECUTED/REJECTED/AUTO_EXECUTED)
+# × stage (REBALANCE/WH_TRANSFER/PUBLISHER_ORDER) 매트릭스 + 상세 list 를 한 번에 확인.
+# role/scope 자동 필터 — intervention-svc /queue 와 동일 규약.
+# =============================================================================
+
+def _plan_scope_clause(ctx: AuthContext) -> tuple[str, list]:
+    """role/scope → SQL where 절 + params. 빈 절이면 ("", []) 반환."""
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        return (
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))",
+            [ctx.scope_wh_id, ctx.scope_wh_id],
+        )
+    if ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        return ("po.target_location_id = %s", [ctx.scope_store_id])
+    return ("", [])
+
+
+@router.get("/plan-daily/{snapshot_date}/summary")
+def plan_daily_summary(snapshot_date: str, ctx: AuthContext = Depends(require_auth)):
+    """plan_snapshot_date 별 by_stage × by_status 매트릭스 + 총합.
+
+    role/scope 자동 필터:
+      - hq-admin: 전체
+      - wh-manager + scope_wh_id: source 또는 target wh = scope_wh_id
+      - branch-clerk + scope_store_id: target_location_id = scope_store_id
+
+    Response:
+      {snapshot_date, by_stage_status: [{order_type, status, cnt, qty_total}],
+       totals: {total_orders, total_qty, stages: {...}, statuses: {...}}}
+    """
+    where = ["forecast_rationale->>'plan_snapshot_date' = %s"]
+    params: list = [snapshot_date]
+    scope_clause, scope_params = _plan_scope_clause(ctx)
+    if scope_clause:
+        where.append(scope_clause)
+        params.extend(scope_params)
+
+    sql = f"""
+        SELECT po.order_type, po.status, COUNT(*)::int AS cnt,
+               COALESCE(SUM(po.qty), 0)::int AS qty_total
+          FROM pending_orders po
+         WHERE {' AND '.join(where)}
+         GROUP BY po.order_type, po.status
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    by_stage_status = [
+        {"order_type": r[0], "status": r[1], "cnt": int(r[2]), "qty_total": int(r[3])}
+        for r in rows
+    ]
+    total_orders = sum(int(r[2]) for r in rows)
+    total_qty = sum(int(r[3]) for r in rows)
+    stages: dict[str, int] = {"REBALANCE": 0, "WH_TRANSFER": 0, "PUBLISHER_ORDER": 0}
+    statuses: dict[str, int] = {
+        "PENDING": 0, "APPROVED": 0, "EXECUTED": 0, "REJECTED": 0, "AUTO_EXECUTED": 0,
+    }
+    for r in rows:
+        stages[r[0]] = stages.get(r[0], 0) + int(r[2])
+        statuses[r[1]] = statuses.get(r[1], 0) + int(r[2])
+
+    return {
+        "snapshot_date": snapshot_date,
+        "by_stage_status": by_stage_status,
+        "totals": {
+            "total_orders": total_orders,
+            "total_qty": total_qty,
+            "stages": stages,
+            "statuses": statuses,
+        },
+    }
+
+
+@router.get("/plan-daily/{snapshot_date}/items")
+def plan_daily_items(
+    snapshot_date: str,
+    status: str | None = Query(default=None, description="필터: PENDING/APPROVED/EXECUTED/REJECTED/AUTO_EXECUTED"),
+    order_type: str | None = Query(default=None, description="필터: REBALANCE/WH_TRANSFER/PUBLISHER_ORDER"),
+    q: str | None = Query(default=None, description="검색: isbn13 / 책 제목 / location 이름 ILIKE"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """plan items 상세 list. role/scope + status/order_type/검색 필터 + pagination.
+
+    JOIN books (title) · locations (source/target 이름) 포함.
+
+    Response:
+      {total, items: [{order_id, isbn13, title, order_type, status,
+                       source_location_id, source_location_name,
+                       target_location_id, target_location_name,
+                       qty, approved_at, executed_at, reject_reason, urgency_level,
+                       created_at}]}
+    """
+    where = ["po.forecast_rationale->>'plan_snapshot_date' = %s"]
+    params: list = [snapshot_date]
+
+    scope_clause, scope_params = _plan_scope_clause(ctx)
+    if scope_clause:
+        where.append(scope_clause)
+        params.extend(scope_params)
+
+    if status:
+        where.append("po.status = %s")
+        params.append(status)
+    if order_type:
+        where.append("po.order_type = %s")
+        params.append(order_type)
+    if q:
+        where.append(
+            "(po.isbn13 ILIKE %s OR b.title ILIKE %s OR sl.name ILIKE %s OR tl.name ILIKE %s)"
+        )
+        like = f"%{q}%"
+        params.extend([like, like, like, like])
+
+    where_sql = " AND ".join(where)
+    base_from = (
+        " FROM pending_orders po "
+        " LEFT JOIN books b      ON b.isbn13 = po.isbn13 "
+        " LEFT JOIN locations sl ON sl.location_id = po.source_location_id "
+        " LEFT JOIN locations tl ON tl.location_id = po.target_location_id "
+    )
+
+    list_sql = f"""
+        SELECT po.order_id, po.isbn13, b.title,
+               po.order_type, po.status,
+               po.source_location_id, sl.name,
+               po.target_location_id, tl.name,
+               po.qty, po.urgency_level,
+               po.approved_at, po.executed_at, po.reject_reason,
+               po.created_at
+          {base_from}
+         WHERE {where_sql}
+         ORDER BY po.created_at DESC
+         LIMIT %s OFFSET %s
+    """
+    count_sql = f"SELECT COUNT(*)::int {base_from} WHERE {where_sql}"
+
+    list_params = params + [limit, offset]
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(count_sql, params)
+        total = int(cur.fetchone()[0])
+        cur.execute(list_sql, list_params)
+        rows = cur.fetchall()
+
+    items = [
+        {
+            "order_id": str(r[0]),
+            "isbn13": r[1],
+            "title": r[2],
+            "order_type": r[3],
+            "status": r[4],
+            "source_location_id": r[5],
+            "source_location_name": r[6],
+            "target_location_id": r[7],
+            "target_location_name": r[8],
+            "qty": int(r[9] or 0),
+            "urgency_level": r[10],
+            "approved_at": r[11].isoformat() if r[11] else None,
+            "executed_at": r[12].isoformat() if r[12] else None,
+            "reject_reason": r[13],
+            "created_at": r[14].isoformat() if r[14] else None,
+        }
+        for r in rows
+    ]
+    return {"total": total, "items": items}

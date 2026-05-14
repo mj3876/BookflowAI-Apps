@@ -1,14 +1,14 @@
 """intervention routes - V6.2 3-stage decision authority enforcement.
 
-Stage / order_type / approval_side 행렬 (시트10 + 시트04 12 events):
+Stage / order_type / approval_side 행렬 (시트10 + 시트04 12 events · 2026-05-14 REBALANCE 양측 협의 정정):
 
 | Stage | order_type        | approval_side    | 권한                                                    |
 |-------|-------------------|------------------|-------------------------------------------------------|
-| 1     | REBALANCE         | FINAL only       | wh-manager (SOURCE/TARGET 같은 wh - 자기 wh 만)            |
+| 1     | REBALANCE         | SOURCE / TARGET  | 해당 측 매장/창고 (양측 모두 승인 시 APPROVED)                 |
 | 2     | WH_TRANSFER       | SOURCE / TARGET  | wh-manager (SOURCE 면 source location 의 wh, 동일)         |
 | 3     | PUBLISHER_ORDER   | FINAL only       | hq-admin 만                                             |
 
-Stage 2 양쪽 (SOURCE+TARGET) 모두 APPROVED → status=APPROVED 자동 전환.
+Stage 1·2 양쪽 (SOURCE+TARGET) 모두 APPROVED → status=APPROVED 자동 전환.
 hq-admin 은 모든 stage 의 FINAL 권한 가짐 (escalation).
 
 승인/거절 후 notification-svc /notification/send 호출 (시트04 12 events 정합):
@@ -64,6 +64,8 @@ _LOGIC_APPS_EVENTS = {
     "AutoExecutedUrgent", "DailyPlanFinalized", "SpikeUrgent",
     "ApprovalDelayed", "InboundRejected", "NewBookRequest",
     "LambdaAlarm", "DeploymentRollback",
+    # 2026-05-14: 양측 협의 최종 거부 (APPROVED → REJECTED) 알림 — 재고 복원 인지
+    "OrderRejectedAfterApproval",
 }
 
 
@@ -148,16 +150,44 @@ def _location_wh(cur, location_id: int | None) -> int | None:
     return row[0] if row else None
 
 
+def _adjust_source_inventory(cur, order_id: str, ctx: AuthContext, direction: int, reason_prefix: str) -> None:
+    """Option B inventory 변동 helper.
+    direction = -1: 승인 시 source -qty
+    direction = +1: 거부/입고거부 시 source +qty 복원
+    REBALANCE / WH_TRANSFER 만 처리 (PUBLISHER_ORDER 는 source NULL).
+    EXECUTED 후엔 호출 안 됨 (이미 매장 입고됨).
+    """
+    cur.execute(
+        "SELECT order_type, source_location_id, isbn13, qty FROM pending_orders WHERE order_id=%s::uuid",
+        (order_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return
+    ot, src, isbn, qty = row
+    if ot not in ("REBALANCE", "WH_TRANSFER") or src is None:
+        return
+    delta = direction * qty
+    cur.execute(
+        "UPDATE inventory SET on_hand = on_hand + %s, updated_at=NOW(), updated_by=%s WHERE isbn13=%s AND location_id=%s",
+        (delta, ctx.user_id, isbn, src),
+    )
+    cur.execute(
+        "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state) VALUES ('user', %s, 'inventory.adjust', 'inventory', %s, %s::jsonb)",
+        (ctx.user_id, f"{isbn}:{src}", json.dumps({"delta": delta, "reason": f"{reason_prefix}:{order_id[:8]}", "order_id": order_id})),
+    )
+
+
 def _validate_authority(cur, ctx: AuthContext, order_id: str, side: str) -> tuple[str, int | None, int | None]:
     """승인 권한 검증.
 
     Returns (order_type, source_wh, target_wh) for valid case. Raises 403 on violation.
 
-    Rules:
-    - REBALANCE  : approval_side='FINAL' only · approver wh == source/target wh (둘 다 같음)
+    Rules (2026-05-14 REBALANCE 양측 협의 정정):
+    - REBALANCE  : approval_side in ('SOURCE','TARGET') · 해당 측 매장/창고 · 양측 모두 승인 시 APPROVED
     - WH_TRANSFER: approval_side in ('SOURCE','TARGET') · approver wh == 해당 side 의 wh
-    - PUBLISHER_ORDER: approval_side='FINAL' only · role='hq-admin' only
-    - hq-admin escalation: 어느 stage 의 FINAL 도 가능 (override)
+    - PUBLISHER_ORDER: approval_side='FINAL' only · hq-admin 또는 자기 권역 wh-manager
+    - hq-admin escalation: 어느 stage 든 가능 (override)
     """
     cur.execute(
         "SELECT order_type, source_location_id, target_location_id FROM pending_orders WHERE order_id = %s",
@@ -171,26 +201,29 @@ def _validate_authority(cur, ctx: AuthContext, order_id: str, side: str) -> tupl
     target_wh = _location_wh(cur, target_loc)
 
     if order_type == "REBALANCE":
-        if side != "FINAL":
+        # 2026-05-14: REBALANCE 도 WH_TRANSFER 와 동일하게 양측 협의 (SOURCE/TARGET 둘 다 승인)
+        if side not in ("SOURCE", "TARGET"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="REBALANCE 는 approval_side='FINAL' 만 허용 (단일 승인)")
+                                detail="REBALANCE 는 approval_side in ('SOURCE','TARGET') 만 허용 (양측 협의)")
         if ctx.role == "hq-admin":
             return order_type, source_wh, target_wh
-        # FR-A6.6 매장 직원 입고 거부 — REBALANCE target 이 자기 매장이면 거부 권한
+        my_side_loc = source_loc if side == "SOURCE" else target_loc
+        my_side_wh = source_wh if side == "SOURCE" else target_wh
+        # FR-A6.6 매장 직원 — 자기 매장 측 (SOURCE 면 source_loc / TARGET 면 target_loc) 만 승인
         if ctx.role == "branch-clerk":
             if ctx.scope_store_id is None:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                     detail="branch-clerk scope_store_id 부재 (인증 토큰 손상)")
-            if ctx.scope_store_id != target_loc:
+            if ctx.scope_store_id != my_side_loc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                    detail=f"자기 매장만 거부 가능 (scope_store_id={ctx.scope_store_id} · target={target_loc})")
+                                    detail=f"{side} 권한 없음 (scope_store_id={ctx.scope_store_id} · {side}_loc={my_side_loc})")
             return order_type, source_wh, target_wh
         if ctx.role != "wh-manager" or ctx.scope_wh_id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="REBALANCE 는 wh-manager · branch-clerk · hq-admin 만 승인 가능")
-        if ctx.scope_wh_id not in (source_wh, target_wh):
+        if ctx.scope_wh_id != my_side_wh:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"본인 창고 외 주문 승인 불가 (scope wh_id={ctx.scope_wh_id} · order wh_id={source_wh}/{target_wh})")
+                                detail=f"{side} 권한 없음 (scope wh_id={ctx.scope_wh_id} · {side}_wh={my_side_wh})")
 
     elif order_type == "WH_TRANSFER":
         if side not in ("SOURCE", "TARGET"):
@@ -433,6 +466,7 @@ def queue(
     date: str | None = Query(default=None, description="특정 일자 (YYYY-MM-DD KST) · history detail 용. 주어지면 그 날 처리 row 만"),
     include_history: bool = Query(default=False, description="(deprecated) 과거 처리 row 포함 — 사용 자제. /queue/summary + date 조합 권장"),
     days: int = Query(default=7, ge=1, le=400, description="include_history=true 일 때 조회 기간 (일 · 최대 400)"),
+    q: str | None = Query(default=None, description="isbn13/title/location 검색"),
 ):
     """주문 큐. role 기반 자동 필터:
 
@@ -477,6 +511,10 @@ def queue(
         where.append("po.order_type = %s")
         params.append(order_type)
 
+    if q:
+        where.append("(po.isbn13 ILIKE %s OR b.title ILIKE %s OR l.name ILIKE %s)")
+        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+
     params.append(limit)
     params.append(offset)
     # date / history 모드: 최신 처리/생성 순. PENDING 모드: urgency 우선 + 오래된 것 먼저.
@@ -496,6 +534,7 @@ def queue(
                po.approved_at, po.executed_at
           FROM pending_orders po
           LEFT JOIN books b ON b.isbn13 = po.isbn13
+          LEFT JOIN locations l ON l.location_id = po.target_location_id
          WHERE {' AND '.join(where)}
          {order_clause}
          LIMIT %s OFFSET %s
@@ -505,6 +544,8 @@ def queue(
     count_sql = f"""
         SELECT po.order_type, COUNT(*)::int
           FROM pending_orders po
+          LEFT JOIN books b ON b.isbn13 = po.isbn13
+          LEFT JOIN locations l ON l.location_id = po.target_location_id
          WHERE {' AND '.join(where)}
          GROUP BY po.order_type
     """
@@ -572,14 +613,16 @@ def _record_approval(conn, order_id: str, ctx: AuthContext, side: str, decision:
     aid, decided_at = cur.fetchone()
 
     # status 전환:
-    #  - REBALANCE / PUBLISHER_ORDER: FINAL APPROVED 1번 → APPROVED
-    #  - WH_TRANSFER: SOURCE+TARGET 둘 다 APPROVED → APPROVED
+    #  - PUBLISHER_ORDER: FINAL APPROVED 1번 → APPROVED
+    #  - REBALANCE / WH_TRANSFER: SOURCE+TARGET 둘 다 APPROVED → APPROVED (양측 협의)
     #  - REJECTED: 어느 side 든 한 번 거절 → REJECTED + reject_count++
     if decision == "APPROVED" and side == "FINAL":
         cur.execute(
             "UPDATE pending_orders SET status = 'APPROVED', approved_at = NOW() WHERE order_id = %s",
             (order_id,),
         )
+        # Option B: helper 가 PUBLISHER_ORDER (source NULL) 자동 skip
+        _adjust_source_inventory(cur, order_id, ctx, -1, "FINAL 승인 출고")
     elif decision == "APPROVED" and side in ("SOURCE", "TARGET"):
         cur.execute(
             """
@@ -591,11 +634,56 @@ def _record_approval(conn, order_id: str, ctx: AuthContext, side: str, decision:
             """,
             (order_id, order_id),
         )
+        # REBALANCE / WH_TRANSFER 양측 APPROVED 로 방금 전환된 경우만 source -qty + 최종 알림
+        if cur.rowcount > 0:
+            _adjust_source_inventory(cur, order_id, ctx, -1, "양측 승인 출고")
+            # 2026-05-14: 양측 협의 최종 승인 — UI Toast / 시연 시 "출고 완료 · 입고 대기" 명확화
+            cur.execute(
+                "SELECT order_type, qty FROM pending_orders WHERE order_id = %s",
+                (order_id,),
+            )
+            row = cur.fetchone()
+            ot, qty = (row[0], row[1]) if row else (None, None)
+            _notify(
+                ctx.token, "OrderApprovedFinal",
+                severity="INFO",
+                payload={
+                    "order_id": order_id,
+                    "order_type": ot,
+                    "qty": qty,
+                    "inventory_delta": -qty if qty is not None else None,
+                    "approver_role": ctx.role,
+                    "approver_wh_id": ctx.scope_wh_id,
+                },
+                correlation_id=order_id,
+            )
     elif decision == "REJECTED":
+        # 거부 전 status query → APPROVED 였으면 UPDATE 후 source 복원
+        cur.execute("SELECT status, order_type, qty FROM pending_orders WHERE order_id = %s", (order_id,))
+        prev_row = cur.fetchone()
+        prev_status, prev_ot, prev_qty = (prev_row[0], prev_row[1], prev_row[2]) if prev_row else (None, None, None)
         cur.execute(
             "UPDATE pending_orders SET status = 'REJECTED', reject_reason = %s, reject_count = reject_count + 1 WHERE order_id = %s",
             (reject_reason, order_id),
         )
+        if prev_status == "APPROVED":
+            _adjust_source_inventory(cur, order_id, ctx, +1, "거부복원")
+            # 2026-05-14: APPROVED → REJECTED 전환 — 재고 복원됨 명시 알림 (logic-apps 포함)
+            _notify(
+                ctx.token, "OrderRejectedAfterApproval",
+                severity="WARNING",
+                payload={
+                    "order_id": order_id,
+                    "order_type": prev_ot,
+                    "qty": prev_qty,
+                    "inventory_restored": True,
+                    "inventory_delta": prev_qty,
+                    "reject_reason": reject_reason,
+                    "approver_role": ctx.role,
+                    "approver_wh_id": ctx.scope_wh_id,
+                },
+                correlation_id=order_id,
+            )
 
     cur.execute(
         """
@@ -644,7 +732,7 @@ def approve(req: ApproveRequest, ctx: AuthContext = Depends(require_auth)):
         correlation_id=str(req.order_id),
     )
     _check_and_notify_plan_finalized(ctx.token)
-    return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="APPROVED", decided_at=decided_at)
+    return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="APPROVED", decided_at=decided_at, final_status=final_status)
 
 
 @router.post("/reject", response_model=ApprovalResponse)
@@ -653,6 +741,9 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
         with conn.cursor() as cur:
             order_type, source_wh, target_wh = _validate_authority(cur, ctx, str(req.order_id), req.approval_side)
         aid, decided_at = _record_approval(conn, str(req.order_id), ctx, req.approval_side, "REJECTED", req.reject_reason)
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM pending_orders WHERE order_id = %s", (str(req.order_id),))
+            final_status = cur.fetchone()[0]
         conn.commit()
 
     # 시트04 ③OrderRejected
@@ -671,7 +762,7 @@ def reject(req: RejectRequest, ctx: AuthContext = Depends(require_auth)):
         correlation_id=str(req.order_id),
     )
     _check_and_notify_plan_finalized(ctx.token)
-    return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at)
+    return ApprovalResponse(approval_id=aid, order_id=req.order_id, decision="REJECTED", decided_at=decided_at, final_status=final_status)
 
 
 @router.post("/intervene/approve-all-today")
@@ -692,19 +783,19 @@ def approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(
     if ctx.role == "hq-admin":
         where.append("po.order_type = 'PUBLISHER_ORDER'")
     elif ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
-        # REBALANCE 는 source/target 둘 다 자기 wh 안의 store · WH_TRANSFER/PUBLISHER_ORDER 는 자기 측 wh
+        # 모든 stage: 자기 wh 가 source 또는 target 인 row (REBALANCE 도 양측 협의로 변경 → OR)
         where.append(
-            "((po.order_type = 'REBALANCE'"
-            "   AND EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
-            "   AND EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
-            " OR (po.order_type IN ('WH_TRANSFER','PUBLISHER_ORDER')"
-            "   AND (EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
-            "    OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))))"
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
         )
-        params.extend([ctx.scope_wh_id, ctx.scope_wh_id, ctx.scope_wh_id, ctx.scope_wh_id])
+        params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
     elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
-        where.append("po.order_type = 'REBALANCE' AND po.target_location_id = %s")
-        params.append(ctx.scope_store_id)
+        # REBALANCE 양측 협의 — 자기 매장이 source 또는 target 이면 자기 측 승인
+        where.append(
+            "po.order_type = 'REBALANCE'"
+            " AND (po.source_location_id = %s OR po.target_location_id = %s)"
+        )
+        params.extend([ctx.scope_store_id, ctx.scope_store_id])
     else:
         return {"total_orders": 0, "ok": 0, "failed": 0, "errors": ["권한 부족 (scope 미지정)"]}
     if order_type:
@@ -712,7 +803,8 @@ def approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(
         params.append(order_type)
 
     sql = f"""
-        SELECT po.order_id::text, po.order_type, po.target_location_id,
+        SELECT po.order_id::text, po.order_type,
+               po.source_location_id, po.target_location_id,
                sl.wh_id, tl.wh_id
           FROM pending_orders po
           LEFT JOIN locations sl ON sl.location_id = po.source_location_id
@@ -728,9 +820,13 @@ def approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(
         valid_items: list[dict] = []
         errors: list[str] = []
         for r in rows:
-            oid, ot, tloc, swh, twh = r
-            meta = {"order_type": ot, "target_loc": tloc, "source_wh": swh, "target_wh": twh}
-            if ot == "WH_TRANSFER":
+            oid, ot, sloc, tloc, swh, twh = r
+            meta = {
+                "order_type": ot,
+                "source_loc": sloc, "target_loc": tloc,
+                "source_wh": swh, "target_wh": twh,
+            }
+            if ot in ("REBALANCE", "WH_TRANSFER"):
                 for side in ("SOURCE", "TARGET"):
                     try:
                         _check_authority_rules(ctx, meta, side)
@@ -773,29 +869,34 @@ def approve_all_today(body: dict = Body(default={}), ctx: AuthContext = Depends(
 def _check_authority_rules(ctx: AuthContext, meta: dict, side: str) -> None:
     """`_validate_authority` 의 in-memory 변종. 이미 fetch 된 order meta 로 권한 검증.
 
-    Raises HTTPException on violation. meta = {order_type, source_wh, target_wh, target_loc}.
+    Raises HTTPException on violation.
+    meta = {order_type, source_wh, target_wh, source_loc, target_loc}.
     """
     order_type = meta["order_type"]
     source_wh = meta["source_wh"]
     target_wh = meta["target_wh"]
+    source_loc = meta.get("source_loc")
     target_loc = meta["target_loc"]
 
     if order_type == "REBALANCE":
-        if side != "FINAL":
+        # 2026-05-14: 양측 협의 (WH_TRANSFER 와 동일 패턴)
+        if side not in ("SOURCE", "TARGET"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="REBALANCE 는 approval_side='FINAL' 만")
+                                detail="REBALANCE 는 SOURCE/TARGET 만 (양측 협의)")
         if ctx.role == "hq-admin":
             return
+        my_side_loc = source_loc if side == "SOURCE" else target_loc
+        my_side_wh = source_wh if side == "SOURCE" else target_wh
         if ctx.role == "branch-clerk":
-            if ctx.scope_store_id is None or ctx.scope_store_id != target_loc:
+            if ctx.scope_store_id is None or ctx.scope_store_id != my_side_loc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                    detail=f"자기 매장만 (scope={ctx.scope_store_id}/target={target_loc})")
+                                    detail=f"{side} 권한 없음 (scope={ctx.scope_store_id}/{side}_loc={my_side_loc})")
             return
         if ctx.role != "wh-manager" or ctx.scope_wh_id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="REBALANCE 권한 없음")
-        if ctx.scope_wh_id not in (source_wh, target_wh):
+        if ctx.scope_wh_id != my_side_wh:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"본인 창고 외 (scope={ctx.scope_wh_id}/order={source_wh}/{target_wh})")
+                                detail=f"{side} 권한 없음 (scope={ctx.scope_wh_id}/{side}_wh={my_side_wh})")
     elif order_type == "WH_TRANSFER":
         if side not in ("SOURCE", "TARGET"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
@@ -874,8 +975,10 @@ def _bulk_record_approvals(conn, valid_items: list[dict], ctx: AuthContext, deci
         )
 
     # 4) pending_orders status 일괄 전환
+    newly_approved_oids: list[str] = []
+    restore_oids: list[str] = []
     if decision == "APPROVED":
-        # REBALANCE / PUBLISHER_ORDER FINAL → 즉시 APPROVED
+        # PUBLISHER_ORDER FINAL → 즉시 APPROVED (REBALANCE/WH_TRANSFER 는 양측 협의)
         final_oids = list({it["order_id"] for it in valid_items if it["side"] == "FINAL"})
         if final_oids:
             cur.execute(
@@ -884,10 +987,12 @@ def _bulk_record_approvals(conn, valid_items: list[dict], ctx: AuthContext, deci
                    SET status = 'APPROVED', approved_at = NOW()
                  WHERE order_id = ANY(%s::uuid[])
                    AND status NOT IN ('APPROVED', 'EXECUTED', 'AUTO_EXECUTED')
+                RETURNING order_id::text
                 """,
                 (final_oids,),
             )
-        # WH_TRANSFER SOURCE+TARGET 양측 APPROVED → APPROVED
+            newly_approved_oids.extend(r[0] for r in cur.fetchall())
+        # REBALANCE / WH_TRANSFER SOURCE+TARGET 양측 APPROVED → APPROVED
         wh_oids = list({it["order_id"] for it in valid_items if it["side"] in ("SOURCE", "TARGET")})
         if wh_oids:
             cur.execute(
@@ -900,15 +1005,27 @@ def _bulk_record_approvals(conn, valid_items: list[dict], ctx: AuthContext, deci
                          WHERE oa.order_id = po.order_id
                            AND oa.decision = 'APPROVED'
                            AND oa.approval_side IN ('SOURCE', 'TARGET')) >= 2
+                RETURNING po.order_id::text
                 """,
                 (wh_oids,),
             )
+            newly_approved_oids.extend(r[0] for r in cur.fetchall())
+        # Option B: 방금 APPROVED 된 oid 별 source -qty (helper 가 PUBLISHER_ORDER 자동 skip)
+        for oid in newly_approved_oids:
+            _adjust_source_inventory(cur, oid, ctx, -1, "bulk 출고")
     else:  # REJECTED
         # 어느 side 든 REJECTED → 전체 order REJECTED + reject_count++ (per order 1회)
         rej_map: dict[str, str | None] = {}
         for it in valid_items:
             rej_map.setdefault(it["order_id"], it.get("reject_reason"))
         if rej_map:
+            # 거부 전 prev_status 사전 query → APPROVED 였던 것만 복원 대상
+            oid_list = list(rej_map.keys())
+            cur.execute(
+                "SELECT order_id::text, status FROM pending_orders WHERE order_id = ANY(%s::uuid[])",
+                (oid_list,),
+            )
+            prev_status_map = {r[0]: r[1] for r in cur.fetchall()}
             cur.executemany(
                 """
                 UPDATE pending_orders
@@ -918,6 +1035,9 @@ def _bulk_record_approvals(conn, valid_items: list[dict], ctx: AuthContext, deci
                 """,
                 [(reason, oid) for oid, reason in rej_map.items()],
             )
+            restore_oids = [oid for oid, st in prev_status_map.items() if st == "APPROVED"]
+            for oid in restore_oids:
+                _adjust_source_inventory(cur, oid, ctx, +1, "bulk 거부복원")
 
     # 5) 단일 batch audit_log row
     cur.execute(
@@ -970,7 +1090,7 @@ def intervene_batch(body: dict = Body(...), ctx: AuthContext = Depends(require_a
             cur.execute(
                 """
                 SELECT po.order_id::text, po.order_type,
-                       po.target_location_id,
+                       po.source_location_id, po.target_location_id,
                        sl.wh_id AS source_wh, tl.wh_id AS target_wh
                   FROM pending_orders po
                   LEFT JOIN locations sl ON sl.location_id = po.source_location_id
@@ -980,7 +1100,11 @@ def intervene_batch(body: dict = Body(...), ctx: AuthContext = Depends(require_a
                 (order_ids,),
             )
             meta_by_oid = {
-                r[0]: {"order_type": r[1], "target_loc": r[2], "source_wh": r[3], "target_wh": r[4]}
+                r[0]: {
+                    "order_type": r[1],
+                    "source_loc": r[2], "target_loc": r[3],
+                    "source_wh": r[4], "target_wh": r[5],
+                }
                 for r in cur.fetchall()
             }
 
@@ -1749,7 +1873,7 @@ def reject_inbound(
       - wh-manager:   scope_wh_id   == target_wh
       - hq-admin:     모두 허용
 
-    재고 변동 없음 (single writer 룰 — 수령 X). WH 에 알림 발행 → 후속 처리 (재출고 또는 반품).
+    APPROVED → REJECTED 면 source 복원 (Option B). WH 에 알림 발행 → 후속 처리 (재출고 또는 반품).
     """
     reject_reason = (body.get("reject_reason") or "").strip()
     if not reject_reason:
@@ -1796,6 +1920,8 @@ def reject_inbound(
                     WHERE order_id = %s""",
                 (reject_reason[:50], order_id),
             )
+            # Option B: 입고거부 시 source 복원 (REBALANCE/WH_TRANSFER 만 · helper 가 자동 분기)
+            _adjust_source_inventory(cur, order_id, ctx, +1, "입고거부 복원")
             cur.execute(
                 """INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
                    VALUES ('user', %s, 'inbound.reject', 'pending_orders', %s, %s::jsonb)""",

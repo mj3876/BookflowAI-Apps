@@ -3,7 +3,7 @@ import asyncio
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import AuthContext, _check_store_scope, require_auth
 from fastapi import Body
@@ -228,6 +228,45 @@ async def cascade_plan_daily(body: dict = Body(default={}), ctx: AuthContext = D
     from ..clients import post_decision_plan_daily
     sc, data = await post_decision_plan_daily(body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "decision-svc unavailable"})
+
+
+@router.get("/decision/plan-daily/{snapshot_date}/summary")
+async def decision_plan_daily_summary(snapshot_date: str, ctx: AuthContext = Depends(require_auth)):
+    """Final Plan 매트릭스 summary — decision-svc /decision/plan-daily/{date}/summary 프록시.
+
+    role/scope 자동 (decision-svc 가 처리). 응답:
+      {snapshot_date, by_stage_status: [{order_type, status, cnt, qty_total}],
+       totals: {total_orders, total_qty, stages, statuses}}
+    """
+    from ..clients import get_plan_summary
+    data = await get_plan_summary(snapshot_date, ctx.token)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="decision-svc unavailable")
+    return data
+
+
+@router.get("/decision/plan-daily/{snapshot_date}/items")
+async def decision_plan_daily_items(
+    snapshot_date: str,
+    ctx: AuthContext = Depends(require_auth),
+    status_: str | None = Query(default=None, alias="status"),
+    order_type: str | None = None,
+    q: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+):
+    """Final Plan items 상세 list — decision-svc /decision/plan-daily/{date}/items 프록시.
+
+    status / order_type / q 필터 + pagination. role/scope 자동.
+    """
+    from ..clients import get_plan_items
+    data = await get_plan_items(
+        snapshot_date, ctx.token,
+        status=status_, order_type=order_type, q=q, offset=offset, limit=limit,
+    )
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="decision-svc unavailable")
+    return data
 
 
 @router.post("/inventory/adjust")

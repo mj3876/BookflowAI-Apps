@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
-import { fetchPending, postDecide, postIntervene, postIntervenebatch, postPlanDaily, postApproveAllToday, ApiError, type Role } from '../api';
+import { fetchPending, fetchPendingSummary, postDecide, postIntervene, postIntervenebatch, postPlanDaily, postApproveAllToday, ApiError, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import ConfirmModal from '../components/ConfirmModal';
 import EmptyState from '../components/EmptyState';
 import HelpHint from '../components/HelpHint';
 import DateHistoryTabs from '../components/DateHistoryTabs';
 import BatchMapView from '../components/BatchMapView';
+import StatusBadge from '../components/StatusBadge';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
 
@@ -50,6 +51,18 @@ export default function Decision() {
     queryFn: () => fetchPending(role, { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
     refetchInterval: 5000,
   });
+
+  // 오늘 처리 완료 카운트 — PENDING=0 CTA 용 (가벼움 · 30s refetch)
+  const todaySummary = useQuery({
+    queryKey: ['pending-summary-today', role],
+    queryFn: () => fetchPendingSummary(role, { days: 1 }),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+  const todayKey = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  const todayRow = todaySummary.data?.items.find((i) => i.date === todayKey);
+  const todayApproved = (todayRow?.APPROVED ?? 0) + (todayRow?.AUTO_EXECUTED ?? 0);
+  const todayRejected = todayRow?.REJECTED ?? 0;
 
   const pendingOnly = (pending.data?.items ?? []).filter((o) => o.status === 'PENDING');
   const totalPending = pending.data?.total ?? 0;
@@ -166,6 +179,7 @@ export default function Decision() {
           <div className="text-[11px] text-bf-muted mt-1">
             발의 후 → <Link to="/wh-approve" className="text-bf-primary hover:underline">권역 물류센터 승인</Link>
             {' · '}양쪽 협의 → <Link to="/wh-transfer" className="text-bf-primary hover:underline">권역 이동</Link>
+            {' · '}D+1 plan 결과 → <Link to="/final-plan" className="text-bf-primary hover:underline">최종 계획안</Link>
           </div>
         </div>
         {role === 'hq-admin' && (
@@ -198,6 +212,25 @@ export default function Decision() {
       {demoResult && (
         <div className="card-tight bg-bf-success/10 border-bf-success text-bf-success text-xs">
           ✓ {demoResult}
+        </div>
+      )}
+
+      {/* PENDING=0 prominent CTA — 오늘 처리 완료 + 최종 계획안 진입 */}
+      {totalPending === 0 && (todayApproved > 0 || todayRejected > 0) && (
+        <div className="card flex items-center justify-between gap-3 bg-bf-success/10 border-bf-success">
+          <div>
+            <div className="text-sm font-semibold text-bf-success">오늘 plan 처리 완료</div>
+            <div className="text-xs text-bf-muted mt-0.5">
+              승인 {todayApproved}건 · 거절 {todayRejected}건 · 처리 대기 0건
+            </div>
+          </div>
+          <Link
+            to="/final-plan"
+            className="btn-primary text-xs"
+            title="최종 계획안 — 단계 × 상태 매트릭스 + 상세 list"
+          >
+            최종 계획안 보기 →
+          </Link>
         </div>
       )}
 
@@ -303,12 +336,11 @@ export default function Decision() {
                       <td className="text-right">{o.qty}권</td>
                       <td className="text-bf-muted text-[11px]">{ts ? new Date(ts).toLocaleString('ko-KR') : '-'}</td>
                       <td>
-                        <span className={
-                          o.status === 'PENDING' ? 'pill-pending' :
-                          o.status === 'APPROVED' ? 'pill-approved' :
-                          o.status === 'EXECUTED' ? 'pill-info' :
-                          o.status === 'REJECTED' ? 'pill-rejected' : 'pill-info'
-                        }>{o.status}</span>
+                        <StatusBadge
+                          status={o.status as any}
+                          orderType={o.order_type as any}
+                          approvedAt={o.approved_at}
+                        />
                       </td>
                       {showAction && (
                         <td className="text-right">

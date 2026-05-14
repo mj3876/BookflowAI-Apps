@@ -56,6 +56,9 @@ class ApprovalResponse(BaseModel):
     order_id: UUID
     decision: Decision
     decided_at: datetime
+    # 2026-05-14: 양측 협의 (REBALANCE/WH_TRANSFER) 진행 단계 UI 명확화용.
+    # 자기측만 처리된 경우 'PENDING' · 양측 모두 완료된 경우 'APPROVED' (또는 'REJECTED').
+    final_status: str | None = None
 
 
 class PendingOrderEditRequest(BaseModel):

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchPending, fetchPendingSummary, type PendingOrder, type Role } from '../api';
+import SearchBox from './SearchBox';
 
 /**
  * 일자별 상세 history view — Approval/Decision/WhApprove/WhInstructions 공통.
@@ -152,6 +153,8 @@ export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(pr
   const [selectedKey, setSelectedKey] = useState<string>(todayKey);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  // P1 검색 — backend intervention-svc /queue 의 q 파라미터 (isbn / title / location)
+  const [searchQ, setSearchQ] = useState<string>('');
 
   const isAll = selectedKey === 'all';
   const isToday = selectedKey === todayKey;
@@ -171,13 +174,17 @@ export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(pr
   //    과거 일자 : date=key · 영구 cache (refetch 없음)
   const PAGE_SIZE = 100;
   const [page, setPage] = useState(1);
-  // 일자/필터 바뀌면 page 1 로 reset
-  useEffect(() => { setPage(1); }, [selectedKey, statusFilter, order_type, wh_id]);
+  // 일자/필터/검색어 바뀌면 page 1 로 reset
+  useEffect(() => { setPage(1); }, [selectedKey, statusFilter, order_type, wh_id, searchQ]);
   const detailKey = isAll || isToday ? '__today__' : selectedKey;
   const detail = useQuery({
-    queryKey: ['pending-detail', role, order_type ?? null, wh_id ?? null, detailKey, page],
+    queryKey: ['pending-detail', role, order_type ?? null, wh_id ?? null, detailKey, page, searchQ],
     queryFn: () => {
-      const opts = { order_type, wh_id, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE };
+      const opts = {
+        order_type, wh_id,
+        limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE,
+        q: searchQ || undefined,
+      };
       if (isAll || isToday) return fetchPending(role!, opts);
       return fetchPending(role!, { ...opts, date: selectedKey });
     },
@@ -322,6 +329,14 @@ export default function DateHistoryTabs<T extends HistoryItem = PendingOrder>(pr
             ? `(요약 ${totalAll}건 · ${summary.isLoading ? '집계 중…' : `${summary.data?.items.length ?? 0}일`})`
             : `(총 ${totalAll}건)`}
         </span>
+        {lazyMode && (
+          <div className="ml-auto">
+            <SearchBox
+              placeholder="ISBN / 제목 / 매장 검색…"
+              onSearch={setSearchQ}
+            />
+          </div>
+        )}
       </div>
 
       {/* 선택된 일자 헤더 + status 토글 */}

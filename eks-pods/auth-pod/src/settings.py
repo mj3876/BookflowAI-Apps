@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     entra_tenant_id: str
     entra_client_id: str
     entra_client_secret: str
-    public_base_url: str = "https://bookflow.duckdns.org"
+    public_base_url: str = "https://bookflow.myosoon.store"
     redirect_path: str = "/auth/callback"
 
     # JWT (BookFlow internal · HS256)
