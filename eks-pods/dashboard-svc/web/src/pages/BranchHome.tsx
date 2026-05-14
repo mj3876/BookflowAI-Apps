@@ -30,10 +30,11 @@ export default function BranchHome() {
   const storeId = scope_store_id ?? 1;
   const storeName = STORE_NAMES[storeId] ?? `매장 ${storeId}`;
 
-  // grouped: 매장 입고 list — batch 가 결정한 결과. 30 초로 완화
+  // grouped: 우리 매장 관련 plan (date 인자 없이 history 포함 · BranchInbound 와 동일 row 범위)
+  // 카드 카운트와 BranchInbound 의 입고/출고 대기 정합 보장.
   const grouped = useQuery({
-    queryKey: ['branch-grouped', role, today],
-    queryFn: () => fetchPendingGrouped(role, today),
+    queryKey: ['branch-grouped', role],
+    queryFn: () => fetchPendingGrouped(role),
     refetchInterval: 30000,
     staleTime: 15000,
   });
