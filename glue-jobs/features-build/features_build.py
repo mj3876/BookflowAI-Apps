@@ -149,6 +149,24 @@ def _find_col(df, candidates: tuple):
     return None
 
 
+def _clean_old_batch_dirs(bucket: str, prefix: str) -> None:
+    import re
+    _hive_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+    s3 = boto3.client("s3", region_name=_REGION)
+    paginator = s3.get_paginator("list_objects_v2")
+    to_delete = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+        for cp in page.get("CommonPrefixes", []):
+            if not _hive_re.match(cp["Prefix"][len(prefix):]):
+                for obj_page in paginator.paginate(Bucket=bucket, Prefix=cp["Prefix"]):
+                    for obj in obj_page.get("Contents", []):
+                        to_delete.append({"Key": obj["Key"]})
+    if to_delete:
+        for i in range(0, len(to_delete), 1000):
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": to_delete[i:i+1000]})
+        print(f"[cleanup] {len(to_delete)} old-format objects removed from s3://{bucket}/{prefix}")
+
+
 # ── 피처 조립 ──────────────────────────────────────────────────────────────────
 def build_features(spark, mart_bucket: str):  # noqa: C901
     base = f"s3://{mart_bucket}"
@@ -575,6 +593,7 @@ def main() -> None:
 
     # ── S3 Mart write ─────────────────────────────────────────────────────────
     s3_out = f"s3://{mart_bucket}/mart/features/"
+    _clean_old_batch_dirs(mart_bucket, "mart/features/")
     (
         features_df
         .repartition(8, "feature_date")
