@@ -29,6 +29,15 @@ export async function fetchSessionRole(): Promise<{ role: Role; scope: Scope } |
 
 const STORAGE_KEY = 'bookflow.role';
 const SCOPE_KEY = 'bookflow.scope';
+const MODE_KEY = 'bookflow.auth_mode';   // 'entra' (cookie) · 'mock' (Authorization mock-token)
+
+export type AuthMode = 'entra' | 'mock';
+export function getAuthMode(): AuthMode {
+  return (localStorage.getItem(MODE_KEY) as AuthMode) ?? 'mock';
+}
+export function setAuthMode(m: AuthMode): void {
+  localStorage.setItem(MODE_KEY, m);
+}
 
 // mock role 별 default scope (Entra 미사용 시) — 시드 fixture 기반
 const MOCK_SCOPE: Record<Role, Scope> = {
@@ -65,6 +74,7 @@ export function setRole(r: Role | null, scope?: Scope): void {
   } else {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(SCOPE_KEY);
+    localStorage.removeItem(MODE_KEY);
   }
   window.dispatchEvent(new Event('bookflow-role-changed'));
 }

@@ -46,12 +46,28 @@ def _conn():
     )
 
 
+# Logic Apps 발송 대상 (Notion 알람 명세 2026-05-13 정합).
+_LOGIC_APPS_EVENTS = {
+    "AutoExecutedUrgent", "DailyPlanFinalized", "SpikeUrgent",
+    "ApprovalDelayed", "InboundRejected", "NewBookRequest",
+    "LambdaAlarm", "DeploymentRollback",
+}
+
+
+def _channels_for(event_type: str, severity: str) -> str:
+    if event_type in _LOGIC_APPS_EVENTS:
+        if severity == "CRITICAL":
+            return "redis,websocket,logic-apps,sms"
+        return "websocket,logic-apps"
+    return "redis,websocket"
+
+
 def _notify(event_type: str, severity: str, payload: dict, correlation_id: str | None = None) -> None:
     body = {
         "event_type": event_type,
         "severity": severity,
         "recipients": [],
-        "channels": "websocket,logic-apps",
+        "channels": _channels_for(event_type, severity),
         "payload_summary": payload,
     }
     if correlation_id:
@@ -169,13 +185,19 @@ def main() -> int:
 
     log.info("auto-approved=%d, auto-rejected=%d", len(approved), len(rejected))
 
-    # 시트04 ④AutoExecutedUrgent (개별 알림 · severity=WARNING/CRITICAL)
-    for o in approved:
+    # Notion 알람 명세 (2026-05-13): AutoExecutedUrgent 는 묶음 1회만 발송 (N건 본사 검토 필요)
+    if approved:
+        critical_count = sum(1 for o in approved if o["urgency_level"] == "CRITICAL")
+        urgent_count = len(approved) - critical_count
         _notify(
             "AutoExecutedUrgent",
-            severity="CRITICAL" if o["urgency_level"] == "CRITICAL" else "WARNING",
-            payload=o,
-            correlation_id=o["order_id"],
+            severity="CRITICAL" if critical_count else "WARNING",
+            payload={
+                "total": len(approved),
+                "critical": critical_count,
+                "urgent": urgent_count,
+                "items": approved[:10],  # top 10 sample
+            },
         )
 
     # 시트04 ⑤AutoRejectedBatch (1건 묶음 알림)

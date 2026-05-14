@@ -3,6 +3,8 @@ import { useOutletContext } from 'react-router-dom';
 import { fetchInstructions, type Role } from '../api';
 import { ko, ORDER_TYPE_KO, URGENCY_KO, whName } from '../labels';
 import { useLocations } from '../useLocations';
+import DateHistoryTabs from '../components/DateHistoryTabs';
+import BatchMapView from '../components/BatchMapView';
 
 /**
  * 출고/입고 지시서 — 승인된 pending_orders.
@@ -17,8 +19,6 @@ export default function WhInstructions() {
   const q = useQuery({ queryKey: ['instr', wh, role], queryFn: () => fetchInstructions(role, wh), refetchInterval: 8000 });
 
   const all = q.data?.items ?? [];
-  const newBookItems = all.filter((o) => o.urgency_level === 'NEWBOOK');
-  const generalItems = all.filter((o) => o.urgency_level !== 'NEWBOOK');
 
   const renderTable = (items: typeof all, emptyText: string, hideUrgency = false) => (
     <table className="data-table">
@@ -38,7 +38,14 @@ export default function WhInstructions() {
         {items.map((o) => (
           <tr key={o.order_id}>
             <td className="text-bf-muted">{o.approved_at ? new Date(o.approved_at).toLocaleString('ko-KR') : '-'}</td>
-            <td>{ko(ORDER_TYPE_KO, o.order_type)}</td>
+            <td>
+              {ko(ORDER_TYPE_KO, o.order_type)}
+              {o.order_type === 'PUBLISHER_ORDER' && (
+                <span className="text-[10px] text-emerald-500 ml-1" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 최대 3일)">
+                  📦 출판사→WH (D+3)
+                </span>
+              )}
+            </td>
             {!hideUrgency && (
               <td>
                 <span className={
@@ -75,23 +82,36 @@ export default function WhInstructions() {
         </p>
       </div>
 
-      {/* 본사 신간 지시 (NEWBOOK) — 우선 표시 */}
-      <div className="card border-purple-300 bg-purple-50/30">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="h2 text-purple-900">📚 본사 신간 지시서 ({newBookItems.length})</h2>
-          <span className="text-[10px] text-purple-700">출판사 발주 · 본사 직접 결정</span>
-        </div>
-        {renderTable(newBookItems, '신간 지시 없음 — 최근 본사 신간 편입 건 없습니다.', true)}
-      </div>
+      <DateHistoryTabs items={all} days={6} pageLabel="출고/입고 지시 일자별 기록">
+        {(filtered, { viewMode }) => {
+          if (viewMode === 'map') {
+            return <BatchMapView items={filtered as any} nameOf={nameOf} />;
+          }
+          const newBookItems = filtered.filter((o) => o.urgency_level === 'NEWBOOK');
+          const generalItems = filtered.filter((o) => o.urgency_level !== 'NEWBOOK');
+          return (
+            <div className="flex flex-col gap-4">
+              {/* 본사 신간 지시 (NEWBOOK) — 우선 표시 */}
+              <div className="card border-purple-300 bg-purple-50/30">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="h2 text-purple-900">📚 본사 신간 지시서 ({newBookItems.length})</h2>
+                  <span className="text-[10px] text-purple-700">출판사 발주 · 본사 직접 결정</span>
+                </div>
+                {renderTable(newBookItems, '신간 지시 없음 — 해당 일자에 본사 신간 편입 건 없습니다.', true)}
+              </div>
 
-      {/* 일반 출고/입고 지시 (REBALANCE / WH_TRANSFER / 긴급 PUBLISHER_ORDER) */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="h2">일반 지시 ({generalItems.length})</h2>
-          <span className="text-[10px] text-bf-muted">의사결정 cascade 결과</span>
-        </div>
-        {renderTable(generalItems, '일반 지시 없음')}
-      </div>
+              {/* 일반 출고/입고 지시 (REBALANCE / WH_TRANSFER / 긴급 PUBLISHER_ORDER) */}
+              <div className="card">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="h2">일반 지시 ({generalItems.length})</h2>
+                  <span className="text-[10px] text-bf-muted">의사결정 cascade 결과</span>
+                </div>
+                {renderTable(generalItems, '일반 지시 없음')}
+              </div>
+            </div>
+          );
+        }}
+      </DateHistoryTabs>
     </div>
   );
 }

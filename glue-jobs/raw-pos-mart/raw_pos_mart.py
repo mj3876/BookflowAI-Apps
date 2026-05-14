@@ -29,11 +29,8 @@ spark = glue.spark_session
 job   = Job(glue)
 job.init(args["JOB_NAME"], args)
 
-from datetime import datetime, timezone
-_batch_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
 SOURCE = f"s3://{args['RAW_BUCKET']}/pos-events/"
-TARGET = f"s3://{args['MART_BUCKET']}/mart/sales_fact/{_batch_id}/"
+TARGET = f"s3://{args['MART_BUCKET']}/mart/sales_fact/"
 
 # ECS sim (online-sim / offline-sim) actual output schema
 POS_SCHEMA = StructType([
@@ -63,9 +60,12 @@ df = (
     .dropDuplicates(["tx_id"])
 )
 
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
 (
     df.write
     .mode("overwrite")
+    .partitionBy("sale_date")
     .parquet(TARGET)
 )
 

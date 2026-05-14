@@ -1,25 +1,96 @@
 // Same-origin (FastAPI serves SPA + API + WS).
-import { token, type Role } from './auth';
+import { getAuthMode, token, type Role } from './auth';
 
 export type { Role } from './auth';
 
+// D5-3 P1-6 ErrorResponse 표준 (intervention-svc pilot · main.py)
+export type ApiErrorBody = {
+  error_code: string;
+  message: string;
+  details?: Record<string, unknown> | null;
+  request_id?: string | null;
+};
+
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  details?: Record<string, unknown> | null;
+  requestId?: string | null;
+  constructor(status: number, body: ApiErrorBody | string) {
+    if (typeof body === 'string') {
+      super(body);
+      this.status = status;
+      this.code = `HTTP_${status}`;
+    } else {
+      super(body.message || `${status} error`);
+      this.status = status;
+      this.code = body.error_code;
+      this.details = body.details ?? null;
+      this.requestId = body.request_id ?? null;
+    }
+  }
+}
+
+async function _throwApiError(r: Response): Promise<never> {
+  const text = await r.text().catch(() => '');
+  try {
+    const j = JSON.parse(text);
+    if (j && typeof j === 'object' && typeof j.error_code === 'string' && typeof j.message === 'string') {
+      throw new ApiError(r.status, j as ApiErrorBody);
+    }
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    // JSON parse 실패 — fallthrough
+  }
+  throw new ApiError(r.status, text || `${r.status} ${r.statusText}`);
+}
+
+// Entra 모드: Authorization 헤더 생략 + credentials:'include' (httpOnly cookie 만)
+// mock 모드: Authorization: Bearer mock-token-{role}
+function _authInit(role: Role, body?: unknown, method?: string): RequestInit {
+  const mode = getAuthMode();
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (mode === 'mock') headers.Authorization = token(role);
+  const init: RequestInit = {
+    method,
+    headers,
+    credentials: 'include',  // Entra cookie 필요 시 자동 첨부
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  return init;
+}
+
 async function getJson<T>(path: string, role: Role): Promise<T> {
-  const r = await fetch(path, { headers: { Authorization: token(role) } });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  const r = await fetch(path, _authInit(role));
+  if (!r.ok) await _throwApiError(r);
   return r.json();
 }
 
 async function postJson<T>(path: string, role: Role, body: unknown): Promise<T> {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: { Authorization: token(role), 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`${r.status} ${r.statusText}: ${text}`);
-  }
+  const r = await fetch(path, _authInit(role, body, 'POST'));
+  if (!r.ok) await _throwApiError(r);
   return r.json();
+}
+
+async function patchJson<T>(path: string, role: Role, body: unknown): Promise<T> {
+  const r = await fetch(path, _authInit(role, body, 'PATCH'));
+  if (!r.ok) await _throwApiError(r);
+  return r.json();
+}
+
+// D5-7 WH AI 추천 수정 (qty / target_location_id)
+export function patchPendingOrder(role: Role, order_id: string, body: { qty?: number; target_location_id?: number; note?: string }) {
+  return patchJson<{ order_id: string; qty: number; target_location_id: number; edited_at: string; edited_by: string }>(
+    `/dashboard/pending-orders/${order_id}`, role, body,
+  );
+}
+
+// D5-8 Branch 의견 제출 (Notion 3.5)
+export function postBranchFeedback(role: Role, body: { feedback_type: 'SLOW_SELLER' | 'STOCK_REQUEST' | 'OTHER'; isbn13?: string; message: string }) {
+  return postJson<{ notification_id: string; feedback_type: string; submitted_at: string }>(
+    '/dashboard/branch-feedback', role, body,
+  );
 }
 
 // ─── Overview / fan-in ──────────────────────────────────────────────
@@ -50,6 +121,9 @@ export type PendingOrder = {
   forecast_rationale?: Record<string, unknown> | null;
   // P3-1 ISBN → 제목 우선 표시 (intervention-svc 가 LEFT JOIN books 로 채움)
   title?: string | null;
+  // include_history=true 응답에서 채워짐 (PENDING 모드는 null)
+  approved_at?: string | null;
+  executed_at?: string | null;
 };
 
 export const fetchOverview = (whId: number, role: Role) =>
@@ -57,13 +131,123 @@ export const fetchOverview = (whId: number, role: Role) =>
 
 export const fetchPending = (
   role: Role,
-  opts: { limit?: number; order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER'; wh_id?: number } = {},
+  opts: {
+    limit?: number;
+    offset?: number;
+    order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+    wh_id?: number;
+    /** 특정 일자 (YYYY-MM-DD KST) detail · lazy fetch. summary count 와 함께 사용 권장. */
+    date?: string;
+    /** isbn13 / title / location 이름 검색 (intervention-svc /queue 의 q 파라미터) */
+    q?: string;
+    /** @deprecated 365일치 통째 fetch — 사용 자제. summary + date 조합 권장. */
+    include_history?: boolean;
+    days?: number;
+  } = {},
 ) => {
   const qs = new URLSearchParams();
-  qs.set('limit', String(opts.limit ?? 100));
+  qs.set('limit', String(opts.limit ?? 200));
+  if (opts.offset) qs.set('offset', String(opts.offset));
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
-  return getJson<{ items: PendingOrder[] }>(`/dashboard/pending?${qs.toString()}`, role);
+  if (opts.q) qs.set('q', opts.q);
+  if (opts.date) {
+    qs.set('date', opts.date);
+  } else if (opts.include_history) {
+    qs.set('include_history', 'true');
+    qs.set('days', String(opts.days ?? 7));
+  }
+  return getJson<{
+    items: PendingOrder[];
+    total?: number;
+    stage_counts?: Record<string, number>;
+  }>(`/dashboard/pending?${qs.toString()}`, role);
+};
+
+// ─── Final Plan (decision-svc /plan-daily/{date}/{summary|items}) ────
+// /plan-daily 발의 결과 4-stage × 5-status 매트릭스 + 상세 list.
+// snapshot_date = D+1 KST (forecast_rationale.plan_snapshot_date).
+export type PlanSummary = {
+  snapshot_date: string;
+  by_stage_status: Array<{ order_type: string; status: string; cnt: number; qty_total: number }>;
+  totals: {
+    total_orders: number;
+    total_qty: number;
+    stages: Record<string, number>;
+    statuses: Record<string, number>;
+  };
+};
+export const fetchPlanSummary = (role: Role, snapshot_date: string) =>
+  getJson<PlanSummary>(`/dashboard/decision/plan-daily/${snapshot_date}/summary`, role);
+
+export type PlanItem = {
+  order_id: string;
+  isbn13: string;
+  title: string | null;
+  order_type: string;
+  status: string;
+  source_location_id: number | null;
+  source_location_name: string | null;
+  target_location_id: number | null;
+  target_location_name: string | null;
+  qty: number;
+  urgency_level: string | null;
+  approved_at: string | null;
+  executed_at: string | null;
+  reject_reason: string | null;
+  created_at: string;
+};
+export type PlanItemsResponse = { total: number; items: PlanItem[] };
+export const fetchPlanItems = (
+  role: Role,
+  snapshot_date: string,
+  params: {
+    status?: string;
+    order_type?: string;
+    q?: string;
+    offset?: number;
+    limit?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set('status', params.status);
+  if (params.order_type) qs.set('order_type', params.order_type);
+  if (params.q) qs.set('q', params.q);
+  if (params.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  return getJson<PlanItemsResponse>(
+    `/dashboard/decision/plan-daily/${snapshot_date}/items?${qs.toString()}`,
+    role,
+  );
+};
+
+// 일자별 status count summary — 가벼운 응답. DateHistoryTabs pill row 카운트.
+export type PendingSummary = {
+  days: number;
+  items: Array<{
+    date: string;
+    PENDING: number;
+    APPROVED: number;
+    EXECUTED: number;
+    REJECTED: number;
+    AUTO_EXECUTED: number;
+    total: number;
+  }>;
+};
+
+export const fetchPendingSummary = (
+  role: Role,
+  opts: {
+    days?: number;
+    order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+    wh_id?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  qs.set('days', String(opts.days ?? 365));
+  if (opts.order_type) qs.set('order_type', opts.order_type);
+  if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
+  return getJson<PendingSummary>(`/dashboard/pending/summary?${qs.toString()}`, role);
 };
 
 // D2 Home 메인 카드 — batch 처리 현황 + 검토 필요 건수
@@ -309,9 +493,22 @@ export const fetchNotifications = (role: Role, limit = 50) =>
 
 // ─── Mutations ──────────────────────────────────────────────────────
 export const postIntervene = (role: Role, action: 'approve' | 'reject', body: unknown) =>
-  postJson<{ approval_id?: string; order_id?: string; decision?: string; detail?: string }>(
+  postJson<{
+    approval_id?: string;
+    order_id?: string;
+    decision?: string;
+    detail?: string;
+    /** 2026-05-14: 양측 협의 후 최종 상태 (PENDING / APPROVED / REJECTED) — UI Toast 분기용 */
+    final_status?: string;
+  }>(
     `/dashboard/intervene/${action}`, role, body,
   );
+
+// 일괄 승인/거절 (시연 일괄 처리) — frontend N 회 → backend 1 회
+export type InterveneBatchItem = { order_id: string; approval_side?: string; reject_reason?: string };
+export type InterveneBatchResult = { total: number; ok: number; failed: number; errors: string[] };
+export const postIntervenebatch = (role: Role, action: 'approve' | 'reject', items: InterveneBatchItem[]) =>
+  postJson<InterveneBatchResult>('/dashboard/intervene/batch', role, { action, items });
 
 export type DecideResult = {
   order_id: string;
@@ -328,6 +525,47 @@ export type DecideResult = {
 };
 export const postDecide = (role: Role, body: { isbn13: string; target_location_id: number; qty: number; note?: string }) =>
   postJson<DecideResult>('/dashboard/decide', role, body);
+
+// 일괄 cascade (시연 + 매일 03:30 batch) — N items 한 번에 backend 처리
+export type CascadeBatchResult = {
+  total: number;
+  s1: number;
+  s2: number;
+  s3: number;
+  failed: number;
+  errors: string[];
+};
+export type CascadeBatchItem = { isbn13: string; target_location_id: number; qty: number; note?: string };
+export const postCascadeBatch = (role: Role, items: CascadeBatchItem[]) =>
+  postJson<CascadeBatchResult>('/dashboard/cascade/run-batch', role, { items });
+
+// D+1 익일 plan 발의 — forecast_cache 기반 전 isbn × 전 location 동시 plan
+// 정식 source: BQ 결과 테이블 → forecast_cache sync (GCP 준비 후) · 현재 RDS 직읽음
+export type PlanDailyResult = {
+  snapshot_date: string;
+  rows_created: number;
+  by_stage: Record<string, number>;
+  isbns_planned: number;
+};
+export const postPlanDaily = (role: Role, snapshot_date?: string) =>
+  postJson<PlanDailyResult>('/dashboard/cascade/plan-daily', role, snapshot_date ? { snapshot_date } : {});
+
+// 일괄 입고 수령 (BranchInbound 전체 수령/발송)
+export type InboundBatchResult = { total: number; ok: number; failed: number; errors: string[] };
+export const postInboundBatchReceive = (role: Role, order_ids: string[]) =>
+  postJson<InboundBatchResult>('/dashboard/inbound/batch-receive', role, { order_ids });
+
+// 오늘 PENDING 전체 일괄 승인 — 서버측 fetch + bulk (페이지네이션 우회)
+export type ApproveAllResult = {
+  total_orders: number;
+  ok: number;
+  failed: number;
+  errors: string[];
+};
+export const postApproveAllToday = (
+  role: Role,
+  order_type?: 'REBALANCE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER',
+) => postJson<ApproveAllResult>('/dashboard/intervene/approve-all-today', role, order_type ? { order_type } : {});
 
 // UX-6: 재고 수동 조정 (Manual 페이지) — inventory-svc /adjust 프록시.
 export type InventoryAdjustResult = {
@@ -446,11 +684,129 @@ export type InsufficientStockItem = {
   title: string | null;
   store_id: number;
   predicted_demand: number;
+  safety_stock_5days: number;
   available: number;
   gap: number;
   suggested_qty: number;
+  recommend_target_location_id: number;  // 신규 · WH location (출판사 → WH → 매장 분배)
 };
 export const fetchInsufficientStock = (role: Role, limit = 20) =>
   getJson<{ snapshot_date: string; items: InsufficientStockItem[] }>(
     `/dashboard/forecast/insufficient?limit=${limit}`, role,
+  );
+
+// ─── KPI by category / Bestsellers / Hourly / Cascade funnel ────────
+export type CategorySales = { category: string; revenue: number; qty: number; tx_count: number };
+export const fetchKpiByCategory = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: CategorySales[] }>(
+    `/dashboard/kpi/by-category?days=${days}${store_id ? `&store_id=${store_id}` : ''}`,
+    role,
+  );
+
+export type Bestseller = {
+  isbn13: string;
+  title: string | null;
+  author: string | null;
+  qty: number;
+  revenue: number;
+  tx_count: number;
+};
+export const fetchBestsellers = (role: Role, days = 7, limit = 20, store_id?: number) =>
+  getJson<{ days: number; items: Bestseller[] }>(
+    `/dashboard/sales/bestsellers?days=${days}&limit=${limit}${store_id ? `&store_id=${store_id}` : ''}`,
+    role,
+  );
+
+export type HourlySales = { hour: number; qty: number; revenue: number; tx_count: number };
+export const fetchHourlySales = (role: Role, store_id: number, date?: string) =>
+  getJson<{ date: string; store_id: number; items: HourlySales[] }>(
+    `/dashboard/sales/hourly?store_id=${store_id}${date ? `&date=${date}` : ''}`,
+    role,
+  );
+
+export type CascadeFunnel = {
+  days: number;
+  summary: Record<string, number>;
+  by_stage: Record<string, Record<string, number>>;
+  daily: Array<{ date: string } & Record<string, number>>;
+};
+export const fetchCascadeFunnel = (role: Role, days = 7) =>
+  getJson<CascadeFunnel>(`/dashboard/cascade/funnel?days=${days}`, role);
+
+// 전 매장 × 전 ISBN forecast batch (inventory 페이지 AI 수요예측 컬럼용).
+// snapshot_date 생략 시 backend D+1 KST 자동 계산.
+export type ForecastBatchItem = {
+  snapshot_date: string;
+  isbn13: string;
+  store_id: number;
+  predicted_demand: number;
+};
+export const fetchAllForecast = (role: Role, snapshot_date?: string) => {
+  const qs = snapshot_date ? `?snapshot_date=${snapshot_date}` : '';
+  return getJson<{ snapshot_date: string; items: ForecastBatchItem[] }>(
+    `/dashboard/forecast/all${qs}`, role,
+  );
+};
+
+// ─── Extended sales / inventory / forecast analytics (10 endpoints) ────
+const _storeQS = (store_id?: number) => (store_id !== undefined ? `&store_id=${store_id}` : '');
+
+export type WeekdaySales = { dow: number; dow_label: string; revenue: number; qty: number; tx_count: number };
+export const fetchSalesByWeekday = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: WeekdaySales[] }>(
+    `/dashboard/sales/by-weekday?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type HourAvgSales = { hour: number; avg_revenue: number; avg_qty: number; avg_tx_count: number };
+export const fetchSalesByHourAvg = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: HourAvgSales[] }>(
+    `/dashboard/sales/by-hour-avg?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type PaymentSales = { payment: string; revenue: number; count: number };
+export const fetchSalesByPayment = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: PaymentSales[] }>(
+    `/dashboard/sales/by-payment?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type ASPTrend = { date: string; asp: number; revenue: number; tx_count: number };
+export const fetchSalesAsp = (role: Role, days = 30, store_id?: number) =>
+  getJson<{ days: number; items: ASPTrend[] }>(
+    `/dashboard/sales/asp?days=${days}${_storeQS(store_id)}`, role,
+  );
+
+export type DailySales = { date: string; revenue: number; qty: number };
+export const fetchSales30Days = (role: Role, store_id?: number) =>
+  getJson<{ items: DailySales[] }>(
+    `/dashboard/sales/30days${store_id !== undefined ? `?store_id=${store_id}` : ''}`, role,
+  );
+
+export type TurnoverItem = { wh_id: number; turnover: number; total_sales: number; avg_inventory: number };
+export const fetchInventoryTurnover = (role: Role, days = 7) =>
+  getJson<{ days: number; items: TurnoverItem[] }>(
+    `/dashboard/inventory/turnover?days=${days}`, role,
+  );
+
+export type InsufficientTrendItem = { date: string; insufficient_count: number };
+export const fetchInsufficientTrend = (role: Role, days = 30) =>
+  getJson<{ days: number; items: InsufficientTrendItem[]; note?: string }>(
+    `/dashboard/inventory/insufficient-trend?days=${days}`, role,
+  );
+
+export type InventoryByCategory = { category: string; on_hand: number; available: number };
+export const fetchInventoryByCategory = (role: Role) =>
+  getJson<{ items: InventoryByCategory[] }>(`/dashboard/inventory/by-category`, role);
+
+export type CategoryTrendItem = { date: string; category: string; revenue: number };
+export const fetchCategoryTrend = (role: Role, days = 30) =>
+  getJson<{ days: number; categories: string[]; items: CategoryTrendItem[] }>(
+    `/dashboard/sales/category-trend?days=${days}`, role,
+  );
+
+export type ForecastAccuracyItem = {
+  date: string; mae: number; mape: number; total_predicted: number; total_actual: number;
+};
+export const fetchForecastAccuracy = (role: Role, days = 7) =>
+  getJson<{ days: number; items: ForecastAccuracyItem[]; note?: string }>(
+    `/dashboard/forecast/accuracy?days=${days}`, role,
   );

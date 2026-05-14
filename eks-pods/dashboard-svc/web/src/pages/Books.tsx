@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import {
+  fetchBestsellers,
   fetchBooks,
   fetchBookCategories,
   fetchBookAudit,
@@ -12,6 +13,8 @@ import {
   type Role,
 } from '../api';
 import { roleGroup } from '../auth';
+import KpiBar from '../components/charts/KpiBar';
+import KpiPie from '../components/charts/KpiPie';
 
 const PAGE_SIZE = 50;
 
@@ -60,6 +63,46 @@ export default function Books() {
     queryFn: () => fetchBookCategories(role),
     staleTime: 60_000,
   });
+
+  // 신규 BI 차트 (2026-05-13) -------------------------------------------
+  // 30일 베스트셀러 top 10 (mini bar) — 5 분
+  const bestsellers = useQuery({
+    queryKey: ['books-bestsellers-30d', role],
+    queryFn: () => fetchBestsellers(role, 30, 10),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // 카테고리 분포 pie (보유 도서) — fetchBookCategories 활용
+  const catPieChart = useMemo(() => {
+    const items = categories.data?.items ?? [];
+    const sorted = [...items].sort((a, b) => b.count - a.count);
+    const top = sorted.slice(0, 8).map((c) => ({ name: c.category || '미분류', value: c.count }));
+    const rest = sorted.slice(8).reduce((s, c) => s + c.count, 0);
+    return rest > 0 ? [...top, { name: '기타', value: rest }] : top;
+  }, [categories.data?.items]);
+
+  // 출판사별 보유 top 10 (현재 페이지 books 기반 frontend GROUP BY — limit=50 샘플)
+  const publisherChart = useMemo(() => {
+    const byPub = new Map<string, number>();
+    for (const b of books.data?.items ?? []) {
+      const pub = b.publisher ?? '미상';
+      byPub.set(pub, (byPub.get(pub) ?? 0) + 1);
+    }
+    return [...byPub.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
+  }, [books.data?.items]);
+
+  // 베스트셀러 mini bar
+  const bestChart = useMemo(
+    () =>
+      (bestsellers.data?.items ?? []).map((b) => ({
+        name: (b.title ?? b.isbn13).slice(0, 18),
+        value: b.qty,
+      })),
+    [bestsellers.data?.items],
+  );
 
   const totalPages = books.data ? Math.ceil(books.data.total / PAGE_SIZE) : 0;
 
@@ -253,6 +296,32 @@ export default function Books() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* 신규 BI 차트 (2026-05-13) — 카테고리 분포 + 출판사 top 10 + 베스트셀러 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="card">
+          <h3 className="h3 mb-2">카테고리 분포 (보유 도서)</h3>
+          <KpiPie data={catPieChart} height={260} isLoading={categories.isLoading} />
+        </div>
+        <div className="card">
+          <h3 className="h3 mb-2">출판사별 보유 top 10 (현재 페이지)</h3>
+          <KpiBar
+            data={publisherChart}
+            horizontal
+            height={260}
+            isLoading={books.isLoading}
+          />
+        </div>
+        <div className="card">
+          <h3 className="h3 mb-2">🏆 30일 베스트셀러 top 10</h3>
+          <KpiBar
+            data={bestChart}
+            horizontal
+            height={260}
+            isLoading={bestsellers.isLoading}
+          />
+        </div>
       </div>
 
       {statusModalBook && (

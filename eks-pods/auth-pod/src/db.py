@@ -1,5 +1,6 @@
 """psycopg3 pool · users upsert on first login."""
 import logging
+import re
 from contextlib import contextmanager
 
 from psycopg_pool import ConnectionPool
@@ -46,8 +47,16 @@ def db_conn():
 
 
 def upsert_user(oid: str, email: str, display_name: str, groups: list[str]) -> dict:
-    """First-login: INSERT users with default role · subsequent: keep role/scope (admin can edit)."""
-    role, scope_wh_id, scope_store_id = _map_groups_to_role(groups)
+    """First-login + every login: UPN 패턴으로 role/scope 결정 (group 보조).
+
+    UPN 매핑 (Entra 시드 정합 · 2026-05-13):
+      hq@…           → hq-admin (전역)
+      wh{N}@…        → wh-manager (scope_wh_id=N)
+      branch{N}@…    → branch-clerk (scope_store_id=N · 1~14)
+      그 외          → group GUID 매핑 fallback
+    매번 로그인 시 role/scope 갱신 — UPN 이 정해진 매장과 일치하지 않는 사용자는 변동 없음.
+    """
+    role, scope_wh_id, scope_store_id = _resolve_role_scope(email, groups)
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -56,6 +65,9 @@ def upsert_user(oid: str, email: str, display_name: str, groups: list[str]) -> d
                 ON CONFLICT (user_id) DO UPDATE SET
                     email = EXCLUDED.email,
                     display_name = EXCLUDED.display_name,
+                    role = EXCLUDED.role,
+                    scope_wh_id = EXCLUDED.scope_wh_id,
+                    scope_store_id = EXCLUDED.scope_store_id,
                     last_login_at = NOW()
                 RETURNING user_id, email, display_name, role, scope_wh_id, scope_store_id
             """, (oid, email, display_name, role, scope_wh_id, scope_store_id))
@@ -63,6 +75,31 @@ def upsert_user(oid: str, email: str, display_name: str, groups: list[str]) -> d
         conn.commit()
     cols = ("user_id", "email", "display_name", "role", "scope_wh_id", "scope_store_id")
     return dict(zip(cols, row))
+
+
+# UPN local-part 패턴 (소문자 비교) — 매장/권역당 여러 사용자 지원.
+# 예) branch10 · branch10-alice · branch10_bob · wh1-manager · hq-john → 모두 정상 매핑.
+_UPN_HQ = re.compile(r"^hq(?:[-_.].*)?$")
+_UPN_WH = re.compile(r"^wh(\d+)(?:[-_.].*)?$")
+_UPN_BRANCH = re.compile(r"^branch(\d+)(?:[-_.].*)?$")
+
+
+def _resolve_role_scope(email: str | None, groups: list[str]) -> tuple[str, int | None, int | None]:
+    """UPN local-part 우선 → 그룹 GUID → fallback default.
+
+    UPN 패턴이 명확하면 group claim 무시 (entra-setup.sh 시드 UPN 규약 신뢰).
+    """
+    if email:
+        local = email.split("@", 1)[0].lower().strip()
+        if _UPN_HQ.match(local):
+            return ("hq-admin", None, None)
+        m = _UPN_WH.match(local)
+        if m:
+            return ("wh-manager", int(m.group(1)), None)
+        m = _UPN_BRANCH.match(local)
+        if m:
+            return ("branch-clerk", None, int(m.group(1)))
+    return _map_groups_to_role(groups)
 
 
 def _map_groups_to_role(groups: list[str]) -> tuple[str, int | None, int | None]:

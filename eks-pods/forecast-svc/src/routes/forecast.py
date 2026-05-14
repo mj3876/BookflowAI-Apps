@@ -44,47 +44,60 @@ def get_forecast(store_id: int, snapshot_date: date, _: AuthContext = Depends(re
 
 @router.get("/insufficient-stock", response_model=InsufficientStockResponse)
 def insufficient_stock(
-    limit: int = 20,
+    limit: int = 2000,
     _: AuthContext = Depends(require_auth),
 ):
-    """P1-4b 시연 trigger: 예측 수요 > 가용 재고 인 도서 list (cascade 자동 발의용).
+    """P1-4b 시연 trigger: 안전재고 5일치 (predicted_demand × 5) > 가용재고 인 도서 list.
 
-    최근 snapshot_date 의 forecast_cache 와 inventory 를 JOIN 해 부족 도서 산출.
-    fallback: forecast_cache 비어있으면 빈 list 반환.
-    suggested_qty = gap + 안전재고 buffer (gap × 1.2, min 30, max 200).
+    매일 배치성 처리 가정 (사용자 결정 2026-05-13) — limit default 2000 = 전수 검사.
+    안전재고 = 익일 forecast × 5 (forecast 는 권/일 단위 · 5일치를 안전선).
+    suggested_qty = gap × 1.2 (min 30, max 500 · 5일치라 더 큰 발주 허용).
     """
+    # 시연 의도: '익일 (CURRENT_DATE + 1) 지점·물류센터별 수요예측 × 5 vs 현재 가용재고' 비교.
+    # 출판사 발주는 매장 직접 X · WH 경유 (사용자 결정 2026-05-13) — recommend_target = store_id 의 WH location.
     sql = """
-        WITH latest AS (
-            SELECT MAX(snapshot_date) AS d FROM forecast_cache
+        WITH target AS (
+            SELECT MIN(snapshot_date) AS d FROM forecast_cache WHERE snapshot_date > CURRENT_DATE
+        ),
+        wh_loc AS (
+            -- 권역별 WH location_id (location_type='WH')
+            SELECT wh_id, location_id AS wh_location_id FROM locations WHERE location_type = 'WH'
         )
         SELECT f.isbn13, b.title, f.store_id,
                f.predicted_demand,
-               COALESCE(SUM(i.available), 0)::int AS available
+               COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)::int AS available,
+               COALESCE(wh.wh_location_id, f.store_id) AS recommend_target
           FROM forecast_cache f
           LEFT JOIN books b ON b.isbn13 = f.isbn13
           LEFT JOIN inventory i ON i.isbn13 = f.isbn13 AND i.location_id = f.store_id
-          CROSS JOIN latest
-         WHERE f.snapshot_date = latest.d
-         GROUP BY f.isbn13, b.title, f.store_id, f.predicted_demand
-        HAVING f.predicted_demand > COALESCE(SUM(i.available), 0)
-         ORDER BY (f.predicted_demand - COALESCE(SUM(i.available), 0)) DESC
+          LEFT JOIN locations sl ON sl.location_id = f.store_id
+          LEFT JOIN wh_loc wh ON wh.wh_id = sl.wh_id
+          CROSS JOIN target
+         WHERE f.snapshot_date = target.d
+         GROUP BY f.isbn13, b.title, f.store_id, f.predicted_demand, wh.wh_location_id
+        HAVING f.predicted_demand * 5 > COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)
+         ORDER BY (f.predicted_demand * 5 - COALESCE(SUM(GREATEST(i.on_hand - i.reserved_qty, 0)), 0)) DESC
          LIMIT %s
     """
     with db_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, (limit,))
         rows = cur.fetchall()
-        cur.execute("SELECT MAX(snapshot_date) FROM forecast_cache")
+        cur.execute("SELECT MIN(snapshot_date) FROM forecast_cache WHERE snapshot_date > CURRENT_DATE")
         snapshot = cur.fetchone()[0]
 
     items: list[InsufficientStockItem] = []
     for r in rows:
         isbn13, title, store_id, pred, avail = r[0], r[1], r[2], float(r[3]), int(r[4])
-        gap = max(0, int(pred) - avail)
-        # gap × 1.2 (안전재고 buffer), min 30, max 200 — 시연용 합리 수치
-        suggested = max(30, min(200, int(gap * 1.2)))
+        recommend_target = int(r[5])
+        safety_5d = int(pred * 5)
+        gap = max(0, safety_5d - avail)
+        # gap × 1.2 buffer, min 30, max 500 (5일치 기준)
+        suggested = max(30, min(500, int(gap * 1.2)))
         items.append(InsufficientStockItem(
             isbn13=isbn13, title=title, store_id=store_id,
-            predicted_demand=pred, available=avail, gap=gap, suggested_qty=suggested,
+            recommend_target_location_id=recommend_target,
+            predicted_demand=pred, safety_stock_5days=safety_5d,
+            available=avail, gap=gap, suggested_qty=suggested,
         ))
 
     return InsufficientStockResponse(snapshot_date=snapshot or date.today(), items=items)

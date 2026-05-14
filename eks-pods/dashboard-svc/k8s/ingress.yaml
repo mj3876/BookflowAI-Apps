@@ -15,10 +15,10 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - bookflow.duckdns.org
+    - bookflow.myosoon.store
     secretName: bookflow-tls
   rules:
-  - host: bookflow.duckdns.org
+  - host: bookflow.myosoon.store
     http:
       paths:
       # /auth/* → auth-pod (Entra OIDC login/callback/whoami/logout)

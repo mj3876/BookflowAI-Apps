@@ -28,10 +28,15 @@ class QueueItem(BaseModel):
     created_at: datetime
     forecast_rationale: dict | None = None
     title: str | None = None  # P3-1 ISBN → 제목 우선 표시 (LEFT JOIN books · 일부 ISBN 은 books 에 없을 수도)
+    approved_at: datetime | None = None
+    executed_at: datetime | None = None
 
 
 class QueueResponse(BaseModel):
     items: list[QueueItem]
+    # 페이지네이션: total = 필터 적용된 전체 row 수 (limit/offset 무관), stage_counts = order_type 별 count
+    total: int = 0
+    stage_counts: dict[str, int] = {}
 
 
 class ApproveRequest(BaseModel):
@@ -51,6 +56,28 @@ class ApprovalResponse(BaseModel):
     order_id: UUID
     decision: Decision
     decided_at: datetime
+    # 2026-05-14: 양측 협의 (REBALANCE/WH_TRANSFER) 진행 단계 UI 명확화용.
+    # 자기측만 처리된 경우 'PENDING' · 양측 모두 완료된 경우 'APPROVED' (또는 'REJECTED').
+    final_status: str | None = None
+
+
+class PendingOrderEditRequest(BaseModel):
+    """D5-7 Notion 2.6 · WH AI 추천 수정 (수량/대상 매장/사유).
+
+    wh-manager 가 PENDING pending_order 의 qty/target_location_id/note 를 수정.
+    audit_log 에 before/after 기록.
+    """
+    qty: int | None = Field(default=None, gt=0, description="새 수량 (양수)")
+    target_location_id: int | None = Field(default=None, description="대상 매장 변경")
+    note: str | None = Field(default=None, max_length=200, description="수정 사유")
+
+
+class PendingOrderEditResponse(BaseModel):
+    order_id: UUID
+    qty: int
+    target_location_id: int
+    edited_at: datetime
+    edited_by: str
 
 
 class ReturnApproveRequest(BaseModel):

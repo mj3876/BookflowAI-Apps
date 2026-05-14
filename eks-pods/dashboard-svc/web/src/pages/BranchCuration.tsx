@@ -49,10 +49,12 @@ export default function BranchCuration() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h1 className="h1">{nameOf(my_store)} · SNS 급등 도서</h1>
+        <h1 className="h1">{nameOf(my_store)} · 내 매장 SNS 매칭</h1>
         <p className="text-bf-muted text-xs mt-1">
-          최근 24시간 SNS 에서 화제가 된 도서 중 우리 매장 재고 보유분을 우선 노출합니다.
-          재고가 부족하면 "입고 요청" 으로 물류센터에 알릴 수 있어요. <span className="text-bf-muted/70">30초마다 갱신.</span>
+          전사 SNS 급등 도서 중 우리 매장 재고 보유분 — 입고 요청 발의 가능.
+          최근 24시간 SNS 에서 화제가 된 도서를 spike-detect Lambda 가 10분마다 감지하며,
+          재고가 부족하면 "입고 요청" 으로 물류센터에 알림이 발송됩니다.
+          <span className="text-bf-muted/70"> 30초마다 갱신.</span>
         </p>
       </div>
 

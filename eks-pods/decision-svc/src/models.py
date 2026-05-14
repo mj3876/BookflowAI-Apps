@@ -30,6 +30,23 @@ class DecideRequest(BaseModel):
     note: str | None = None  # 사용자 메모 (audit_log)
 
 
+class BatchDecideRequest(BaseModel):
+    """일괄 cascade 결정 (시연 일괄 발의 · 매일 03:30 batch).
+
+    N items 받아 backend 가 parallel (asyncio.gather) 처리.
+    """
+    items: list[DecideRequest] = Field(min_length=1, max_length=2000)
+
+
+class BatchDecideResponse(BaseModel):
+    total: int
+    s1: int
+    s2: int
+    s3: int
+    failed: int
+    errors: list[str] = []
+
+
 class DecideResponse(BaseModel):
     order_id: UUID
     order_type: OrderType

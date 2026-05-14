@@ -3,12 +3,52 @@
 .pen Service Mesh: dashboard-bff/svc reads books/kpi_mart/sales master tables directly,
 not via inventory-svc. These pages don't need transactional consistency.
 """
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Query
 
 from ..auth import AuthContext, _check_store_scope, require_auth
 from ..db import db_conn
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard-master"])
+
+_KST = timezone(timedelta(hours=9))
+
+
+@router.get("/forecast/all")
+def forecast_all(
+    _: AuthContext = Depends(require_auth),
+    snapshot_date: str | None = Query(default=None, description="YYYY-MM-DD · 생략 시 D+1 KST"),
+):
+    """전 매장 × 전 ISBN forecast_cache batch read (inventory 페이지 AI 수요예측 컬럼용).
+
+    기존 /dashboard/forecast/{store_id}/{date} 는 단일 매장 1일치. 14 매장 × 1000 ISBN
+    grid view 에서는 호출 폭증 → 한 번에 모든 row 반환. role-scope 무관 (read-only · 의사결정 미동반).
+    """
+    if snapshot_date is None:
+        snapshot_date = (datetime.now(_KST).date() + timedelta(days=1)).isoformat()
+
+    sql = """
+        SELECT snapshot_date, isbn13, store_id, predicted_demand
+          FROM forecast_cache
+         WHERE snapshot_date = %s
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (snapshot_date,))
+        rows = cur.fetchall()
+
+    return {
+        "snapshot_date": snapshot_date,
+        "items": [
+            {
+                "snapshot_date": r[0].isoformat() if hasattr(r[0], "isoformat") else r[0],
+                "isbn13": r[1],
+                "store_id": r[2],
+                "predicted_demand": float(r[3]),
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.get("/recent-sales")
@@ -20,9 +60,11 @@ def recent_sales(
 
     pos-ingestor Lambda 가 INSERT 한 row 가 그대로 보임.
     """
+    # 안전망: seed 데이터의 미래 시각 row 가 ORDER BY DESC top 에 잡혀 sim 새 INSERT 가 가려지는 것 방지
     sql = """
         SELECT txn_id, event_ts, isbn13, store_id, channel, qty, revenue
           FROM sales_realtime
+         WHERE event_ts <= NOW()
          ORDER BY event_ts DESC
          LIMIT %s
     """
@@ -580,8 +622,16 @@ def instructions(
               LEFT JOIN locations tl ON tl.location_id = po.target_location_id
              WHERE po.status IN ('APPROVED', 'EXECUTED')
                AND (sl.wh_id = %s OR tl.wh_id = %s)
-             ORDER BY po.urgency_level DESC, po.approved_at DESC NULLS LAST
-             LIMIT 100
+             ORDER BY
+               CASE po.urgency_level
+                 WHEN 'NEWBOOK'  THEN 0
+                 WHEN 'CRITICAL' THEN 1
+                 WHEN 'URGENT'   THEN 2
+                 WHEN 'NORMAL'   THEN 3
+                 ELSE 4
+               END,
+               po.approved_at DESC NULLS LAST
+             LIMIT 200
         """
         params = (wh_id, wh_id)
     else:
@@ -591,8 +641,16 @@ def instructions(
               FROM pending_orders po
               LEFT JOIN books b ON b.isbn13 = po.isbn13
              WHERE po.status IN ('APPROVED', 'EXECUTED')
-             ORDER BY po.urgency_level DESC, po.approved_at DESC NULLS LAST
-             LIMIT 100
+             ORDER BY
+               CASE po.urgency_level
+                 WHEN 'NEWBOOK'  THEN 0
+                 WHEN 'CRITICAL' THEN 1
+                 WHEN 'URGENT'   THEN 2
+                 WHEN 'NORMAL'   THEN 3
+                 ELSE 4
+               END,
+               po.approved_at DESC NULLS LAST
+             LIMIT 200
         """
         params = ()
 
@@ -613,6 +671,789 @@ def instructions(
                 "status":            r[7],
                 "approved_at":       r[8].isoformat() if r[8] else None,
                 "title":             r[9],
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/kpi/by-category")
+def kpi_by_category(
+    days: int = Query(default=30, ge=1, le=365),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """카테고리별 매출 (sales_realtime + books JOIN). role-scope 자동.
+
+    - wh-manager: 자기 권역 매장 (locations.wh_id) 만
+    - branch-clerk: 자기 매장 (scope_store_id) 만
+    """
+    # PostgreSQL INTERVAL 은 parameter binding 불가 → f-string (days 는 int 라 safe)
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    if store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(store_id)
+
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+
+    sql = f"""
+        SELECT COALESCE(b.category_name, '미분류') AS category,
+               SUM(s.revenue)::bigint AS revenue,
+               SUM(s.qty)::int        AS qty,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+          LEFT JOIN books b ON b.isbn13 = s.isbn13
+         WHERE {' AND '.join(where)}
+         GROUP BY category
+         ORDER BY revenue DESC
+         LIMIT 20
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {"category": r[0], "revenue": int(r[1] or 0), "qty": r[2] or 0, "tx_count": r[3] or 0}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/bestsellers")
+def sales_bestsellers(
+    days: int = Query(default=7, ge=1, le=365),
+    limit: int = Query(default=20, ge=1, le=200),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """베스트셀러 (sales_realtime GROUP BY isbn13 ORDER BY qty DESC). role-scope 자동."""
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    if store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(store_id)
+
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+
+    sql = f"""
+        SELECT s.isbn13,
+               b.title, b.author,
+               SUM(s.qty)::int        AS qty,
+               SUM(s.revenue)::bigint AS revenue,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+          LEFT JOIN books b ON b.isbn13 = s.isbn13
+         WHERE {' AND '.join(where)}
+         GROUP BY s.isbn13, b.title, b.author
+         ORDER BY qty DESC
+         LIMIT %s
+    """
+    params_with_limit = params + [limit]
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params_with_limit)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {
+                "isbn13":   r[0],
+                "title":    r[1],
+                "author":   r[2],
+                "qty":      r[3] or 0,
+                "revenue":  int(r[4] or 0),
+                "tx_count": r[5] or 0,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/hourly")
+def sales_hourly(
+    store_id: int = Query(...),
+    date: str | None = Query(default=None, description="YYYY-MM-DD · 생략 시 오늘 KST"),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """시간대별 매출 (0~23 시 GROUP BY · 특정 매장 · 특정 날짜).
+
+    branch-clerk 는 자기 매장만 (FR-A7.3).
+    """
+    _check_store_scope(ctx, store_id)
+    target_date = date or datetime.now(_KST).date().isoformat()
+
+    sql = """
+        SELECT EXTRACT(HOUR FROM event_ts AT TIME ZONE 'Asia/Seoul')::int AS hour,
+               SUM(qty)::int        AS qty,
+               SUM(revenue)::bigint AS revenue,
+               COUNT(*)::int        AS tx_count
+          FROM sales_realtime
+         WHERE store_id = %s
+           AND (event_ts AT TIME ZONE 'Asia/Seoul')::date = %s
+         GROUP BY hour
+         ORDER BY hour
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (store_id, target_date))
+        rows = cur.fetchall()
+    return {
+        "date": target_date,
+        "store_id": store_id,
+        "items": [
+            {"hour": r[0], "qty": r[1] or 0, "revenue": int(r[2] or 0), "tx_count": r[3] or 0}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/cascade/funnel")
+def cascade_funnel(
+    days: int = Query(default=7, ge=1, le=90),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """cascade 단계별 통계 (pending_orders).
+
+    summary: 전체 status 분포 (AUTO_EXECUTED = status=APPROVED AND auto_execute_eligible=TRUE)
+    by_stage: order_type × status 매트릭스
+    daily: 일자별 status 분포 (최근 N일)
+    role-scope (wh-manager 자기 권역 / branch-clerk 자기 매장).
+    """
+    scope_clauses: list[str] = []
+    scope_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        scope_clauses.append(
+            "(EXISTS (SELECT 1 FROM locations sl WHERE sl.location_id = po.source_location_id AND sl.wh_id = %s)"
+            " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
+        )
+        scope_params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        scope_clauses.append(
+            "(po.source_location_id = %s OR po.target_location_id = %s)"
+        )
+        scope_params.extend([ctx.scope_store_id, ctx.scope_store_id])
+
+    scope_sql = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
+
+    # 기간 (최근 N일) 필터 — created_at 기준 (INTERVAL 은 parameter binding 불가)
+    period_clause = f"po.created_at >= NOW() - INTERVAL '{int(days)} days'"
+
+    # status 라벨 (AUTO_EXECUTED 는 APPROVED + auto_execute_eligible 파생)
+    status_expr = (
+        "CASE WHEN po.status = 'APPROVED' AND po.auto_execute_eligible = TRUE "
+        "     THEN 'AUTO_EXECUTED' ELSE po.status END"
+    )
+
+    summary: dict[str, int] = {}
+    by_stage: dict[str, dict[str, int]] = {}
+    daily: list[dict] = []
+
+    with db_conn() as conn, conn.cursor() as cur:
+        # 1. summary (status 분포)
+        cur.execute(
+            f"""
+            SELECT {status_expr} AS s, COUNT(*)::int
+              FROM pending_orders po
+             WHERE {period_clause}{scope_sql}
+             GROUP BY s
+            """,
+            scope_params,
+        )
+        summary = {r[0]: r[1] for r in cur.fetchall() if r[0] is not None}
+
+        # 2. by_stage (order_type × status)
+        cur.execute(
+            f"""
+            SELECT po.order_type, {status_expr} AS s, COUNT(*)::int
+              FROM pending_orders po
+             WHERE {period_clause}{scope_sql}
+             GROUP BY po.order_type, s
+            """,
+            scope_params,
+        )
+        for order_type, st, n in cur.fetchall():
+            if order_type is None or st is None:
+                continue
+            by_stage.setdefault(order_type, {})[st] = n
+
+        # 3. daily (date × status)
+        cur.execute(
+            f"""
+            SELECT po.created_at::date AS d, {status_expr} AS s, COUNT(*)::int
+              FROM pending_orders po
+             WHERE {period_clause}{scope_sql}
+             GROUP BY d, s
+             ORDER BY d
+            """,
+            scope_params,
+        )
+        daily_map: dict[str, dict[str, int]] = {}
+        for d, st, n in cur.fetchall():
+            if d is None or st is None:
+                continue
+            key = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            daily_map.setdefault(key, {})[st] = n
+        daily = [{"date": k, **v} for k, v in sorted(daily_map.items())]
+
+    return {
+        "days": days,
+        "summary": summary,
+        "by_stage": by_stage,
+        "daily": daily,
+    }
+
+
+def _apply_sales_scope(ctx: AuthContext, where: list[str], params: list, store_id: int | None) -> None:
+    """sales_realtime 용 role-scope where 절 append (in-place).
+
+    s.store_id alias 가정. wh-manager → locations.wh_id · branch-clerk → s.store_id.
+    """
+    if store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(store_id)
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+
+
+_DOW_LABEL = ["일", "월", "화", "수", "목", "금", "토"]
+
+
+@router.get("/sales/by-weekday")
+def sales_by_weekday(
+    days: int = Query(default=30, ge=1, le=365),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """요일별 매출 평균 (KST 0=일 ~ 6=토). role-scope 자동."""
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    _apply_sales_scope(ctx, where, params, store_id)
+
+    sql = f"""
+        SELECT EXTRACT(DOW FROM s.event_ts AT TIME ZONE 'Asia/Seoul')::int AS dow,
+               SUM(s.revenue)::bigint AS revenue,
+               SUM(s.qty)::int        AS qty,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
+         GROUP BY dow
+         ORDER BY dow
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {
+                "dow": r[0],
+                "dow_label": _DOW_LABEL[r[0]] if 0 <= r[0] <= 6 else str(r[0]),
+                "revenue": int(r[1] or 0),
+                "qty": r[2] or 0,
+                "tx_count": r[3] or 0,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/by-hour-avg")
+def sales_by_hour_avg(
+    days: int = Query(default=30, ge=1, le=365),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """시간대별 매출 평균 (N일 동안 같은 시간대 sum / 실제 발생 일수).
+
+    AVG = SUM(metric) / COUNT(DISTINCT date) — 0 매출 날은 분모에서 제외 (시드 데이터 sparse 대응).
+    """
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    _apply_sales_scope(ctx, where, params, store_id)
+
+    sql = f"""
+        WITH hourly AS (
+            SELECT EXTRACT(HOUR FROM s.event_ts AT TIME ZONE 'Asia/Seoul')::int AS hour,
+                   (s.event_ts AT TIME ZONE 'Asia/Seoul')::date AS day,
+                   SUM(s.revenue) AS revenue,
+                   SUM(s.qty)     AS qty,
+                   COUNT(*)       AS tx_count
+              FROM sales_realtime s
+             WHERE {' AND '.join(where)}
+             GROUP BY hour, day
+        )
+        SELECT hour,
+               AVG(revenue)::bigint   AS avg_revenue,
+               AVG(qty)::numeric(10,2) AS avg_qty,
+               AVG(tx_count)::numeric(10,2) AS avg_tx_count
+          FROM hourly
+         GROUP BY hour
+         ORDER BY hour
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {
+                "hour": r[0],
+                "avg_revenue": int(r[1] or 0),
+                "avg_qty": float(r[2] or 0),
+                "avg_tx_count": float(r[3] or 0),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/by-payment")
+def sales_by_payment(
+    days: int = Query(default=30, ge=1, le=365),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """결제수단 분포. payment_method NULL → 'UNKNOWN'."""
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    _apply_sales_scope(ctx, where, params, store_id)
+
+    sql = f"""
+        SELECT COALESCE(s.payment_method, 'UNKNOWN') AS payment,
+               SUM(s.revenue)::bigint AS revenue,
+               COUNT(*)::int          AS count
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
+         GROUP BY payment
+         ORDER BY revenue DESC
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {"payment": r[0], "revenue": int(r[1] or 0), "count": r[2] or 0}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/asp")
+def sales_asp(
+    days: int = Query(default=30, ge=1, le=365),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """ASP 일별 트렌드 (객단가 = daily_revenue / daily_tx_count)."""
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    _apply_sales_scope(ctx, where, params, store_id)
+
+    sql = f"""
+        SELECT (s.event_ts AT TIME ZONE 'Asia/Seoul')::date AS d,
+               SUM(s.revenue)::bigint AS revenue,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
+         GROUP BY d
+         ORDER BY d
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "items": [
+            {
+                "date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "asp": int(r[1] / r[2]) if r[2] else 0,
+                "revenue": int(r[1] or 0),
+                "tx_count": r[2] or 0,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/30days")
+def sales_30days(
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """30일 daily 매출 (kpi_daily 활용). role-scope 자동.
+
+    kpi_daily 시드가 sparse 하면 0 일자가 누락될 수 있으나 시연용 — 있는 일자만 반환.
+    """
+    where: list[str] = ["k.kpi_date >= CURRENT_DATE - INTERVAL '30 days'"]
+    params: list = []
+    if store_id is not None:
+        where.append("k.store_id = %s")
+        params.append(store_id)
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = k.store_id AND l.wh_id = %s)"
+        )
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("k.store_id = %s")
+        params.append(ctx.scope_store_id)
+
+    sql = f"""
+        SELECT k.kpi_date,
+               SUM(k.revenue)::bigint  AS revenue,
+               SUM(k.qty_sold)::int    AS qty
+          FROM kpi_daily k
+         WHERE {' AND '.join(where)}
+         GROUP BY k.kpi_date
+         ORDER BY k.kpi_date
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "revenue": int(r[1] or 0),
+                "qty": r[2] or 0,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/inventory/turnover")
+def inventory_turnover(
+    days: int = Query(default=7, ge=1, le=90),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """권역 회전율 비교 (wh1, wh2). turnover = (매출 qty / 평균 재고) * (1 / days)."""
+    # branch-clerk 는 권역 비교 의미 X — 그대로 자기 매장 wh 만 보이지만 무시 (별 영향 없음)
+    sales_where: list[str] = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    sales_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        sales_where.append("l.wh_id = %s")
+        sales_params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        sales_where.append("s.store_id = %s")
+        sales_params.append(ctx.scope_store_id)
+
+    sales_sql = f"""
+        SELECT l.wh_id, SUM(s.qty)::int AS total_qty
+          FROM sales_realtime s
+          JOIN locations l ON l.location_id = s.store_id
+         WHERE {' AND '.join(sales_where)}
+           AND l.wh_id IS NOT NULL
+         GROUP BY l.wh_id
+    """
+
+    inv_where: list[str] = ["l.wh_id IS NOT NULL"]
+    inv_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        inv_where.append("l.wh_id = %s")
+        inv_params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        inv_where.append("i.location_id = %s")
+        inv_params.append(ctx.scope_store_id)
+
+    inv_sql = f"""
+        SELECT l.wh_id, AVG(i.on_hand)::numeric(12,2) AS avg_on_hand
+          FROM inventory i
+          JOIN locations l ON l.location_id = i.location_id
+         WHERE {' AND '.join(inv_where)}
+         GROUP BY l.wh_id
+    """
+
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sales_sql, sales_params)
+        sales_map = {r[0]: r[1] for r in cur.fetchall()}
+        cur.execute(inv_sql, inv_params)
+        inv_map = {r[0]: float(r[1] or 0) for r in cur.fetchall()}
+
+    wh_ids = sorted(set(sales_map) | set(inv_map))
+    items = []
+    for wh_id in wh_ids:
+        total_sales = sales_map.get(wh_id, 0) or 0
+        avg_inventory = inv_map.get(wh_id, 0.0) or 0.0
+        turnover = (total_sales / avg_inventory / days) if avg_inventory > 0 else 0.0
+        items.append({
+            "wh_id": wh_id,
+            "turnover": round(turnover, 4),
+            "total_sales": total_sales,
+            "avg_inventory": round(avg_inventory, 2),
+        })
+    return {"days": days, "items": items}
+
+
+@router.get("/inventory/insufficient-trend")
+def inventory_insufficient_trend(
+    days: int = Query(default=30, ge=1, le=90),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """부족 도서 추이 (available < safety_stock). inventory_snapshot_daily 우선, 비어있으면 fallback."""
+    # role-scope: wh-manager → 자기 권역 매장 / branch-clerk → 자기 매장
+    scope_clauses: list[str] = []
+    scope_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        scope_clauses.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = snap.location_id AND l.wh_id = %s)"
+        )
+        scope_params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        scope_clauses.append("snap.location_id = %s")
+        scope_params.append(ctx.scope_store_id)
+    scope_extra = (" AND " + " AND ".join(scope_clauses)) if scope_clauses else ""
+
+    snap_sql = f"""
+        SELECT snap.snapshot_date,
+               COUNT(*)::int AS insufficient_count
+          FROM inventory_snapshot_daily snap
+         WHERE snap.snapshot_date >= CURRENT_DATE - INTERVAL '{int(days)} days'
+           AND snap.safety_stock IS NOT NULL
+           AND snap.available < snap.safety_stock
+           {scope_extra}
+         GROUP BY snap.snapshot_date
+         ORDER BY snap.snapshot_date
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(snap_sql, scope_params)
+        rows = cur.fetchall()
+
+    if rows:
+        return {
+            "days": days,
+            "items": [
+                {
+                    "date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                    "insufficient_count": r[1] or 0,
+                }
+                for r in rows
+            ],
+        }
+
+    # Fallback: 오늘 inventory 기준 단조 가정 (시연용)
+    fb_clauses: list[str] = ["i.safety_stock IS NOT NULL", "(i.on_hand - i.reserved_qty) < i.safety_stock"]
+    fb_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        fb_clauses.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = i.location_id AND l.wh_id = %s)"
+        )
+        fb_params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        fb_clauses.append("i.location_id = %s")
+        fb_params.append(ctx.scope_store_id)
+
+    fb_sql = f"SELECT COUNT(*)::int FROM inventory i WHERE {' AND '.join(fb_clauses)}"
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(fb_sql, fb_params)
+        today_count = cur.fetchone()[0] or 0
+
+    today = datetime.now(_KST).date()
+    items = [
+        {"date": (today - timedelta(days=i)).isoformat(), "insufficient_count": today_count}
+        for i in range(days - 1, -1, -1)
+    ]
+    return {"days": days, "items": items, "note": "fallback (inventory_snapshot_daily empty)"}
+
+
+@router.get("/inventory/by-category")
+def inventory_by_category(ctx: AuthContext = Depends(require_auth)):
+    """카테고리 재고 분포. inventory LEFT JOIN books JOIN locations. role-scope 자동."""
+    where: list[str] = []
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append("l.wh_id = %s")
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("i.location_id = %s")
+        params.append(ctx.scope_store_id)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    sql = f"""
+        SELECT COALESCE(b.category_name, '미분류') AS category,
+               SUM(i.on_hand)::bigint AS on_hand,
+               SUM(GREATEST(i.on_hand - i.reserved_qty, 0))::bigint AS available
+          FROM inventory i
+          LEFT JOIN books b ON b.isbn13 = i.isbn13
+          JOIN locations l ON l.location_id = i.location_id
+        {where_sql}
+         GROUP BY category
+         ORDER BY on_hand DESC
+         LIMIT 30
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "items": [
+            {"category": r[0], "on_hand": int(r[1] or 0), "available": int(r[2] or 0)}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/sales/category-trend")
+def sales_category_trend(
+    days: int = Query(default=30, ge=1, le=365),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """카테고리 매출 trend (top 5 by total revenue). 일자 × 카테고리."""
+    where = [f"s.event_ts >= NOW() - INTERVAL '{int(days)} days'", "s.event_ts <= NOW()"]
+    params: list = []
+    _apply_sales_scope(ctx, where, params, None)
+
+    # top 5 카테고리 먼저 결정
+    top_sql = f"""
+        SELECT COALESCE(b.category_name, '미분류') AS category
+          FROM sales_realtime s
+          LEFT JOIN books b ON b.isbn13 = s.isbn13
+         WHERE {' AND '.join(where)}
+         GROUP BY category
+         ORDER BY SUM(s.revenue) DESC
+         LIMIT 5
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(top_sql, params)
+        top_cats = [r[0] for r in cur.fetchall()]
+
+    if not top_cats:
+        return {"days": days, "items": []}
+
+    trend_where = where + ["COALESCE(b.category_name, '미분류') = ANY(%s)"]
+    trend_params = params + [top_cats]
+    trend_sql = f"""
+        SELECT (s.event_ts AT TIME ZONE 'Asia/Seoul')::date AS d,
+               COALESCE(b.category_name, '미분류') AS category,
+               SUM(s.revenue)::bigint AS revenue
+          FROM sales_realtime s
+          LEFT JOIN books b ON b.isbn13 = s.isbn13
+         WHERE {' AND '.join(trend_where)}
+         GROUP BY d, category
+         ORDER BY d, category
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(trend_sql, trend_params)
+        rows = cur.fetchall()
+    return {
+        "days": days,
+        "categories": top_cats,
+        "items": [
+            {
+                "date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "category": r[1],
+                "revenue": int(r[2] or 0),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/forecast/accuracy")
+def forecast_accuracy(
+    days: int = Query(default=7, ge=1, le=90),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """forecast 정확도 (predicted vs actual). snapshot_date 별 MAE/MAPE.
+
+    forecast_cache.snapshot_date 의 predicted_demand 합 vs sales_realtime 의 그 날 qty 합.
+    branch-clerk 는 자기 매장만 / wh-manager 는 권역 매장.
+    """
+    scope_sales_clauses: list[str] = []
+    scope_sales_params: list = []
+    scope_fc_clauses: list[str] = []
+    scope_fc_params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        scope_sales_clauses.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = s.store_id AND l.wh_id = %s)"
+        )
+        scope_sales_params.append(ctx.scope_wh_id)
+        scope_fc_clauses.append(
+            "EXISTS (SELECT 1 FROM locations l WHERE l.location_id = fc.store_id AND l.wh_id = %s)"
+        )
+        scope_fc_params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        scope_sales_clauses.append("s.store_id = %s")
+        scope_sales_params.append(ctx.scope_store_id)
+        scope_fc_clauses.append("fc.store_id = %s")
+        scope_fc_params.append(ctx.scope_store_id)
+
+    sales_scope_sql = (" AND " + " AND ".join(scope_sales_clauses)) if scope_sales_clauses else ""
+    fc_scope_sql = (" AND " + " AND ".join(scope_fc_clauses)) if scope_fc_clauses else ""
+
+    sql = f"""
+        WITH fc AS (
+            SELECT fc.snapshot_date, fc.isbn13, fc.store_id, SUM(fc.predicted_demand) AS predicted
+              FROM forecast_cache fc
+             WHERE fc.snapshot_date >= CURRENT_DATE - INTERVAL '{int(days)} days'
+               AND fc.snapshot_date <= CURRENT_DATE
+               {fc_scope_sql}
+             GROUP BY fc.snapshot_date, fc.isbn13, fc.store_id
+        ),
+        actual AS (
+            SELECT (s.event_ts AT TIME ZONE 'Asia/Seoul')::date AS d,
+                   s.isbn13, s.store_id,
+                   SUM(s.qty)::numeric AS qty
+              FROM sales_realtime s
+             WHERE (s.event_ts AT TIME ZONE 'Asia/Seoul')::date >= CURRENT_DATE - INTERVAL '{int(days)} days'
+               AND s.event_ts <= NOW()
+               {sales_scope_sql}
+             GROUP BY d, s.isbn13, s.store_id
+        )
+        SELECT fc.snapshot_date AS date,
+               AVG(ABS(fc.predicted - COALESCE(actual.qty, 0)))::numeric(12,4) AS mae,
+               (AVG(
+                   CASE WHEN COALESCE(actual.qty, 0) > 0
+                        THEN ABS(fc.predicted - actual.qty) / actual.qty
+                        ELSE NULL END
+               ) * 100)::numeric(8,4) AS mape,
+               SUM(fc.predicted)::numeric(12,2) AS total_predicted,
+               SUM(COALESCE(actual.qty, 0))::numeric(12,2) AS total_actual
+          FROM fc
+          LEFT JOIN actual
+                 ON actual.d = fc.snapshot_date
+                AND actual.isbn13 = fc.isbn13
+                AND actual.store_id = fc.store_id
+         GROUP BY fc.snapshot_date
+         ORDER BY fc.snapshot_date
+    """
+    params = scope_fc_params + scope_sales_params
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    if not rows:
+        return {"days": days, "items": [], "note": "no forecast_cache snapshots in range"}
+
+    return {
+        "days": days,
+        "items": [
+            {
+                "date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "mae": float(r[1] or 0),
+                "mape": float(r[2] or 0) if r[2] is not None else 0.0,
+                "total_predicted": float(r[3] or 0),
+                "total_actual": float(r[4] or 0),
             }
             for r in rows
         ],

@@ -56,6 +56,13 @@ body {
 }
 .animate-flash { animation: stock-flash 1.6s ease-out 1; }
 
+/* D5-3 Toast slide-in (우측 → 본래 위치) */
+@keyframes slide-in-right {
+  0%   { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.animate-slide-in-right { animation: slide-in-right 200ms ease-out 1; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #CED4DA; border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: #ADB5BD; }

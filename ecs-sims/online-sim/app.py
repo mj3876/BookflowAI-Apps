@@ -35,15 +35,20 @@ STREAM_NAME          = os.environ.get("KINESIS_STREAM_NAME", "bookflow-pos-event
 REGION               = os.environ.get("AWS_REGION", "ap-northeast-1")
 INVENTORY_API_URL    = os.environ.get("INVENTORY_API_URL", "").rstrip("/")
 ECS_CLUSTER_NAME     = os.environ.get("ECS_CLUSTER_NAME", "bookflow-ecs")
-INTERVAL_SEC         = (int(os.environ.get("INTERVAL_MIN", "10")),
-                        int(os.environ.get("INTERVAL_MAX", "30")))
+INTERVAL_SEC         = (int(os.environ.get("INTERVAL_MIN", "180")),
+                        int(os.environ.get("INTERVAL_MAX", "360")))
 CATALOG_TTL          = 600   # 카탈로그 갱신 주기 (초)
 STOCK_CACHE_TTL      = 30    # 재고 캐시 TTL (초)
 
-# 온라인 가상 스토어 → 실제 조회할 WH location_id 매핑
+# 온라인 가상 스토어 → 실제 조회할 WH 거점창고 location_id 매핑
+# BUG fix (2026-05-12): 이전 8 (대구 동성점 STORE_OFFLINE) 을 수도권 온라인으로 잘못 인식
+#   → 오프라인 매장의 채널에 ONLINE_APP/ONLINE_WEB 잘못 INSERT 됨.
+# 정확한 매핑 (RDS locations 기준):
+#   13 = 수도권 온라인 (STORE_ONLINE · wh_id=1) → WH 본체 = location_id 15 (수도권 거점창고)
+#   14 = 영남   온라인 (STORE_ONLINE · wh_id=2) → WH 본체 = location_id 16 (영남 거점창고)
 ONLINE_LOCATIONS = {
-    8:  {"wh_location_id": 1, "wh_id": 1, "name": "WH1온라인(수도권)"},
-    14: {"wh_location_id": 2, "wh_id": 2, "name": "WH2온라인(영남)"},
+    13: {"wh_location_id": 15, "wh_id": 1, "name": "수도권 온라인"},
+    14: {"wh_location_id": 16, "wh_id": 2, "name": "영남 온라인"},
 }
 PAYMENT_METHODS = ["CARD", "CARD", "CARD", "MOBILE_PAY", "MOBILE_PAY", "POINT", "TRANSFER"]
 
@@ -185,7 +190,7 @@ def get_stock(isbn13: str, wh_location_id: int) -> dict | None:
 
 # ── 거래 레코드 생성 ──────────────────────────────────────────────────────────
 def make_record(book: dict, stock: dict, online_location_id: int, wh_id: int) -> dict:
-    max_qty    = min(3, stock["available"])
+    max_qty    = min(2, stock["available"])
     qty        = random.randint(1, max(1, max_qty))
     unit_price = book["price_sales"]
     total      = qty * unit_price

@@ -33,6 +33,10 @@ WORKFLOW_IDS: dict[str, str] = {
     "ReturnPending":       "wf-return-pending-0010",
     "LambdaAlarm":         "wf-lambda-alarm-0011",
     "DeploymentRollback":  "wf-deploy-rollback-0012",
+    "InboundRejected":     "wf-inbound-rejected-0013",
+    "DailyPlanFinalized":  "wf-daily-plan-finalized-0014",
+    "ApprovalDelayed":     "wf-approval-delayed-0015",
+    "DailyDigest":         "wf-daily-digest-0016",
 }
 
 _RUNS: dict[str, deque[dict[str, Any]]] = {}
@@ -68,6 +72,27 @@ async def invoke_workflow(
             "Location": f"http://azure-logic-apps-mock.stubs.svc.cluster.local/workflows/{workflow_id}/runs/{run_id}",
         },
     )
+
+
+@app.post("/workflow/{event_type}")
+async def invoke_by_event_type(event_type: str, request: Request):
+    """Accept notification-svc mock calls in /workflow/{event_type} form."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    workflow_id = WORKFLOW_IDS.get(event_type, f"wf-unknown-{event_type}")
+    run_id = uuid.uuid4().hex
+    record = {
+        "run_id": run_id,
+        "event_type": event_type,
+        "workflow_id": workflow_id,
+        "received_at": time.time(),
+        "body": body,
+    }
+    _RUNS.setdefault(workflow_id, deque(maxlen=100)).append(record)
+    return Response(status_code=202, headers={"x-ms-workflow-run-id": run_id})
 
 
 @app.get("/workflows/{workflow_id}/runs")

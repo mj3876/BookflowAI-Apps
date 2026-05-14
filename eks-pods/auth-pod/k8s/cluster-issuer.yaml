@@ -1,7 +1,7 @@
-# Let's Encrypt ClusterIssuer (Production · DNS-01 challenge via DuckDNS webhook)
-# 90일 자동 갱신 · 5 cert/7day rate limit · staging 으로 먼저 테스트 권장
-# Webhook chart: mmontes11/cert-manager-webhook-duckdns (groupName=acme.duckdns.org)
-# Webhook secret: cert-manager-webhook-duckdns (key=token, in cert-manager namespace)
+# Let's Encrypt ClusterIssuer (Production · DNS-01 via Route53)
+# bookflow.myosoon.store (가비아 도메인 · NS → Route53 위임)
+# 90일 자동 갱신 · 5 cert/7day rate limit
+# cert-manager ServiceAccount 는 IRSA role 사용 (영구 자원: bookflow-cert-manager-route53)
 # 적용: kubectl apply -f cluster-issuer.yaml
 ---
 apiVersion: cert-manager.io/v1
@@ -15,14 +15,12 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:
-    - dns01:
-        webhook:
-          groupName: acme.duckdns.org
-          solverName: duckdns
-          config:
-            apiTokenSecretRef:
-              name: cert-manager-webhook-duckdns
-              key: token
+    - selector:
+        dnsZones: ["myosoon.store"]
+      dns01:
+        route53:
+          region: ap-northeast-1
+          hostedZoneID: Z0061717U502ZCK2HCCF
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -35,11 +33,9 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-staging-account-key
     solvers:
-    - dns01:
-        webhook:
-          groupName: acme.duckdns.org
-          solverName: duckdns
-          config:
-            apiTokenSecretRef:
-              name: cert-manager-webhook-duckdns
-              key: token
+    - selector:
+        dnsZones: ["myosoon.store"]
+      dns01:
+        route53:
+          region: ap-northeast-1
+          hostedZoneID: Z0061717U502ZCK2HCCF
