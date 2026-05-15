@@ -199,7 +199,7 @@ export default function Logistics() {
 
   const q = useQuery({
     queryKey: ['orders', 'day', role, date],
-    queryFn: () => fetchPending(role!, { limit: 500, expected_date: date }),
+    queryFn: () => fetchPending(role!, { limit: 5000, expected_date: date }),
     enabled: !!role,
     staleTime: 5000,
     refetchInterval: 10000,

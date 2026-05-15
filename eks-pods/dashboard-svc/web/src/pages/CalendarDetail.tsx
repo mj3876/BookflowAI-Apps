@@ -144,7 +144,7 @@ export default function CalendarDetail() {
   // 캘린더 cell count (`/orders/calendar`) 와 같은 의미 → intra-user 정합성 보장.
   const q = useQuery({
     queryKey: ['orders', 'day', role, date],
-    queryFn: () => fetchPending(role!, { limit: 500, expected_date: date }),
+    queryFn: () => fetchPending(role!, { limit: 5000, expected_date: date }),
     enabled: !!role && !!date,
     staleTime: 5000,
     refetchInterval: 10000,
