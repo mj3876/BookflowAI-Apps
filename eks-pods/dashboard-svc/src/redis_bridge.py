@@ -1,6 +1,15 @@
 """Redis pub/sub bridge to WebSocket broadcast.
 
-Subscribes to 4 channels (stock.changed · order.pending · spike.detected · newbook.request)
+Subscribes to 8 channels (PR-B 4-step state machine v2 정합):
+  - stock.changed     · inventory.on_hand 변동
+  - order.pending     · PENDING 발의
+  - order.approved    · PENDING → APPROVED (한쪽 + 양측)
+  - order.dispatched  · APPROVED → IN_TRANSIT (source 발송)
+  - order.executed    · IN_TRANSIT → EXECUTED (target 수령)
+  - order.rejected    · any → REJECTED (payload 에 rejection_stage 포함)
+  - spike.detected    · SNS 급등
+  - newbook.request   · 출판사 신간
+
 and pushes JSON to all connected WS clients.
 
 Single asyncio task per Pod replica · each replica subscribes independently to all channels.
@@ -17,7 +26,16 @@ from .settings import settings
 
 log = logging.getLogger(__name__)
 
-CHANNELS = ["stock.changed", "order.pending", "spike.detected", "newbook.request"]
+CHANNELS = [
+    "stock.changed",
+    "order.pending",
+    "order.approved",     # PR-B 신규
+    "order.dispatched",   # PR-B 신규
+    "order.executed",     # PR-B 신규
+    "order.rejected",     # PR-B 신규
+    "spike.detected",
+    "newbook.request",
+]
 
 _redis: aioredis.Redis | None = None
 _pubsub_task: asyncio.Task | None = None

@@ -151,32 +151,10 @@ def _location_wh(cur, location_id: int | None) -> int | None:
     return row[0] if row else None
 
 
-def _adjust_source_inventory(cur, order_id: str, ctx: AuthContext, direction: int, reason_prefix: str) -> None:
-    """Option B inventory 변동 helper.
-    direction = -1: 승인 시 source -qty
-    direction = +1: 거부/입고거부 시 source +qty 복원
-    WH_TO_STORE / REBALANCE / WH_TRANSFER 만 처리 (PUBLISHER_ORDER 는 source NULL).
-    EXECUTED 후엔 호출 안 됨 (이미 매장 입고됨).
-    """
-    cur.execute(
-        "SELECT order_type, source_location_id, isbn13, qty FROM pending_orders WHERE order_id=%s::uuid",
-        (order_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return
-    ot, src, isbn, qty = row
-    if ot not in ("WH_TO_STORE", "REBALANCE", "WH_TRANSFER") or src is None:
-        return
-    delta = direction * qty
-    cur.execute(
-        "UPDATE inventory SET on_hand = on_hand + %s, updated_at=NOW(), updated_by=%s WHERE isbn13=%s AND location_id=%s",
-        (delta, ctx.user_id, isbn, src),
-    )
-    cur.execute(
-        "INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state) VALUES ('user', %s, 'inventory.adjust', 'inventory', %s, %s::jsonb)",
-        (ctx.user_id, f"{isbn}:{src}", json.dumps({"delta": delta, "reason": f"{reason_prefix}:{order_id[:8]}", "order_id": order_id})),
-    )
+# PR-B (2026-05-15) 4-step state machine v2 정합:
+# Option B 잔존 _adjust_source_inventory helper 제거.
+# inventory 변동은 inventory-svc /adjust HTTP 호출로 단일화 (state_machine.py).
+# APPROVED 시 변동 없음. /intervention/orders/{id}/dispatch 호출 시에만 source -qty.
 
 
 def _validate_authority(cur, ctx: AuthContext, order_id: str, side: str) -> tuple[str, int | None, int | None]:
@@ -650,8 +628,8 @@ def _record_approval(conn, order_id: str, ctx: AuthContext, side: str, decision:
             "UPDATE pending_orders SET status = 'APPROVED', approved_at = NOW() WHERE order_id = %s",
             (order_id,),
         )
-        # Option B: helper 가 PUBLISHER_ORDER (source NULL) 자동 skip
-        _adjust_source_inventory(cur, order_id, ctx, -1, "FINAL 승인 출고")
+        # PR-B 4-step state machine v2: APPROVED 시 inventory 변동 X
+        # 실제 출고는 /intervention/orders/{id}/dispatch 호출 시 source -qty (state_machine.py)
     elif decision == "APPROVED" and side in ("SOURCE", "TARGET"):
         cur.execute(
             """
@@ -663,9 +641,9 @@ def _record_approval(conn, order_id: str, ctx: AuthContext, side: str, decision:
             """,
             (order_id, order_id),
         )
-        # WH_TO_STORE / REBALANCE / WH_TRANSFER 양측 APPROVED 로 방금 전환된 경우만 source -qty + 최종 알림
+        # PR-B 4-step state machine v2: 양측 APPROVED 전환 시 inventory 변동 X
+        # 실제 출고는 /intervention/orders/{id}/dispatch 호출 시 source -qty (state_machine.py)
         if cur.rowcount > 0:
-            _adjust_source_inventory(cur, order_id, ctx, -1, "양측 승인 출고")
             # 2026-05-14: 양측 협의 최종 승인 — UI Toast / 시연 시 "출고 완료 · 입고 대기" 명확화
             cur.execute(
                 "SELECT order_type, qty FROM pending_orders WHERE order_id = %s",
@@ -691,13 +669,24 @@ def _record_approval(conn, order_id: str, ctx: AuthContext, side: str, decision:
         cur.execute("SELECT status, order_type, qty FROM pending_orders WHERE order_id = %s", (order_id,))
         prev_row = cur.fetchone()
         prev_status, prev_ot, prev_qty = (prev_row[0], prev_row[1], prev_row[2]) if prev_row else (None, None, None)
+        # PR-B 4-step state machine v2: rejection_stage 자동 분기 (CHECK 충족)
         cur.execute(
-            "UPDATE pending_orders SET status = 'REJECTED', reject_reason = %s, reject_count = reject_count + 1 WHERE order_id = %s",
+            """UPDATE pending_orders SET status = 'REJECTED',
+                      rejection_stage = CASE status
+                        WHEN 'PENDING'    THEN 'PENDING'
+                        WHEN 'APPROVED'   THEN 'APPROVED'
+                        WHEN 'IN_TRANSIT' THEN 'IN_TRANSIT'
+                      END,
+                      reject_reason = %s,
+                      reject_count = reject_count + 1
+                WHERE order_id = %s""",
             (reject_reason, order_id),
         )
         if prev_status == "APPROVED":
-            _adjust_source_inventory(cur, order_id, ctx, +1, "거부복원")
-            # 2026-05-14: APPROVED → REJECTED 전환 — 재고 복원됨 명시 알림 (logic-apps 포함)
+            # PR-B 4-step state machine v2: APPROVED → REJECTED 시 변동 X
+            # (Option B 폐기 — APPROVED 단계에선 source -qty 안 했으니 복원도 불필요)
+            # IN_TRANSIT 후 reject 만 source +qty 복원 (state_machine._to_rejected)
+            # 2026-05-14: APPROVED → REJECTED 전환 — 변동 없음 알림 (logic-apps 포함)
             _notify(
                 ctx.token, "OrderRejectedAfterApproval",
                 severity="WARNING",
@@ -1060,9 +1049,9 @@ def _bulk_record_approvals(conn, valid_items: list[dict], ctx: AuthContext, deci
                 (wh_oids,),
             )
             newly_approved_oids.extend(r[0] for r in cur.fetchall())
-        # Option B: 방금 APPROVED 된 oid 별 source -qty (helper 가 PUBLISHER_ORDER 자동 skip)
-        for oid in newly_approved_oids:
-            _adjust_source_inventory(cur, oid, ctx, -1, "bulk 출고")
+        # PR-B 4-step state machine v2: bulk APPROVED 전환 시 inventory 변동 X
+        # 실제 출고는 /intervention/orders/batch-dispatch 호출 시 (state_machine.py)
+        _ = newly_approved_oids  # noqa: F841 (audit_log 기록 등 다른 곳에서 사용 가능)
     else:  # REJECTED
         # 어느 side 든 REJECTED → 전체 order REJECTED + reject_count++ (per order 1회)
         rej_map: dict[str, str | None] = {}
@@ -1076,18 +1065,26 @@ def _bulk_record_approvals(conn, valid_items: list[dict], ctx: AuthContext, deci
                 (oid_list,),
             )
             prev_status_map = {r[0]: r[1] for r in cur.fetchall()}
+            # PR-B 4-step state machine v2: rejection_stage 자동 분기 (CHECK 충족)
             cur.executemany(
                 """
                 UPDATE pending_orders
-                   SET status = 'REJECTED', reject_reason = %s, reject_count = reject_count + 1
+                   SET status = 'REJECTED',
+                       rejection_stage = CASE status
+                         WHEN 'PENDING'    THEN 'PENDING'
+                         WHEN 'APPROVED'   THEN 'APPROVED'
+                         WHEN 'IN_TRANSIT' THEN 'IN_TRANSIT'
+                       END,
+                       reject_reason = %s,
+                       reject_count = reject_count + 1
                  WHERE order_id = %s::uuid
                    AND status NOT IN ('REJECTED', 'EXECUTED')
                 """,
                 [(reason, oid) for oid, reason in rej_map.items()],
             )
-            restore_oids = [oid for oid, st in prev_status_map.items() if st == "APPROVED"]
-            for oid in restore_oids:
-                _adjust_source_inventory(cur, oid, ctx, +1, "bulk 거부복원")
+            # PR-B 4-step state machine v2: bulk APPROVED → REJECTED 시 변동 X
+            # (APPROVED 단계에선 source -qty 안 했으니 복원도 불필요 — Option B 폐기)
+            _ = [oid for oid, st in prev_status_map.items() if st == "APPROVED"]
 
     # 5) 단일 batch audit_log row
     cur.execute(
@@ -1743,11 +1740,16 @@ def receive_inbound(order_id: str, ctx: AuthContext = Depends(require_auth)):
             elif ctx.role != "hq-admin":
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="수령 권한 없음")
 
-            # status=EXECUTED + executed_at + audit
+            # PR-B 4-step state machine v2: legacy receive 가 CHECK 충족 위해 dispatched_at + executed_by 도 함께 채움
+            # (APPROVED → EXECUTED 직행 시 IN_TRANSIT 거치지 않으므로 dispatched_at = NOW() · single transaction)
             cur.execute(
-                """UPDATE pending_orders SET status='EXECUTED', executed_at=NOW()
+                """UPDATE pending_orders SET status='EXECUTED',
+                          dispatched_at=COALESCE(dispatched_at, NOW()),
+                          dispatched_by=COALESCE(dispatched_by, %s),
+                          executed_at=NOW(),
+                          executed_by=%s
                     WHERE order_id = %s""",
-                (order_id,),
+                (ctx.user_id, ctx.user_id, order_id),
             )
             cur.execute(
                 """INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
@@ -1862,10 +1864,15 @@ def batch_receive_inbound(body: dict = Body(...), ctx: AuthContext = Depends(req
                 return {"total": len(order_ids), "ok": 0, "failed": len(order_ids), "errors": errors}
 
             valid_oids = [v[0] for v in valid]
+            # PR-B 4-step state machine v2: legacy batch-receive 가 CHECK 충족 위해 dispatched_at + executed_by 채움
             cur.execute(
-                """UPDATE pending_orders SET status='EXECUTED', executed_at=NOW()
+                """UPDATE pending_orders SET status='EXECUTED',
+                          dispatched_at=COALESCE(dispatched_at, NOW()),
+                          dispatched_by=COALESCE(dispatched_by, %s),
+                          executed_at=NOW(),
+                          executed_by=%s
                     WHERE order_id = ANY(%s::uuid[])""",
-                (valid_oids,),
+                (ctx.user_id, ctx.user_id, valid_oids),
             )
 
             # 인벤토리 증분 — (isbn, location) 별 합산 후 executemany
@@ -1963,15 +1970,21 @@ def reject_inbound(
             elif ctx.role != "hq-admin":
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="입고 거부 권한 없음")
 
-            # pending_orders 에 rejected_at 컬럼 없음 (schema). reject_reason VARCHAR(50) 만 있음.
-            # 거부 시점은 audit_log 의 created_at 으로 추적.
+            # PR-B 4-step state machine v2: legacy 입고거부 (반품) — rejection_stage 자동 분기 (CHECK 충족)
+            # APPROVED 상태에서 거부 시 rejection_stage='APPROVED', IN_TRANSIT 후 거부 시 'IN_TRANSIT'
             cur.execute(
-                """UPDATE pending_orders SET status='REJECTED', reject_reason=%s
+                """UPDATE pending_orders SET status='REJECTED',
+                          rejection_stage = CASE status
+                            WHEN 'PENDING'    THEN 'PENDING'
+                            WHEN 'APPROVED'   THEN 'APPROVED'
+                            WHEN 'IN_TRANSIT' THEN 'IN_TRANSIT'
+                          END,
+                          reject_reason=%s
                     WHERE order_id = %s""",
                 (reject_reason[:50], order_id),
             )
-            # Option B: 입고거부 시 source 복원 (REBALANCE/WH_TRANSFER 만 · helper 가 자동 분기)
-            _adjust_source_inventory(cur, order_id, ctx, +1, "입고거부 복원")
+            # PR-B 4-step state machine v2: legacy 입고거부 — inventory 복원 불필요
+            # (APPROVED 단계 시 source -qty 안 했으니 복원 X · 신규 흐름은 /orders/{id}/reject 사용)
             cur.execute(
                 """INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
                    VALUES ('user', %s, 'inbound.reject', 'pending_orders', %s, %s::jsonb)""",

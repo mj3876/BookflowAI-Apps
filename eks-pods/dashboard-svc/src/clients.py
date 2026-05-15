@@ -326,3 +326,69 @@ async def post_intervention_book_status(isbn13: str, body: dict, token: str) -> 
         body,
         token,
     )
+
+
+# ─── PR-B (2026-05-15) 4-step state machine v2 — /intervention/orders/* proxy ─
+async def post_orders_approve(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/{order_id}/approve",
+        body or {}, token,
+    )
+
+
+async def post_orders_dispatch(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/{order_id}/dispatch",
+        body or {}, token,
+    )
+
+
+async def post_orders_receive(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/{order_id}/receive",
+        body or {}, token,
+    )
+
+
+async def post_orders_reject(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    """body = { reject_reason: str }"""
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/{order_id}/reject",
+        body, token,
+    )
+
+
+async def patch_orders(order_id: str, body: dict, token: str) -> tuple[int, Any]:
+    """body = { qty?: int, target_location_id?: int, note?: str }"""
+    return await _safe_patch(
+        f"{settings.intervention_svc_url}/intervention/orders/{order_id}",
+        body, token,
+    )
+
+
+async def post_orders_batch_approve(body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/batch-approve",
+        body, token, timeout=60.0,
+    )
+
+
+async def post_orders_batch_dispatch(body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/batch-dispatch",
+        body, token, timeout=60.0,
+    )
+
+
+async def post_orders_batch_receive(body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/orders/batch-receive",
+        body, token, timeout=60.0,
+    )
+
+
+async def get_orders_calendar(from_date: str, to_date: str, token: str) -> dict | None:
+    return await _safe_get(
+        f"{settings.intervention_svc_url}/intervention/orders/calendar?from_date={from_date}&to_date={to_date}",
+        token,
+    )
