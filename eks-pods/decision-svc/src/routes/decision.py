@@ -44,15 +44,16 @@ PLAN_SAFETY_DAYS = 5      # 매장 desired = predicted_demand × SAFETY_DAYS
 PLAN_WH_BUFFER_DAYS = 2   # WH 본체 desired = sum(same-wh stores predicted) × BUFFER_DAYS
 PLAN_MIN_ROW_QTY = 5      # 너무 작은 발의는 묶거나 스킵 (운송 효율)
 
-# Stage 별 lead time (발의일 → 도착 예정일) — UI 도착일 별 grouping + 실측치
-# WH_TO_STORE/REBALANCE: 익일 운송 (D+1) · WH_TRANSFER: 권역간 2일 (D+2)
-# PUBLISHER_ORDER: 외부 발주 3일 + 익일 처리 (D+4)
-# 발의는 모두 발의일 (D+0) 처리 · 입고 (EXECUTED) 시점만 expected_arrival_date 에 발생.
+# Stage 별 lead time — 사용자 도메인 (2026-05-15 v4):
+#   "수요예측 D+0 새벽 → 9시 이내 승인 끝 → 그 날 안에 모든 계획 실행".
+# REBALANCE/WH_TO_STORE: 발의 당일 매장↔매장 / wh→매장 차량 routing 으로 D+0 도착.
+# WH_TRANSFER: 권역 간 (수도권↔영남) → D+1 도착.
+# PUBLISHER_ORDER: 외부 출판사 발주 → D+3 도착.
 LEAD_DAYS: dict[str, int] = {
-    "REBALANCE": 1,
-    "WH_TO_STORE": 1,
-    "WH_TRANSFER": 2,
-    "PUBLISHER_ORDER": 4,
+    "REBALANCE": 0,
+    "WH_TO_STORE": 0,
+    "WH_TRANSFER": 1,
+    "PUBLISHER_ORDER": 3,
 }
 
 

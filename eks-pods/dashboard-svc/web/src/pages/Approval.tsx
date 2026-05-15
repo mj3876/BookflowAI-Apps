@@ -60,6 +60,10 @@ export default function Approval() {
   })() as StageFilter;
   const [stage, setStage] = useState<StageFilter>(initialStage);
   const [q, setQ] = useState<string>(searchParams.get('q') ?? '');
+  // 검색박스 3 분리 (ISBN · 제목 · 매장) — client-side filter (mySideRes 500건 대상)
+  const [qIsbn, setQIsbn] = useState('');
+  const [qTitle, setQTitle] = useState('');
+  const [qStore, setQStore] = useState('');
   const [page, setPage] = useState(0);
   const [selfDone, setSelfDone] = useState<Set<string>>(new Set());
   const [editTarget, setEditTarget] = useState<{
@@ -104,8 +108,21 @@ export default function Approval() {
 
   const items = useMemo(() => {
     const list = (queryRes.data?.items as PendingOrder[] | undefined) ?? [];
-    return list.filter((o) => o.status === 'PENDING');
-  }, [queryRes.data]);
+    const trimmedIsbn = qIsbn.trim().toLowerCase();
+    const trimmedTitle = qTitle.trim().toLowerCase();
+    const trimmedStore = qStore.trim().toLowerCase();
+    return list.filter((o) => {
+      if (o.status !== 'PENDING') return false;
+      if (trimmedIsbn && !o.isbn13.toLowerCase().includes(trimmedIsbn)) return false;
+      if (trimmedTitle && !(o.title ?? '').toLowerCase().includes(trimmedTitle)) return false;
+      if (trimmedStore) {
+        const srcName = (nameOf(o.source_location_id ?? undefined) ?? '').toLowerCase();
+        const tgtName = (nameOf(o.target_location_id ?? undefined) ?? '').toLowerCase();
+        if (!srcName.includes(trimmedStore) && !tgtName.includes(trimmedStore)) return false;
+      }
+      return true;
+    });
+  }, [queryRes.data, qIsbn, qTitle, qStore, nameOf]);
   const totalPending = queryRes.data?.total ?? 0;
   const totalAll = fullStats?.total ?? 0;  // 전체 (stage filter 무시)
 
@@ -164,17 +181,30 @@ export default function Approval() {
   });
 
   const bulkApprove = async () => {
-    if (items.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); return; }
-    const ids = items.map((o) => o.order_id);
+    // 일괄 동의는 pagination 무관 — 모든 PENDING 가져와서 처리 (CHUNK 200 단위).
     const label = role === 'hq-admin' ? '강제 승인 (escalation · 양측 자동)' : '동의';
-    if (!window.confirm(`이 페이지의 PENDING ${ids.length}건 ${label} 합니다.\n(전체 ${totalAll}건 중 현재 페이지)`)) return;
     setBulkBusy(true);
     try {
-      const r = await postOrdersBatchApprove(role!, { order_ids: ids });
+      // 전체 PENDING IDs fetch (limit 1000 충분 · 시연 데이터 526~)
+      const allRes = await fetchPending(role!, {
+        limit: 1000,
+        ...(stage !== 'all' ? { order_type: stage } : {}),
+      });
+      const allIds = ((allRes.items as PendingOrder[] | undefined) ?? [])
+        .filter((o) => o.status === 'PENDING')
+        .map((o) => o.order_id);
+      if (allIds.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); setBulkBusy(false); return; }
+      if (!window.confirm(`전체 PENDING ${allIds.length}건 ${label} 합니다.\n(${stage === 'all' ? '모든 stage' : stage} · pagination 무관 전체)`)) {
+        setBulkBusy(false); return;
+      }
+      // 전체 한 번에 — backend batch_approve limit 없음.
+      const r = await postOrdersBatchApprove(role!, { order_ids: allIds });
+      const okCnt = r.ok.length;
+      const failCnt = r.failed.length;
       showToast({
         type: 'success',
-        message: `✓ ${label} 완료 — 성공 ${r.ok.length}건${r.failed.length > 0 ? ` · 실패 ${r.failed.length}건` : ''}`,
-        details: r.failed.length > 0 ? `${r.failed.length}건 실패 (권한 미달 또는 status 변경)` : undefined,
+        message: `✓ ${label} 완료 — 성공 ${okCnt}건${failCnt > 0 ? ` · 실패 ${failCnt}건` : ''}`,
+        details: failCnt > 0 ? `${failCnt}건 실패 (권한 미달 또는 status 변경)` : undefined,
       });
       invalidateAll();
     } catch (e: unknown) {
@@ -265,18 +295,37 @@ export default function Approval() {
             );
           })}
         </div>
-        <div className="flex items-center gap-2">
+        {/* 검색박스 3개 분리 (ISBN · 제목 · 매장) — client-side filter */}
+        <div className="grid grid-cols-3 gap-2">
           <input
             type="text"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="ISBN · 제목 · 매장명 검색"
-            className="bf-input text-sm flex-1"
+            value={qIsbn}
+            onChange={(e) => setQIsbn(e.target.value)}
+            placeholder="ISBN13"
+            className="bf-input text-sm"
           />
-          {q && (
-            <button type="button" className="bf-btn-secondary text-xs" onClick={() => setQ('')}>초기화</button>
-          )}
+          <input
+            type="text"
+            value={qTitle}
+            onChange={(e) => setQTitle(e.target.value)}
+            placeholder="제목"
+            className="bf-input text-sm"
+          />
+          <input
+            type="text"
+            value={qStore}
+            onChange={(e) => setQStore(e.target.value)}
+            placeholder="매장 (출발·도착)"
+            className="bf-input text-sm"
+          />
         </div>
+        {(qIsbn || qTitle || qStore) && (
+          <button
+            type="button"
+            className="bf-btn-secondary text-xs self-start"
+            onClick={() => { setQIsbn(''); setQTitle(''); setQStore(''); }}
+          >검색 초기화</button>
+        )}
       </div>
 
       <div className="bf-card divide-y divide-bf-border">

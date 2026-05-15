@@ -503,10 +503,11 @@ def queue(
         ]
         params.append(date)
     elif include_history:
-        # PENDING (시점 무관) OR 최근 N일 처리 row (deprecated · 호환)
+        # PENDING (시점 무관) OR 최근 N일 처리 row.
+        # 2026-05-15 v4 fix: IN_TRANSIT / AUTO_EXECUTED 누락 → /logistics 에서 dispatch 후 target 쪽 입고 안 보임.
         where = [
             "(po.status = 'PENDING' "
-            "OR (po.status IN ('APPROVED','EXECUTED','REJECTED') "
+            "OR (po.status IN ('APPROVED','IN_TRANSIT','EXECUTED','AUTO_EXECUTED','REJECTED') "
             f"AND po.created_at >= NOW() - INTERVAL '{days} days'))"
         ]
     else:

@@ -57,7 +57,7 @@ class PatchReq(BaseModel):
 
 
 class BatchReq(BaseModel):
-    order_ids: list[str] = Field(..., min_items=1, max_items=200)
+    order_ids: list[str] = Field(..., min_items=1)
 
 
 class CalendarDay(BaseModel):
