@@ -53,10 +53,12 @@ async def get_pending_orders(
     include_history: bool = False,
     days: int = 7,
     date: str | None = None,
+    expected_date: str | None = None,
 ) -> dict | None:
     """pending_orders 큐 - intervention-svc 의 role/scope 필터링된 큐 사용.
 
-    - date=YYYY-MM-DD: 그 일자만 (lazy detail · DateHistoryTabs 가 호출)
+    - expected_date=YYYY-MM-DD: expected_arrival_at 기반 — 캘린더 cell click 정합 (PR-C v2)
+    - date=YYYY-MM-DD: COALESCE(approved_at, executed_at, created_at) 기반 (legacy)
     - include_history=true (deprecated): PENDING + 최근 N일. summary+date 로 대체 권장.
     - offset: 페이지네이션 (limit 이전 row skip).
     """
@@ -67,7 +69,9 @@ async def get_pending_orders(
         qs.append(f"order_type={order_type}")
     if wh_id is not None:
         qs.append(f"wh_id={wh_id}")
-    if date:
+    if expected_date:
+        qs.append(f"expected_date={expected_date}")
+    elif date:
         qs.append(f"date={date}")
     elif include_history:
         qs.append("include_history=true")

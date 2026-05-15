@@ -471,6 +471,7 @@ def queue(
     order_type: str | None = Query(default=None, description="REBALANCE | WH_TRANSFER | PUBLISHER_ORDER"),
     wh_id: int | None = Query(default=None, description="해당 wh 가 source 또는 target 인 주문만"),
     date: str | None = Query(default=None, description="특정 일자 (YYYY-MM-DD KST) · history detail 용. 주어지면 그 날 처리 row 만"),
+    expected_date: str | None = Query(default=None, description="expected_arrival_at 기준 일자 (YYYY-MM-DD) — 캘린더 cell click → 그 날 도착 예정인 모든 status row"),
     include_history: bool = Query(default=False, description="(deprecated) 과거 처리 row 포함 — 사용 자제. /queue/summary + date 조합 권장"),
     days: int = Query(default=7, ge=1, le=400, description="include_history=true 일 때 조회 기간 (일 · 최대 400)"),
     q: str | None = Query(default=None, description="isbn13/title/location 검색"),
@@ -479,10 +480,19 @@ def queue(
 
     - default: PENDING 만 (오늘 처리 대기)
     - date=YYYY-MM-DD: 그 일자 (KST · approved_at|executed_at|created_at) 의 row 만
+    - expected_date=YYYY-MM-DD: expected_arrival_at 기준 (캘린더 cell 과 같은 의미 · PR-C 2026-05-15)
     - include_history=true (deprecated): PENDING + 최근 N일 처리 row. summary+date 로 대체.
     """
     params: list = []
-    if date is not None:
+    if expected_date is not None:
+        # PR-C 4-step state machine v2 — 캘린더 cell click 정합. expected_arrival_at 기반.
+        # 완료된 row 도 함께 (executed_at::date == expected_date 인 경우 — 도착 당일 처리)
+        where = [
+            "(po.expected_arrival_at = %s "
+            "OR DATE(po.executed_at AT TIME ZONE 'Asia/Seoul') = %s)"
+        ]
+        params.extend([expected_date, expected_date])
+    elif date is not None:
         # 특정 일자 detail mode — KST 기준 그 날의 처리/생성 row 만
         where = [
             "DATE(COALESCE(po.approved_at, po.executed_at, po.created_at) AT TIME ZONE 'Asia/Seoul') = %s"

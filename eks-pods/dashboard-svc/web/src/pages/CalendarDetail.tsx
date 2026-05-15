@@ -138,12 +138,12 @@ export default function CalendarDetail() {
   const { nameOf } = useLocations(role ?? 'hq-admin');
   const [tab, setTab] = useState<Tab>('inbound');
 
-  // fetchPending(date=YYYY-MM-DD) — backend 가 DATE(COALESCE(approved_at, executed_at, created_at))
-  // 기반으로 모든 status (PENDING/APPROVED/IN_TRANSIT/EXECUTED/REJECTED) 응답.
-  // expected_arrival_at 기반 정확도 차이는 시연용 충분 (PR-D 에서 backend /orders/list 신규 endpoint 권장).
+  // fetchPending(expected_date=YYYY-MM-DD) — backend `/intervention/queue?expected_date=`
+  // 가 expected_arrival_at OR executed_at::date 기반으로 모든 status row 응답.
+  // 캘린더 cell count (`/orders/calendar`) 와 같은 의미 → intra-user 정합성 보장.
   const q = useQuery({
     queryKey: ['orders', 'day', role, date],
-    queryFn: () => fetchPending(role!, { limit: 500, date }),
+    queryFn: () => fetchPending(role!, { limit: 500, expected_date: date }),
     enabled: !!role && !!date,
     staleTime: 5000,
     refetchInterval: 10000,
