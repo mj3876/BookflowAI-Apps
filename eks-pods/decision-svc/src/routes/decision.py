@@ -206,7 +206,10 @@ def _stage0_source(cur, isbn13: str, target_wh: int, qty: int) -> int | None:
                       FROM pending_orders po
                      WHERE po.target_location_id = i.location_id
                        AND po.isbn13 = i.isbn13
-                       AND po.status = 'APPROVED'
+                       -- 2026-05-15 v3: 4-step state machine 정합
+                       -- 도착 예정 = APPROVED (출고 대기) + IN_TRANSIT (운송 중) + AUTO_EXECUTED (cron 자동)
+                       -- PENDING 은 협의 미확정이라 제외 (over-count 회피)
+                       AND po.status IN ('APPROVED','IN_TRANSIT','AUTO_EXECUTED')
                        AND po.executed_at IS NULL
                 ), 0) AS incoming_qty,
                 COALESCE((
@@ -259,7 +262,10 @@ def _stage1_source(cur, isbn13: str, target_wh: int, target_location_id: int, qt
                       FROM pending_orders po
                      WHERE po.target_location_id = i.location_id
                        AND po.isbn13 = i.isbn13
-                       AND po.status = 'APPROVED'
+                       -- 2026-05-15 v3: 4-step state machine 정합
+                       -- 도착 예정 = APPROVED (출고 대기) + IN_TRANSIT (운송 중) + AUTO_EXECUTED (cron 자동)
+                       -- PENDING 은 협의 미확정이라 제외 (over-count 회피)
+                       AND po.status IN ('APPROVED','IN_TRANSIT','AUTO_EXECUTED')
                        AND po.executed_at IS NULL
                 ), 0) AS incoming_qty,
                 COALESCE((
@@ -757,12 +763,14 @@ def _build_daily_plan(cur, snapshot_date: date) -> list[dict]:
             "safety": int(safety or 0),
         }
 
-    # 4. in-transit (already PENDING/APPROVED, not executed) per (isbn, target_loc)
+    # 4. incoming (이미 발의되어 곧 도착할 row) per (isbn, target_loc)
+    # 2026-05-15 v3: 4-step state machine 정합 — APPROVED + IN_TRANSIT + AUTO_EXECUTED
+    # PENDING 은 협의 미확정이라 제외 (over-count 회피).
     cur.execute(
         """
         SELECT isbn13, target_location_id, COALESCE(SUM(qty), 0)
           FROM pending_orders
-         WHERE status IN ('PENDING', 'APPROVED', 'AUTO_EXECUTED')
+         WHERE status IN ('APPROVED', 'IN_TRANSIT', 'AUTO_EXECUTED')
            AND executed_at IS NULL
            AND target_location_id IS NOT NULL
            AND isbn13 = ANY(%s)
