@@ -30,7 +30,8 @@ for _sid in range(1, 13):
 
 
 class AuthContext:
-    __slots__ = ("user_id", "role", "scope_wh_id", "scope_store_id", "token")
+    # _order_meta: authority.require_authority Depends 가 endpoint 내부 사용 위해 attach
+    __slots__ = ("user_id", "role", "scope_wh_id", "scope_store_id", "token", "_order_meta")
 
     def __init__(self, user_id, role, scope_wh_id, scope_store_id, token=None):
         self.user_id = user_id
@@ -38,6 +39,7 @@ class AuthContext:
         self.scope_wh_id = scope_wh_id
         self.scope_store_id = scope_store_id
         self.token = token
+        self._order_meta = None
 
 
 def _parse_mock(token: str, raw: str) -> AuthContext:
