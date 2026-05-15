@@ -5,6 +5,7 @@ import {
   fetchAllForecast,
   fetchCascadeFunnel,
   fetchInventoryByCategory,
+  fetchInventoryByStore,
   fetchOverview,
   type Role,
 } from '../api';
@@ -124,11 +125,23 @@ export default function WhInventory() {
   const [page, setPage] = useState(1);
   useEffect(() => setPage(1), [search, sortKey]);
 
-  // v5: effectiveLocId 의 inventory (wh body 또는 권역 매장 1개 또는 branch 자기 매장)
+  // v5 2026-05-15 (별도 fetch): viewMode='stores' 면 그 매장 별 inventory 별도 fetch (피드백 follow-up)
+  const storeInv = useQuery({
+    queryKey: ['store-inv', effectiveLocId, role],
+    queryFn: () => fetchInventoryByStore(role, effectiveLocId as number),
+    enabled: viewMode === 'stores' && effectiveLocId != null && effectiveLocId !== whLocId,
+    staleTime: 15000,
+    refetchInterval: 30000,
+  });
+
+  // raw: wh body view → ov.data 의 wh body inventory · stores view → storeInv 별도 fetch
   const raw = useMemo(() => {
+    if (viewMode === 'stores' && effectiveLocId != null && effectiveLocId !== whLocId) {
+      return (storeInv.data?.items ?? []) as any[];
+    }
     const items = ov.data?.inventory?.items ?? [];
     return items.filter((it: any) => it.location_id === effectiveLocId);
-  }, [ov.data, effectiveLocId]);
+  }, [ov.data, storeInv.data, viewMode, effectiveLocId, whLocId]);
 
   const sorted = useMemo(() => {
     const q = search.trim().toLowerCase();

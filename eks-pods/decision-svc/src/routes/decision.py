@@ -98,10 +98,13 @@ def _effective_available(
     reserved_qty: int | None,
     incoming_qty: int | None,
     expected_demand: int | None,
+    chained_incoming: int | None = None,
 ) -> int:
-    """FR-A5.1 effective available = on_hand - reserved - incoming - max(0, expected_demand)
+    """FR-A5.1 effective available = on_hand - reserved - incoming - chained_incoming - max(0, expected_demand)
 
     incoming_qty: pending_orders APPROVED · target=self · executed_at IS NULL 의 합 (이미 다른 발주에 잡힌 입고)
+    chained_incoming: v5 2026-05-15 — 자기 wh 본체로 향하는 WH_TRANSFER/PUBLISHER 가 도착 시 자동 분배될 chained WH_TO_STORE 추정량
+                      ("DECISION 이 chained 시점 고려" — 사용자 명시)
     expected_demand: forecast_cache 의 향후 14일 일별 predicted_demand 합
 
     None 입력은 0 으로 처리 (DB NULL 안전).
@@ -110,8 +113,48 @@ def _effective_available(
     on_hand = int(on_hand or 0)
     reserved = int(reserved_qty or 0)
     incoming = int(incoming_qty or 0)
+    chained = int(chained_incoming or 0)
     demand = max(0, int(expected_demand or 0))
-    return on_hand - reserved - incoming - demand
+    return on_hand - reserved - incoming - chained - demand
+
+
+def _estimated_chained_incoming(cur, isbn13: str, store_id: int) -> int:
+    """v5 2026-05-15 — 매장 store_id 가 속한 wh 본체로 향하는 미실행 WH_TRANSFER/PUBLISHER 의
+    chained 분배 추정량.
+
+    가정 (state_machine._trigger_chained_wh_to_store 와 정합):
+      - WH_TRANSFER (D+1 wh 도착) → chained WH_TO_STORE (D+2 매장 도착)
+      - PUBLISHER (D+3 wh 도착) → chained WH_TO_STORE (D+4 매장 도착)
+      - chained 는 권역 매장 중 부족 매장에 분배 (부족 없을 시 균등)
+    단순 추정: qty / 권역 매장 수 (균등 분배 가정).
+    """
+    cur.execute("SELECT wh_id FROM locations WHERE location_id = %s", (store_id,))
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return 0
+    wh_id = row[0]
+    cur.execute(
+        """
+        WITH wh_loc AS (
+            SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'WH'
+        ),
+        store_count AS (
+            SELECT GREATEST(COUNT(*)::int, 1) AS c
+              FROM locations
+             WHERE wh_id = %s AND location_type = 'STORE_OFFLINE' AND active = TRUE
+        )
+        SELECT COALESCE(SUM(po.qty), 0)::int / (SELECT c FROM store_count)
+          FROM pending_orders po
+         WHERE po.isbn13 = %s
+           AND po.status IN ('APPROVED', 'IN_TRANSIT')
+           AND po.executed_at IS NULL
+           AND po.order_type IN ('WH_TRANSFER', 'PUBLISHER_ORDER')
+           AND po.target_location_id IN (SELECT location_id FROM wh_loc)
+        """,
+        (wh_id, wh_id, isbn13),
+    )
+    r = cur.fetchone()
+    return int(r[0] or 0) if r else 0
 
 
 def _calc_eoq(annual_demand: float, order_cost: float, holding_cost: float) -> int:
@@ -813,7 +856,14 @@ def _build_daily_plan(cur, snapshot_date: date) -> list[dict]:
                 continue  # online virtual skip
             i = inv.get(loc, {"on_hand": 0, "reserved": 0, "safety": 0})
             in_in = in_transit.get(isbn, {}).get(loc, 0)
-            effective = i["on_hand"] - i["reserved"] + in_in
+            # v5 2026-05-15 — chained downstream 추정 (매장만 · WH 본체는 직접 incoming).
+            #   자기 wh 본체로 향하는 WH_TRANSFER/PUBLISHER 가 도착 시 chained WH_TO_STORE 가
+            #   자동 분배되어 결국 매장 incoming 이 됨. 사용자 명시 "DECISION 이 chained 시점 고려".
+            chained_in = (
+                _estimated_chained_incoming(cur, isbn, loc)
+                if meta["type"] == "STORE_OFFLINE" else 0
+            )
+            effective = i["on_hand"] - i["reserved"] + in_in + chained_in
 
             # desired 정합: 시드의 inventory.safety_stock 이 이미 안전재고 buffer (5일치) 포함.
             # 중복 가산 방지: max(safety_stock, predicted × DAYS) — 둘 중 큰 쪽 (low badge 기준 동일).

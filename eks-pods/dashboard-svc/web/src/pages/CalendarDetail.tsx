@@ -46,12 +46,13 @@ function classify(o: PendingOrder, role: string, scope: { scope_wh_id: number | 
 
   const status = o.status;
   let tab: Tab | null = null;
+  // v5 2026-05-15 피드백 #8: PENDING 은 /approval 전용 · CalendarDetail 는 APPROVED+ 만
   if (status === 'IN_TRANSIT') tab = 'in_transit';
   else if (status === 'EXECUTED' || status === 'AUTO_EXECUTED') tab = 'executed';
-  else if (status === 'PENDING' || status === 'APPROVED') {
+  else if (status === 'APPROVED') {
     if (isTgt && !isSrc) tab = 'inbound';
     else if (isSrc && !isTgt) tab = 'outbound';
-    else tab = 'inbound'; // hq · 양측 모두 — inbound 에 표시
+    else tab = 'inbound'; // BOTH (hq) default
   }
 
   const side: 'source' | 'target' | 'both' | 'none' =

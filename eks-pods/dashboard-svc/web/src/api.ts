@@ -158,7 +158,8 @@ export const fetchPending = (
   } = {},
 ) => {
   const qs = new URLSearchParams();
-  qs.set('limit', String(opts.limit ?? 200));
+  // v5 2026-05-15: default limit 5000 (피드백 9 — 1000+ 시연 row 모두 표시)
+  qs.set('limit', String(opts.limit ?? 5000));
   if (opts.offset) qs.set('offset', String(opts.offset));
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
@@ -695,6 +696,29 @@ export const postNewBookReject = (
 
 export const postNotifySend = (role: Role, body: unknown) =>
   postJson<{ notification_id: string; status: string; sent_at: string }>('/dashboard/notify/send', role, body);
+
+// v5 2026-05-15: VertexAI 신간 수요예측 (GCP mock stub)
+export type NewBookPredictResp = {
+  isbn13: string;
+  model_version: string;
+  predicted_at: string;
+  predictions: {
+    location_id: number;
+    location_name: string;
+    location_type: string;
+    wh_id: number | null;
+    predicted_demand_7d: number;
+    predicted_demand_30d: number;
+    confidence: number;
+  }[];
+  total_7d: number;
+  total_30d: number;
+  recommendation: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'PASS';
+};
+export const postNewBookPredictDemand = (
+  role: Role,
+  body: { isbn13: string; publisher_id?: number; category?: string; expected_price?: number },
+) => postJson<NewBookPredictResp>('/dashboard/forecast/newbook/predict-demand', role, body);
 
 // P1-4b 시연 trigger: 예측 수요 > 가용 재고 인 도서 list (HQ 만 호출)
 export type InsufficientStockItem = {
