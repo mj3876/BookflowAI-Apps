@@ -28,6 +28,9 @@ import BranchSales from './pages/BranchSales';
 import BranchCuration from './pages/BranchCuration';
 import Notifications from './pages/Notifications';
 import LiveEvents from './pages/LiveEvents';
+// PR-C (2026-05-15) 4-step state machine v2 — 캘린더 중심 view
+import Calendar from './pages/Calendar';
+import CalendarDetail from './pages/CalendarDetail';
 import { getRole, roleGroup } from './auth';
 import { ToastProvider } from './components/Toast';
 import './styles.css';
@@ -97,6 +100,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             {/* 공통 */}
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/live"          element={<LiveEvents />} />
+
+            {/* PR-C 캘린더 중심 view (모든 role 자동 필터) */}
+            <Route path="/calendar"      element={<Calendar />} />
+            <Route path="/cal/:date"     element={<CalendarDetail />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

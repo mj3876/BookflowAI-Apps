@@ -9,11 +9,20 @@ export const ORDER_TYPE_KO: Record<string, string> = {
 };
 
 export const ORDER_STATUS_KO: Record<string, string> = {
-  PENDING:  '대기 중',
-  APPROVED: '승인됨',
-  REJECTED: '거절됨',
-  EXECUTED: '실행됨',
-  CANCELED: '취소됨',
+  PENDING:       '⏳ 협의 중',
+  APPROVED:      '📋 계획 확정',
+  IN_TRANSIT:    '🚚 운송 중',
+  EXECUTED:      '✅ 완료',
+  AUTO_EXECUTED: '⚡ 자동 실행',
+  REJECTED:      '❌ 거부됨',
+  CANCELED:      '취소됨',
+};
+
+// PR-B 4-step state machine v2 — REJECTED rejection_stage 라벨
+export const REJECTION_STAGE_KO: Record<string, string> = {
+  PENDING:    '협의 단계 거부',
+  APPROVED:   '발송 전 취소',
+  IN_TRANSIT: '운송 중 반품 (재고 복원)',
 };
 
 export const URGENCY_KO: Record<string, string> = {

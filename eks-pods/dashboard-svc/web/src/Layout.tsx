@@ -13,6 +13,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/home/hq',     label: '본사 홈',           desc: '오늘 batch 처리 현황 + 검토 필요 한 화면', allow: 'HQ' },
       { to: '/wh-dashboard', label: '권역 홈',           desc: '내 권역 batch 결과 + 매출/재고 차트 한 화면', allow: 'WH' },
       { to: '/home/branch', label: '매장 홈',           desc: '오늘 입고 + 부족 도서 + SNS 급등 매칭',     allow: 'BRANCH' },
+      // PR-C 캘린더 중심 view (모든 role 자동 필터 · 입고/출고/운송/완료)
+      { to: '/calendar',    label: '📅 캘린더',          desc: '날짜별 입고/출고/운송/완료 한눈에 (role 자동 필터)', allow: 'ALL' },
     ],
   },
   {

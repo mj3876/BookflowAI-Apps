@@ -840,3 +840,63 @@ export const fetchForecastAccuracy = (role: Role, days = 7) =>
   getJson<{ days: number; items: ForecastAccuracyItem[]; note?: string }>(
     `/dashboard/forecast/accuracy?days=${days}`, role,
   );
+
+
+// ─── PR-C (2026-05-15) 4-step state machine v2 — /dashboard/orders/* API ────
+// dashboard-svc 의 /dashboard/orders/* route 사용 (intervention-svc state_machine 호출 · race-safe).
+export type CalendarDay = {
+  date: string;
+  inbound: number;
+  outbound: number;
+  in_transit: number;
+  executed: number;
+};
+
+export const fetchCalendar = (role: Role, from_date: string, to_date: string) =>
+  getJson<{ items: CalendarDay[] }>(
+    `/dashboard/orders/calendar?from_date=${from_date}&to_date=${to_date}`, role,
+  );
+
+export const postOrderApprove = (
+  role: Role, order_id: string, body: { approval_side?: 'SOURCE' | 'TARGET' | 'FINAL' } = {},
+) => postJson<{ order_id: string; side: string; transitioned: boolean }>(
+  `/dashboard/orders/${order_id}/approve`, role, body,
+);
+
+export const postOrderDispatch = (role: Role, order_id: string, body: { note?: string } = {}) =>
+  postJson<{ order_id: string; status: 'IN_TRANSIT' }>(
+    `/dashboard/orders/${order_id}/dispatch`, role, body,
+  );
+
+export const postOrderReceive = (role: Role, order_id: string, body: { note?: string } = {}) =>
+  postJson<{ order_id: string; status: 'EXECUTED' }>(
+    `/dashboard/orders/${order_id}/receive`, role, body,
+  );
+
+export const postOrderReject = (
+  role: Role, order_id: string, body: { reject_reason: string },
+) => postJson<{ order_id: string; status: 'REJECTED'; rejection_stage: string }>(
+  `/dashboard/orders/${order_id}/reject`, role, body,
+);
+
+export const patchOrder = (
+  role: Role, order_id: string,
+  body: { qty?: number; target_location_id?: number; note?: string },
+) => patchJson<{ order_id: string; updated: boolean }>(
+  `/dashboard/orders/${order_id}`, role, body,
+);
+
+export const postOrdersBatchApprove = (role: Role, body: { order_ids: string[] }) =>
+  postJson<{ ok: unknown[]; failed: unknown[]; total: number }>(
+    `/dashboard/orders/batch-approve`, role, body,
+  );
+
+export const postOrdersBatchDispatch = (role: Role, body: { order_ids: string[] }) =>
+  postJson<{ ok: unknown[]; failed: unknown[]; total: number }>(
+    `/dashboard/orders/batch-dispatch`, role, body,
+  );
+
+export const postOrdersBatchReceive = (role: Role, body: { order_ids: string[] }) =>
+  postJson<{ ok: unknown[]; failed: unknown[]; total: number }>(
+    `/dashboard/orders/batch-receive`, role, body,
+  );
