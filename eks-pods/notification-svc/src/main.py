@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from .db import close_pool, init_pool, redis_client
 from .recipients import get_recipients
-from .routes.notification import _logic_apps_endpoint, router as notification_router
+from .routes.notification import _get_logic_apps_url, router as notification_router
 from .settings import settings
 
 logging.basicConfig(level=settings.log_level)
@@ -51,11 +51,10 @@ async def _flush_inbound_rejected() -> None:
                     "payload": payload,
                     "recipients": recipients,
                 }
-                async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
-                    await c.post(
-                        _logic_apps_endpoint("InboundRejected"),
-                        json=body,
-                    )
+                la_url = _get_logic_apps_url("InboundRejected")
+                if la_url:
+                    async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
+                        await c.post(la_url, json=body)
                 log.info("inbound_rejected flushed wh=%s n=%d", wh_id, len(items))
         except Exception as e:
             log.warning("inbound_rejected flush error: %s", e)

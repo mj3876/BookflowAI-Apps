@@ -79,6 +79,7 @@ _EVENT_LOGIC_APPS: dict[str, str] = {
     "SpikeUrgent":        "notification",
     "NegotiationDelay":   "notification",
     "DeliveryCompleted":  "delivery_completed",
+    "InboundRejected":    "notification",   # 5분 batch flush 경로 (main.py _flush_inbound_rejected)
 }
 
 
