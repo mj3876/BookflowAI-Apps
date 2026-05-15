@@ -1,262 +1,176 @@
-import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useOutletContext } from 'react-router-dom';
-import { postIntervene, postIntervenebatch, type Role } from '../api';
+// PR-C v3 (2026-05-15) 협의 페이지 — 사이드바 진입.
+// 4-step state machine 의 1 단계: PENDING (양측 협의 중) 만 표시.
+// 양측 ✓ 완료되면 → APPROVED 전환 → 이 페이지에서 사라짐 → /logistics 로 이동.
+//
+// scope 자동 필터 (backend `/intervention/queue` 가 처리 · v3 에서 branch-clerk 추가):
+//   hq-admin       — 모든 PENDING
+//   wh-manager-X   — source.wh_id=X 또는 target.wh_id=X
+//   branch-clerk-S — source_location_id=S 또는 target_location_id=S
+//
+// 기존 legacy Approval.tsx (PUBLISHER_ORDER 전용 + DateHistoryTabs) 는 이 파일로 대체.
+import { useState, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+
+import { fetchPending, postOrderApprove, postOrderReject, type PendingOrder } from '../api';
+import { getRole, getScope } from '../auth';
+import { ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import { useLocations } from '../useLocations';
-import ConfirmModal from '../components/ConfirmModal';
-import DateHistoryTabs from '../components/DateHistoryTabs';
-import BatchMapView from '../components/BatchMapView';
-import StatusBadge from '../components/StatusBadge';
+import { useToast } from '../components/Toast';
 
-/**
- * HQ Approval - Stage 3 (PUBLISHER_ORDER) 단독 최종 승인.
- * Stage 1/2 는 WH 매니저 권한 (별도 페이지).
- *
- * 효율 (2026-05-13): fetchPending 직접 호출 제거. DateHistoryTabs 가 lazy fetch 함.
- *   - summary query 가 일자별 카운트만 (가벼움)
- *   - 선택된 일자 row 만 별도 fetch (대용량 365일 데이터 회피)
- */
+type StageFilter = 'all' | 'REBALANCE' | 'WH_TO_STORE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+
+function whichSide(o: PendingOrder, scope: { scope_wh_id: number | null; scope_store_id: number | null }): 'SOURCE' | 'TARGET' | 'BOTH' | null {
+  const srcWh = (o as PendingOrder & { source_wh_id?: number | null }).source_wh_id;
+  const tgtWh = (o as PendingOrder & { target_wh_id?: number | null }).target_wh_id;
+  const isSrc = (scope.scope_store_id != null && o.source_location_id === scope.scope_store_id)
+    || (scope.scope_wh_id != null && srcWh === scope.scope_wh_id);
+  const isTgt = (scope.scope_store_id != null && o.target_location_id === scope.scope_store_id)
+    || (scope.scope_wh_id != null && tgtWh === scope.scope_wh_id);
+  if (isSrc && isTgt) return 'BOTH';
+  if (isSrc) return 'SOURCE';
+  if (isTgt) return 'TARGET';
+  return null;
+}
+
 export default function Approval() {
-  const { role } = useOutletContext<{ role: Role }>();
+  const role = getRole();
+  const scope = getScope();
+  const { nameOf } = useLocations(role ?? 'hq-admin');
+  const { showToast } = useToast();
   const qc = useQueryClient();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [bulkBusy, setBulkBusy] = useState(false);
-  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
-  const [approveTarget, setApproveTarget] = useState<{ order_id: string; isbn13: string; qty: number } | null>(null);
-  const { nameOf } = useLocations(role);
+  const [stage, setStage] = useState<StageFilter>('all');
 
-  const act = useMutation({
-    mutationFn: async (a: { order_id: string; action: 'approve' | 'reject'; reason?: string }) => {
-      const body = a.action === 'reject'
-        ? { order_id: a.order_id, approval_side: 'FINAL', reject_reason: a.reason ?? 'HQ 거절' }
-        : { order_id: a.order_id, approval_side: 'FINAL' };
-      return postIntervene(role, a.action, body);
-    },
-    onMutate: (v) => { setBusy(v.order_id); setFeedback(null); },
-    onSuccess: (d, v) => {
-      setBusy(null);
-      setFeedback(`${v.action === 'approve' ? '✓ 승인' : '✓ 거절'} · ${d.approval_id ?? d.order_id ?? d.detail}`);
-      qc.invalidateQueries({ queryKey: ['pending-active'] });
-      qc.invalidateQueries({ queryKey: ['pending-detail'] });
-      qc.invalidateQueries({ queryKey: ['pending-summary'] });
-      qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
-      qc.invalidateQueries({ queryKey: ['plan-summary'] });
-      qc.invalidateQueries({ queryKey: ['plan-items'] });
-      qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
-      qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
-      qc.invalidateQueries({ queryKey: ['instr-all'] });
-      qc.invalidateQueries({ queryKey: ['instr'] });
-    },
-    onError: (e) => { setBusy(null); setFeedback(`✗ 실패: ${String(e)}`); },
+  const q = useQuery({
+    queryKey: ['approval', role, stage],
+    queryFn: () => fetchPending(role!, {
+      limit: 300,
+      ...(stage !== 'all' ? { order_type: stage } : {}),
+    }),
+    enabled: !!role,
+    staleTime: 5000,
+    refetchInterval: 10000,
   });
 
-  // 일괄 승인 — backend bulk endpoint (`/intervention/batch`) 단일 호출
-  // 이전: N HTTP × N transactions × 1 SQL 검증 + 3 SQL record + 1 HTTP notify per row
-  // 신규: 1 HTTP × 1 transaction × bulk SQL + 1 notification
-  const makeBulkApprove = (todayItems: any[]) => async () => {
-    const approvable = todayItems.filter((o) => o.status === 'PENDING');
-    if (!approvable.length) { setFeedback('승인할 PENDING 항목이 없습니다.'); return; }
-    if (!window.confirm(`외부 발주 PENDING ${approvable.length}건을 모두 승인합니다 (비용 발생). 진행할까요?`)) return;
-    setBulkBusy(true);
-    try {
-      const r = await postIntervenebatch(role, 'approve',
-        approvable.map((o) => ({ order_id: o.order_id, approval_side: 'FINAL' })));
-      const failTail = (r?.failed ?? 0) > 0 ? ` · 실패 ${r.failed}` : '';
-      setFeedback(`✓ 일괄 승인 완료 · ${r?.ok ?? 0}/${r?.total ?? 0}${failTail}`);
-    } catch (e) {
-      setFeedback(`✗ 일괄 승인 실패: ${String(e)}`);
-    }
-    setBulkBusy(false);
-    qc.invalidateQueries({ queryKey: ['pending-active'] });
-    qc.invalidateQueries({ queryKey: ['pending-detail'] });
-    qc.invalidateQueries({ queryKey: ['pending-summary'] });
-    qc.invalidateQueries({ queryKey: ['pending-summary-today'] });
-    qc.invalidateQueries({ queryKey: ['plan-summary'] });
-    qc.invalidateQueries({ queryKey: ['plan-items'] });
-    qc.invalidateQueries({ queryKey: ['plan-items-approved'] });
-    qc.invalidateQueries({ queryKey: ['plan-items-delta'] });
-    qc.invalidateQueries({ queryKey: ['instr-all'] });
-    qc.invalidateQueries({ queryKey: ['instr'] });
-  };
+  const items = useMemo(() => {
+    const list = (q.data?.items as PendingOrder[] | undefined) ?? [];
+    return list.filter((o) => o.status === 'PENDING');
+  }, [q.data]);
 
-  if (role !== 'hq-admin') {
-    return (
-      <div className="card text-center text-bf-muted text-xs py-10">
-        본사 관리자 (hq-admin) 권한이 필요합니다. Stage 1/2 결정은 창고 매니저 영역의 "승인 큐" 에서 처리됩니다.
-      </div>
-    );
-  }
+  const approveMu = useMutation({
+    mutationFn: (id: string) => postOrderApprove(role!, id, {}),
+    onSuccess: (r) => {
+      const m = r.transitioned ? '🚚 양측 협의 완료 — 입출고 섹션으로 이동' : '✓ 내 측 동의 완료 (상대 측 대기)';
+      showToast({ type: 'success', message: m });
+      qc.invalidateQueries({ queryKey: ['approval'] });
+      qc.invalidateQueries({ queryKey: ['logistics'] });
+      qc.invalidateQueries({ queryKey: ['calendar'] });
+    },
+    onError: (e: Error) => showToast({ type: 'error', message: `동의 실패: ${e.message}` }),
+  });
+
+  const rejectMu = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => postOrderReject(role!, id, { reject_reason: reason }),
+    onSuccess: () => {
+      showToast({ type: 'warning', message: '❌ 협의 단계 거부' });
+      qc.invalidateQueries({ queryKey: ['approval'] });
+      qc.invalidateQueries({ queryKey: ['calendar'] });
+    },
+    onError: (e: Error) => showToast({ type: 'error', message: `거부 실패: ${e.message}` }),
+  });
+
+  if (!role) return null;
+
+  const stages: { key: StageFilter; label: string }[] = [
+    { key: 'all', label: '전체' },
+    { key: 'REBALANCE', label: '🔄 재분배' },
+    { key: 'WH_TO_STORE', label: '🏬 매장 보충' },
+    { key: 'WH_TRANSFER', label: '🚛 권역 이동' },
+    { key: 'PUBLISHER_ORDER', label: '📦 외부 발주' },
+  ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="h1">외부 발주 (출판사) 최종 승인</h1>
-        <p className="text-bf-muted text-xs mt-1">
-          출판사에 발주하는 건은 비용이 발생하므로 본사 단독 최종 승인 단계입니다. 권역 간 이동은 물류센터 (창고 매니저) 영역이에요.
-        </p>
-        {/* D5-4 workflow link */}
-        <div className="text-[11px] text-bf-muted mt-1">
-          승인 → publisher API 발주 → <a href="/wh-instructions" className="text-bf-primary hover:underline">권역 입고 지시서</a> → <a href="/branch-inbound" className="text-bf-primary hover:underline">매장 입고</a>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">📋 협의 중</h1>
+          <div className="text-sm text-bf-muted mt-0.5">
+            양측 협의가 모두 완료되면 자동으로 <a href="/logistics" className="text-bf-primary hover:underline">입출고 섹션</a>으로 이동.
+          </div>
+        </div>
+        {q.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
+      </div>
+
+      <div className="bf-card p-2">
+        <div className="flex gap-1 flex-wrap">
+          {stages.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setStage(s.key)}
+              className={`px-3 py-1 text-xs rounded ${stage === s.key ? 'bg-bf-primary text-white' : 'bg-bf-surface text-bf-muted hover:text-bf-text'}`}
+            >
+              {s.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {feedback && (
-        <div className={`card-tight text-xs ${feedback.startsWith('✓') ? 'text-bf-success' : 'text-bf-danger'}`}>
-          {feedback}
-        </div>
-      )}
-
-      <DateHistoryTabs
-        role={role}
-        order_type="PUBLISHER_ORDER"
-        days={6}
-        pageLabel="외부 발주 처리 기록 7일"
-      >
-        {(filtered, { isToday, viewMode, isLoading }) => {
-          const node = viewMode === 'map' ? (
-            <BatchMapView items={filtered as any} nameOf={nameOf} />
-          ) : (
-            <div className="card">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>긴급도</th>
-                    <th>도서</th>
-                    <th>도착</th>
-                    <th>수량</th>
-                    <th>{isToday ? '생성' : '처리 일시'}</th>
-                    <th>상태</th>
-                    {isToday && <th className="text-right">액션</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((o: any) => {
-                    const isPending = o.status === 'PENDING';
-                    const ts = o.approved_at ?? o.executed_at ?? o.created_at;
-                    return (
-                      <tr key={o.order_id}>
-                        <td>
-                          <span className={
-                            o.urgency_level === 'CRITICAL' ? 'pill-rejected' :
-                            o.urgency_level === 'URGENT'   ? 'pill-pending' : 'pill-info'
-                          }>{o.urgency_level}</span>
-                        </td>
-                        <td>
-                          <div className="text-sm">{o.title ?? o.isbn13}</div>
-                          <div className="font-mono text-[10px] text-bf-muted">{o.isbn13}</div>
-                          {o.order_type === 'PUBLISHER_ORDER' && (
-                            <span className="text-[10px] text-emerald-500" title="출판사 → 거점창고 → 매장 분배 (출판사 lead time 최대 3일)">
-                              📦 출판사→WH (D+3)
-                            </span>
-                          )}
-                        </td>
-                        <td>{nameOf(o.target_location_id)}</td>
-                        <td>{o.qty}</td>
-                        <td className="text-bf-muted text-[11px]">{ts ? new Date(ts).toLocaleString('ko-KR') : '-'}</td>
-                        <td>
-                          <StatusBadge
-                            status={o.status as any}
-                            orderType={o.order_type as any}
-                            approvedAt={o.approved_at}
-                          />
-                        </td>
-                        {isToday && (
-                          <td className="text-right">
-                            {isPending ? (
-                              <div className="flex gap-1 justify-end">
-                                <button
-                                  className="btn-primary btn-sm"
-                                  disabled={busy === o.order_id}
-                                  onClick={() => setApproveTarget({ order_id: o.order_id, isbn13: o.isbn13, qty: o.qty })}
-                                >
-                                  승인
-                                </button>
-                                <button
-                                  className="btn-danger btn-sm"
-                                  disabled={busy === o.order_id}
-                                  onClick={() => setRejectTarget(o.order_id)}
-                                >
-                                  거절
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-bf-muted">-</span>
-                            )}
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                  {filtered.length === 0 && (
-                    <tr>
-                      <td colSpan={isToday ? 7 : 6} className="text-center py-6 text-bf-muted">
-                        {isLoading ? '조회 중…' : '해당 일자에 처리 기록이 없습니다'}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          );
-          // 오늘 액션 — filtered 가 그 일자 row 이므로 여기서 PENDING 카운트 계산
-          if (isToday) {
-            const pendingCount = filtered.filter((o: any) => o.status === 'PENDING').length;
+      <div className="bf-card divide-y divide-bf-border">
+        {items.length === 0 ? (
+          <div className="p-6 text-center text-sm text-bf-muted">협의 대기 중인 항목이 없습니다.</div>
+        ) : (
+          items.map((o) => {
+            const side = whichSide(o, scope);
+            const isHq = role === 'hq-admin';
+            const canAct = isHq || side === 'SOURCE' || side === 'TARGET' || side === 'BOTH';
             return (
-              <>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="btn-primary text-xs"
-                    onClick={makeBulkApprove(filtered as any[])}
-                    disabled={bulkBusy || pendingCount === 0}
-                    title="외부 발주 PENDING 전건 일괄 최종 승인"
-                  >
-                    {bulkBusy ? '진행 중…' : `전체 승인 (${pendingCount}건)`}
-                  </button>
-                  <span className="label-tag">5초마다 자동 갱신</span>
+              <div key={o.order_id} className="p-3 flex items-center justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium">{ORDER_TYPE_KO[o.order_type] ?? o.order_type}</span>
+                    {o.urgency_level && o.urgency_level !== 'NORMAL' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-bf-warn/10 text-bf-warn border border-bf-warn/30">
+                        {URGENCY_KO[o.urgency_level] ?? o.urgency_level}
+                      </span>
+                    )}
+                    {side && side !== 'BOTH' && !isHq && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${side === 'SOURCE' ? 'bg-bf-primary/10 text-bf-primary border-bf-primary/30' : 'bg-bf-success/10 text-bf-success border-bf-success/30'}`}>
+                        {side === 'SOURCE' ? '📤 내 측이 출고' : '📥 내 측이 입고'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-bf-muted mt-1 truncate">
+                    ISBN {o.isbn13} · 수량 {o.qty}권 · {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id) ?? '?'}
+                  </div>
                 </div>
-                {node}
-              </>
+                <div className="flex-shrink-0 flex gap-1">
+                  {canAct ? (
+                    <>
+                      <button
+                        type="button"
+                        className="bf-btn-primary text-xs"
+                        disabled={approveMu.isPending}
+                        onClick={() => approveMu.mutate(o.order_id)}
+                      >✓ 동의</button>
+                      <button
+                        type="button"
+                        className="bf-btn-danger-secondary text-xs"
+                        disabled={rejectMu.isPending}
+                        onClick={() => {
+                          const reason = window.prompt('거부 사유');
+                          if (reason) rejectMu.mutate({ id: o.order_id, reason });
+                        }}
+                      >✗ 거부</button>
+                    </>
+                  ) : (
+                    <span className="text-xs text-bf-muted">권한 없음</span>
+                  )}
+                </div>
+              </div>
             );
-          }
-          return node;
-        }}
-      </DateHistoryTabs>
-
-      <ConfirmModal
-        open={approveTarget !== null}
-        title="외부 발주 승인"
-        message={approveTarget ? `ISBN ${approveTarget.isbn13} · ${approveTarget.qty}권 외부 발주를 승인합니다.\n\n비용이 발생하는 결정이며, 승인 즉시 출판사에 발주 지시서가 전달됩니다.` : ''}
-        confirmText="승인 (비용 발생)"
-        onConfirm={() => {
-          if (approveTarget) {
-            act.mutate({ order_id: approveTarget.order_id, action: 'approve' });
-            setApproveTarget(null);
-          }
-        }}
-        onCancel={() => setApproveTarget(null)}
-        isLoading={act.isPending}
-      />
-
-      <ConfirmModal
-        open={rejectTarget !== null}
-        title="외부 발주 거절"
-        message={`PUBLISHER_ORDER 를 거절합니다 (order_id: ${rejectTarget?.slice(0, 8) ?? ''}).\n비용 발생 발주라 거절 후 신중히 다시 발의해야 합니다.`}
-        confirmText="거절"
-        danger
-        withReason
-        reasonRequired
-        reasonLabel="거절 사유"
-        reasonPlaceholder="예: 예산 미배정 / 단가 재협상 필요 / 분기 외"
-        onConfirm={(reason) => {
-          if (rejectTarget && reason) {
-            act.mutate({ order_id: rejectTarget, action: 'reject', reason });
-            setRejectTarget(null);
-          }
-        }}
-        onCancel={() => setRejectTarget(null)}
-        isLoading={act.isPending}
-      />
+          })
+        )}
+      </div>
     </div>
   );
 }

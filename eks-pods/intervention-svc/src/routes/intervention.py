@@ -421,6 +421,10 @@ def queue_summary(
             " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
         )
         params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        # 2026-05-15 v3 정정: branch-clerk scope filter 누락이었음 (queue 와 동일 패턴).
+        where.append("(po.source_location_id = %s OR po.target_location_id = %s)")
+        params.extend([ctx.scope_store_id, ctx.scope_store_id])
 
     if wh_id is not None and ctx.role == "hq-admin":
         where.append(
@@ -515,6 +519,10 @@ def queue(
             " OR EXISTS (SELECT 1 FROM locations tl WHERE tl.location_id = po.target_location_id AND tl.wh_id = %s))"
         )
         params.extend([ctx.scope_wh_id, ctx.scope_wh_id])
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        # 2026-05-15 v3 정정: branch-clerk scope filter 누락이었음. 자기 매장 source/target 만.
+        where.append("(po.source_location_id = %s OR po.target_location_id = %s)")
+        params.extend([ctx.scope_store_id, ctx.scope_store_id])
 
     # 명시적 wh_id 필터 (hq-admin override)
     if wh_id is not None and ctx.role == "hq-admin":

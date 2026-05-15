@@ -13,8 +13,10 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/home/hq',     label: '본사 홈',           desc: '오늘 batch 처리 현황 + 검토 필요 한 화면', allow: 'HQ' },
       { to: '/wh-dashboard', label: '권역 홈',           desc: '내 권역 batch 결과 + 매출/재고 차트 한 화면', allow: 'WH' },
       { to: '/home/branch', label: '매장 홈',           desc: '오늘 입고 + 부족 도서 + SNS 급등 매칭',     allow: 'BRANCH' },
-      // PR-C 캘린더 중심 view (모든 role 자동 필터 · 입고/출고/운송/완료)
-      { to: '/calendar',    label: '📅 캘린더',          desc: '날짜별 입고/출고/운송/완료 한눈에 (role 자동 필터)', allow: 'ALL' },
+      // PR-C v3 (2026-05-15) — 사이드바 진입점 3개로 분리
+      { to: '/approval',    label: '📋 협의 중',         desc: '양측 협의 대기 (PENDING) · scope 별 자동 필터', allow: 'ALL' },
+      { to: '/logistics',   label: '🚚 입출고',          desc: '발송/입고 처리 (APPROVED + IN_TRANSIT) · 시연용 자동 완료', allow: 'ALL' },
+      { to: '/calendar',    label: '📅 캘린더',          desc: '날짜별 입고/출고/운송/완료 통계 (role 자동 필터)', allow: 'ALL' },
     ],
   },
   {
@@ -23,7 +25,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
       { to: '/inventory',   label: '전사 재고',           desc: '모든 매장 재고와 부족 알림',              allow: 'HQ' },
       { to: '/decision',    label: '의사결정 현황',       desc: 'AI 추천 검토 + 일자별 처리 기록',          allow: 'HQ' },
-      { to: '/approval',    label: '외부 발주 승인',      desc: '외부 발주 승인 + 일자별 처리 기록 7일',    allow: 'HQ' },
+      // PR-C v3: '외부 발주 승인' 은 /approval (모든 role 진입점) 으로 흡수됨
       { to: '/returns',     label: '반품 처리',           desc: '매장이 신청한 반품 승인 / 거부',           allow: 'HQ' },
       { to: '/requests',    label: '신간 편입 결정',      desc: '출판사 신간을 우리 매장에 들일지 결정',    allow: 'HQ' },
     ],

@@ -28,9 +28,10 @@ import BranchSales from './pages/BranchSales';
 import BranchCuration from './pages/BranchCuration';
 import Notifications from './pages/Notifications';
 import LiveEvents from './pages/LiveEvents';
-// PR-C (2026-05-15) 4-step state machine v2 — 캘린더 중심 view
+// PR-C (2026-05-15) 4-step state machine v2 — 캘린더 + 사이드바 분리 페이지
 import Calendar from './pages/Calendar';
 import CalendarDetail from './pages/CalendarDetail';
+import Logistics from './pages/Logistics';
 import { getRole, roleGroup } from './auth';
 import { ToastProvider } from './components/Toast';
 import './styles.css';
@@ -101,9 +102,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/live"          element={<LiveEvents />} />
 
-            {/* PR-C 캘린더 중심 view (모든 role 자동 필터) */}
+            {/* PR-C 4-step state machine v2 — 사이드바 진입점 (모든 role 자동 필터) */}
             <Route path="/calendar"      element={<Calendar />} />
             <Route path="/cal/:date"     element={<CalendarDetail />} />
+            <Route path="/logistics"     element={<Logistics />} />
+            {/* /approval 은 위 HQ section 의 기존 path 그대로 활용 (legacy Approval.tsx 가 새 협의 페이지로 교체됨) */}
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
