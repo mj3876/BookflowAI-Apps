@@ -555,13 +555,15 @@ def decide(req: DecideRequest, ctx: AuthContext = Depends(require_auth)):
                 """
                 INSERT INTO pending_orders
                     (order_id, order_type, isbn13, source_location_id, target_location_id,
-                     qty, urgency_level, auto_execute_eligible, forecast_rationale, status)
-                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'PENDING')
+                     qty, urgency_level, auto_execute_eligible, forecast_rationale, status,
+                     expected_arrival_at)
+                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'PENDING', %s::date)
                 RETURNING created_at
                 """,
                 (
                     str(order_id), order_type, req.isbn13, source_loc, req.target_location_id,
                     final_qty, urgency, auto_exec, json.dumps(rationale),
+                    rationale["expected_arrival_date"],
                 ),
                 prepare=False,
             )
@@ -988,7 +990,10 @@ def plan_daily(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"snapshot_date 형식 오류: {snap}")
     else:
-        snapshot_date = datetime.utcnow().date() + timedelta(days=1)
+        # 2026-05-15 v5 사용자 정정: snapshot_date default = today (D+0).
+        # "수요예측 D+0 새벽 → 9시 이내 승인 끝 → 그 날 안에 모든 계획 실행".
+        # REBALANCE LEAD_DAYS=0 → 발의 당일 매장 도착이 자연 흐름.
+        snapshot_date = datetime.utcnow().date()
 
     with db_conn() as conn:
         with conn.cursor() as cur:
@@ -1045,6 +1050,7 @@ def plan_daily(
                 insert_rows.append((
                     order_id, p["order_type"], p["isbn"], p["src"], p["tgt"],
                     p["qty"], urgency, auto_exec, json.dumps(rationale),
+                    rationale["expected_arrival_date"],
                 ))
                 audit_rows.append((
                     ctx.user_id, order_id, json.dumps({
@@ -1057,8 +1063,9 @@ def plan_daily(
                 """
                 INSERT INTO pending_orders
                     (order_id, order_type, isbn13, source_location_id, target_location_id,
-                     qty, urgency_level, auto_execute_eligible, forecast_rationale, status)
-                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'PENDING')
+                     qty, urgency_level, auto_execute_eligible, forecast_rationale, status,
+                     expected_arrival_at)
+                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'PENDING', %s::date)
                 """,
                 insert_rows,
             )

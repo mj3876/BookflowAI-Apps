@@ -85,7 +85,8 @@ phases:
       - |
         for pod in $PODS; do
           echo "=== Building $pod ==="
-          docker build -t "$ECR_REGISTRY/$PROJECT_NAME/$pod:$IMAGE_TAG" "$pod"
+          # 2026-05-15 v5 fix: --no-cache 강제 (frontend Vite build stale 회피)
+          docker build --no-cache -t "$ECR_REGISTRY/$PROJECT_NAME/$pod:$IMAGE_TAG" "$pod"
           docker tag "$ECR_REGISTRY/$PROJECT_NAME/$pod:$IMAGE_TAG" "$ECR_REGISTRY/$PROJECT_NAME/$pod:latest"
           docker push "$ECR_REGISTRY/$PROJECT_NAME/$pod:$IMAGE_TAG"
           docker push "$ECR_REGISTRY/$PROJECT_NAME/$pod:latest"
