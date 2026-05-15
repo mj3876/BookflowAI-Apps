@@ -487,3 +487,15 @@ async def orders_calendar(from_date: str, to_date: str, ctx: AuthContext = Depen
     """캘린더 cell count · role/scope 자동 필터 (date × {inbound,outbound,in_transit,executed})."""
     data = await get_orders_calendar(from_date, to_date, ctx.token)
     return data or {"items": [], "_source": "intervention-svc unavailable"}
+
+
+@router.post("/forecast/newbook/predict-demand")
+async def newbook_predict_demand(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """v5 2026-05-15: 신간 편입 결정용 VertexAI 수요예측 — forecast-svc 프록시.
+    body: {isbn13, publisher_id?, category?, expected_price?}
+    """
+    from ..clients import post_newbook_predict_demand
+    status_code, data = await post_newbook_predict_demand(body, ctx.token)
+    if status_code >= 400:
+        raise HTTPException(status_code=status_code, detail=data)
+    return data

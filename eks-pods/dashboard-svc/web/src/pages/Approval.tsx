@@ -193,9 +193,9 @@ export default function Approval() {
     const label = role === 'hq-admin' ? '강제 승인 (escalation · 양측 자동)' : '동의';
     setBulkBusy(true);
     try {
-      // 전체 PENDING IDs fetch (limit 1000 충분 · 시연 데이터 526~)
+      // 전체 PENDING IDs fetch (limit 5000 — 시연 데이터 1000+ 대응)
       const allRes = await fetchPending(role!, {
-        limit: 1000,
+        limit: 5000,
         ...(stage !== 'all' ? { order_type: stage } : {}),
       });
       const allIds = ((allRes.items as PendingOrder[] | undefined) ?? [])

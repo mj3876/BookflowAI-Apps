@@ -158,66 +158,93 @@ def _to_executed(cur, order_id: str, ctx: AuthContext) -> dict:
                            reason=f"receive:{order_id[:8]}")
     _audit(cur, ctx, "order.receive", order_id)
 
-    # 2026-05-15 v4 GG: chained order automation
-    # PUBLISHER_ORDER 또는 WH_TRANSFER 의 target=wh 본체 receive 시 → 부족 매장 1개로 WH_TO_STORE 자동 INSERT
-    # (외부 발주 / 권역 이동 모두 wh 도착 후 매장 분배 단계 자연스럽게 trigger)
-    chained_id = None
+    # v5 2026-05-15: chained order automation — 권역 모든 부족 매장에 자동 분배 + APPROVED 강제
+    # PUBLISHER (D+3 wh 도착) / WH_TRANSFER (D+1 wh 도착) 후 chained 는 +1 day → 매장 도착 D+4 / D+2
+    chained_ids: list[str] = []
     if order_type in ("PUBLISHER_ORDER", "WH_TRANSFER"):
-        chained_id = _trigger_chained_wh_to_store(cur, order_id, tgt, isbn, qty, ctx)
-    return {"order_id": order_id, "status": "EXECUTED", "chained_order_id": chained_id}
+        chained_ids = _trigger_chained_wh_to_store(cur, order_id, tgt, isbn, qty, ctx)
+    return {"order_id": order_id, "status": "EXECUTED", "chained_order_ids": chained_ids}
 
 
-def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qty: int, ctx: AuthContext) -> str | None:
+def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qty: int, ctx: AuthContext) -> list[str]:
     """PUBLISHER_ORDER / WH_TRANSFER 도착 후 매장 분배 (chained WH_TO_STORE).
-    가장 부족한 매장 (effective_available 최저) 1개 선택 + 자동 PENDING INSERT.
+
+    v5 2026-05-15 사용자 결정:
+      - 권역 내 모든 부족 매장에 자동 분배 (qty 비율 split, 부족 클수록 더 많이)
+      - status='APPROVED' 강제 (별도 협의 X · 본사 신간 정책과 동일)
+      - expected_arrival_at = NOW + 1 day (다음 날 도착)
     """
-    # 1. target wh_id 결정 (wh 본체 location 의 wh_id)
     cur.execute("SELECT wh_id FROM locations WHERE location_id = %s AND location_type='WH'", (wh_loc,))
     row = cur.fetchone()
     if not row:
-        return None  # wh 가 아니면 chained 안 함 (이미 매장 발주)
+        return []
     wh_id = row[0]
 
-    # 2. 그 wh 권역의 매장 중 isbn 가용 재고 가장 낮은 1개 선택
+    # 권역 내 모든 매장 중 부족 매장 (effective_available < safety_stock) — 부족량 큰 순
     cur.execute(
         """
-        SELECT i.location_id, COALESCE(i.on_hand, 0) - COALESCE(i.reserved_qty, 0) AS available
+        SELECT i.location_id,
+               GREATEST(COALESCE(i.safety_stock, 0) - (COALESCE(i.on_hand, 0) - COALESCE(i.reserved_qty, 0)), 0) AS shortage
           FROM inventory i
           JOIN locations l ON l.location_id = i.location_id
          WHERE l.wh_id = %s AND l.location_type = 'STORE_OFFLINE' AND l.active = TRUE
            AND i.isbn13 = %s
-         ORDER BY available ASC
-         LIMIT 1
         """,
         (wh_id, isbn),
     )
-    target_row = cur.fetchone()
-    if not target_row:
-        return None
-    target_store = target_row[0]
+    rows = cur.fetchall()
+    shortage_list = [(loc_id, max(int(s or 0), 0)) for loc_id, s in rows]
+    total_shortage = sum(s for _, s in shortage_list)
+    if total_shortage <= 0:
+        # 부족 매장 없으면 권역 모든 매장에 균등 분배 (signal: forecast 큰 신간)
+        loc_ids = [loc_id for loc_id, _ in shortage_list]
+        if not loc_ids:
+            return []
+        base = qty // len(loc_ids)
+        extra = qty - base * len(loc_ids)
+        splits = [(loc_id, base + (1 if i < extra else 0)) for i, loc_id in enumerate(loc_ids)]
+    else:
+        # 부족량 비율로 split (작은 부족 매장은 skip · base 1 보장)
+        splits = []
+        remaining = qty
+        for i, (loc_id, s) in enumerate(shortage_list):
+            if i == len(shortage_list) - 1:
+                allocate = max(remaining, 0)
+            else:
+                allocate = max(int(qty * s / total_shortage), 0)
+                if allocate > remaining:
+                    allocate = remaining
+            if allocate > 0:
+                splits.append((loc_id, allocate))
+                remaining -= allocate
 
-    # 3. WH_TO_STORE PENDING 자동 INSERT (LEAD_DAYS=1 → expected_arrival_at = NOW + 1d)
-    chained_id = None
-    cur.execute(
-        """
-        INSERT INTO pending_orders
-            (order_id, order_type, isbn13, source_location_id, target_location_id, qty,
-             est_lead_time_hours, est_cost, urgency_level, auto_execute_eligible,
-             status, created_at, expected_arrival_at,
-             forecast_rationale)
-        VALUES (gen_random_uuid(), 'WH_TO_STORE', %s, %s, %s, %s,
-                6, %s * 500, 'NORMAL', false,
-                'PENDING', NOW(), (NOW() + INTERVAL '1 day')::date,
-                jsonb_build_object('reason', 'chained_from_wh_arrival', 'parent_order_id', %s, 'expected_arrival_date', (NOW() + INTERVAL '1 day')::date::text))
-        RETURNING order_id
-        """,
-        (isbn, wh_loc, target_store, qty, qty, parent_id),
-    )
-    chained = cur.fetchone()
-    if chained:
-        chained_id = str(chained[0])
-        _audit(cur, ctx, f"order.chained_wh_to_store.from={parent_id[:8]}", chained_id)
-    return chained_id
+    chained_ids: list[str] = []
+    for target_store, allocate_qty in splits:
+        if allocate_qty <= 0:
+            continue
+        cur.execute(
+            """
+            INSERT INTO pending_orders
+                (order_id, order_type, isbn13, source_location_id, target_location_id, qty,
+                 est_lead_time_hours, est_cost, urgency_level, auto_execute_eligible,
+                 status, created_at, approved_at, expected_arrival_at,
+                 forecast_rationale)
+            VALUES (gen_random_uuid(), 'WH_TO_STORE', %s, %s, %s, %s,
+                    6, %s * 500, 'NORMAL', false,
+                    'APPROVED', NOW(), NOW(), (NOW() + INTERVAL '1 day')::date,
+                    jsonb_build_object('reason', 'chained_from_wh_arrival', 'parent_order_id', %s,
+                                       'expected_arrival_date', (NOW() + INTERVAL '1 day')::date::text,
+                                       'auto_approved', true))
+            RETURNING order_id
+            """,
+            (isbn, wh_loc, target_store, allocate_qty, allocate_qty, parent_id),
+        )
+        chained = cur.fetchone()
+        if chained:
+            chained_ids.append(str(chained[0]))
+    if chained_ids:
+        _audit(cur, ctx, f"order.chained_wh_to_store.from={parent_id[:8]}.n={len(chained_ids)}", parent_id)
+    return chained_ids
 
 
 # ─── any → REJECTED (rejection_stage 자동 기록 · IN_TRANSIT 시만 source 복원) ─

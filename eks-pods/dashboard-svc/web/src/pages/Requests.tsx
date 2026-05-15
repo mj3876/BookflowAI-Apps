@@ -6,8 +6,10 @@ import {
   fetchNewBookForecastHint,
   postNewBookApprove,
   postNewBookReject,
+  postNewBookPredictDemand,
   type NewBookRequest,
   type NewBookForecastHint,
+  type NewBookPredictResp,
   type Role,
 } from '../api';
 import { roleGroup } from '../auth';
@@ -49,6 +51,20 @@ export default function Requests() {
 
   const [tab, setTab] = useState<StatusTab>('PENDING');
   const [selected, setSelected] = useState<NewBookRequest | null>(null);
+  const [predictModal, setPredictModal] = useState<{ req: NewBookRequest; data: NewBookPredictResp | null; loading: boolean; err: string | null } | null>(null);
+
+  const openPredictModal = async (req: NewBookRequest) => {
+    setPredictModal({ req, data: null, loading: true, err: null });
+    try {
+      const data = await postNewBookPredictDemand(role, {
+        isbn13: req.isbn13,
+        publisher_id: (req as NewBookRequest & { publisher_id?: number }).publisher_id,
+      });
+      setPredictModal({ req, data, loading: false, err: null });
+    } catch (e: unknown) {
+      setPredictModal({ req, data: null, loading: false, err: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   const list = useQuery({
     queryKey: ['requests', role],
@@ -147,13 +163,23 @@ export default function Requests() {
         {/* 우측: 상세 패널 */}
         <div className="flex flex-col gap-4">
           {selected ? (
-            <DetailPanel
-              key={`${selected.id}-${selected.status}`}
-              req={selected}
-              role={role}
-              isHQ={isHQ}
-              onSuccess={() => list.refetch()}
-            />
+            <>
+              <DetailPanel
+                key={`${selected.id}-${selected.status}`}
+                req={selected}
+                role={role}
+                isHQ={isHQ}
+                onSuccess={() => list.refetch()}
+              />
+              {isHQ && (
+                <button
+                  type="button"
+                  className="btn btn-primary text-sm"
+                  onClick={() => openPredictModal(selected)}
+                  title="VertexAI 매장별/wh별 수요예측 (GCP 연결 시 실측 · 현재 mock)"
+                >📊 VertexAI 수요예측 보기</button>
+              )}
+            </>
           ) : (
             <div className="card text-bf-muted text-xs text-center py-8">
               ← 좌측 표에서 행을 클릭하면 상세가 보입니다.
@@ -161,6 +187,56 @@ export default function Requests() {
           )}
         </div>
       </div>
+
+      {/* v5 2026-05-15: VertexAI 수요예측 결과 modal */}
+      {predictModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setPredictModal(null)}>
+          <div className="bg-bf-panel rounded-lg max-w-3xl w-full max-h-[90vh] overflow-auto p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold">📊 VertexAI 수요예측 · {predictModal.req.title ?? predictModal.req.isbn13}</h2>
+              <button type="button" className="text-xl text-bf-muted hover:text-bf-text" onClick={() => setPredictModal(null)}>×</button>
+            </div>
+            {predictModal.loading ? (
+              <div className="p-8 text-center text-bf-muted">예측 호출 중...</div>
+            ) : predictModal.err ? (
+              <div className="p-4 text-bf-danger">실패: {predictModal.err}</div>
+            ) : predictModal.data ? (
+              <>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="metric-card"><div className="metric-label">7일 총 수요</div><div className="metric-value">{Math.round(predictModal.data.total_7d)}</div></div>
+                  <div className="metric-card"><div className="metric-label">30일 총 수요</div><div className="metric-value">{Math.round(predictModal.data.total_30d)}</div></div>
+                  <div className="metric-card">
+                    <div className="metric-label">추천</div>
+                    <div className={`metric-value ${predictModal.data.recommendation === 'STRONG_BUY' ? 'text-bf-success' : predictModal.data.recommendation === 'BUY' ? 'text-bf-primary' : predictModal.data.recommendation === 'PASS' ? 'text-bf-danger' : 'text-bf-muted'}`}>
+                      {predictModal.data.recommendation}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs text-bf-muted mb-2">model: {predictModal.data.model_version} · {predictModal.data.predicted_at.slice(0, 19)}</div>
+                <table className="data-table text-xs">
+                  <thead>
+                    <tr><th>위치</th><th>유형</th><th className="text-right">7일</th><th className="text-right">30일</th><th className="text-right">신뢰도</th></tr>
+                  </thead>
+                  <tbody>
+                    {predictModal.data.predictions.map((p) => (
+                      <tr key={p.location_id}>
+                        <td>{p.location_name}</td>
+                        <td>{p.location_type}</td>
+                        <td className="text-right">{Math.round(p.predicted_demand_7d)}</td>
+                        <td className="text-right">{Math.round(p.predicted_demand_30d)}</td>
+                        <td className="text-right">{(p.confidence * 100).toFixed(0)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="text-xs text-bf-muted mt-3">
+                  ⚠ 현재 GCP 미연결 · forecast-svc mock 응답 (책 메타 기반 임시 분포). 연결 후 실측치 자동 교체.
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

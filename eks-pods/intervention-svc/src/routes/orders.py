@@ -317,13 +317,9 @@ def calendar(
     else:
         raise HTTPException(status_code=403, detail=f"unknown role: {ctx.role}")
 
-    # 2026-05-15 v4: 캘린더 = 입출고 (logistics) 현황만 표시 — 협의 (PENDING) 제외.
-    # 사용자 요구 "승인과 입출고를 명확히 분리".
-    # 단계별 의미:
-    #   📥 inbound  = target=내 측 · APPROVED + IN_TRANSIT (출고 대기 + 운송 중 도착 예정)
-    #   📤 outbound = source=내 측 · APPROVED (발송 대기)
-    #   🚚 in_transit = 양측 · IN_TRANSIT (운송 중)
-    #   ✅ executed = 양측 · EXECUTED/AUTO_EXECUTED · executed_at = day
+    # v5 2026-05-15 피드백 #10: frontend classify 와 일치 — 같은 row 가 inbound + outbound 둘 다 카운트 X.
+    # BOTH (is_src AND is_tgt · hq scope) → inbound 만 (frontend classify 와 동일).
+    # row 단일 분류 보장 → 합계 = row 수.
     sql = f"""
         WITH base AS (
             SELECT po.order_id, po.status, po.expected_arrival_at,
@@ -339,10 +335,14 @@ def calendar(
         )
         SELECT
             COALESCE(expected_arrival_at, exec_date) AS day,
-            COUNT(*) FILTER (WHERE is_tgt AND status IN ('APPROVED','IN_TRANSIT')) AS inbound,
-            COUNT(*) FILTER (WHERE is_src AND status = 'APPROVED') AS outbound,
-            COUNT(*) FILTER (WHERE (is_src OR is_tgt) AND status = 'IN_TRANSIT') AS in_transit,
-            COUNT(*) FILTER (WHERE (is_src OR is_tgt) AND status IN ('EXECUTED','AUTO_EXECUTED')
+            -- inbound: APPROVED + target=내 측 (BOTH 포함 — hq 면 모두 이쪽)
+            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_tgt) AS inbound,
+            -- outbound: APPROVED + source=내 측 + NOT target=내 측 (BOTH 제외 → inbound 와 중복 카운트 방지)
+            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_src AND NOT is_tgt) AS outbound,
+            -- in_transit: IN_TRANSIT + 자기 측
+            COUNT(*) FILTER (WHERE status = 'IN_TRANSIT' AND (is_src OR is_tgt)) AS in_transit,
+            -- executed: EXECUTED/AUTO_EXECUTED + 자기 측 + executed_at = day
+            COUNT(*) FILTER (WHERE status IN ('EXECUTED','AUTO_EXECUTED') AND (is_src OR is_tgt)
                                    AND exec_date = COALESCE(expected_arrival_at, exec_date)) AS executed
           FROM base
          WHERE COALESCE(expected_arrival_at, exec_date) BETWEEN %s AND %s
