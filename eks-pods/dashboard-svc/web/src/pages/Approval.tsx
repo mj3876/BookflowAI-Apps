@@ -359,7 +359,12 @@ export default function Approval() {
             const side = whichSide(o, scope);
             const isHq = role === 'hq-admin';
             const canAct = isHq || side === 'SOURCE' || side === 'TARGET' || side === 'BOTH';
-            const done = selfDone.has(o.order_id);
+            // v4 selfDone 영구화: 클라이언트 Set (mutation 직후 즉시 표시) + server-truth (새로고침 후에도 유지)
+            const mySideApproved =
+              (side === 'SOURCE' && o.source_approved) ||
+              (side === 'TARGET' && o.target_approved) ||
+              (side === 'BOTH' && (o.source_approved || o.target_approved));
+            const done = selfDone.has(o.order_id) || !!mySideApproved;
             const canEdit = isHq || side === 'SOURCE' || side === 'BOTH';  // qty/target 수정 권한
             return (
               <div key={o.order_id} className="p-3 flex items-center justify-between gap-3">

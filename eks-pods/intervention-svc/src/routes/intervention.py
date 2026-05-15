@@ -559,7 +559,11 @@ def queue(
                {rationale_col}, b.title,
                po.approved_at, po.executed_at,
                sl.wh_id AS source_wh_id, tl.wh_id AS target_wh_id,
-               po.expected_arrival_at, po.dispatched_at, po.rejection_stage
+               po.expected_arrival_at, po.dispatched_at, po.rejection_stage,
+               EXISTS(SELECT 1 FROM order_approvals oa
+                       WHERE oa.order_id = po.order_id AND oa.approval_side = 'SOURCE' AND oa.decision = 'APPROVED') AS source_approved,
+               EXISTS(SELECT 1 FROM order_approvals oa
+                       WHERE oa.order_id = po.order_id AND oa.approval_side = 'TARGET' AND oa.decision = 'APPROVED') AS target_approved
           FROM pending_orders po
           LEFT JOIN books b ON b.isbn13 = po.isbn13
           LEFT JOIN locations l ON l.location_id = po.target_location_id
@@ -598,6 +602,7 @@ def queue(
             source_wh_id=r[14], target_wh_id=r[15],
             expected_arrival_at=r[16].isoformat() if r[16] else None,
             dispatched_at=r[17], rejection_stage=r[18],
+            source_approved=bool(r[19]), target_approved=bool(r[20]),
         )
         for r in rows
     ]

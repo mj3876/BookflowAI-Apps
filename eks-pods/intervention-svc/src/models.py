@@ -36,6 +36,9 @@ class QueueItem(BaseModel):
     expected_arrival_at: str | None = None  # DATE 컬럼
     dispatched_at: datetime | None = None
     rejection_stage: str | None = None
+    # v4 2026-05-15 selfDone 영구화 — 새로고침 시에도 한쪽 ✓ 표시 유지
+    source_approved: bool = False
+    target_approved: bool = False
 
 
 class QueueResponse(BaseModel):
