@@ -1,17 +1,28 @@
-// PR-C v3 (2026-05-15) 협의 페이지 — 사이드바 진입.
+// PR-C v4 (2026-05-15) 협의 페이지 — 사이드바 진입 (모든 role).
 // 4-step state machine 의 1 단계: PENDING (양측 협의 중) 만 표시.
-// 양측 ✓ 완료되면 → APPROVED 전환 → 이 페이지에서 사라짐 → /logistics 로 이동.
 //
-// scope 자동 필터 (backend `/intervention/queue` 가 처리 · v3 에서 branch-clerk 추가):
+// Phase 13.1 강화 (WhApprove 패턴 흡수):
+//   - 4 order_type 탭 (WH_TO_STORE / REBALANCE / WH_TRANSFER / PUBLISHER_ORDER) + 전체
+//   - 검색 (isbn/title/location)
+//   - 페이지네이션 (limit 50 + offset)
+//   - bulk 일괄 승인 (postOrdersBatchApprove)
+//   - AI 추천 수정 modal (qty / target_location_id 변경 후 동의)
+//   - selfDone Set (자기 측 처리 끝 표시 · WH_TRANSFER 한쪽만 처리 시 화면 잔존 명확화)
+//
+// scope 자동 필터 (backend `/intervention/queue` v3):
 //   hq-admin       — 모든 PENDING
 //   wh-manager-X   — source.wh_id=X 또는 target.wh_id=X
 //   branch-clerk-S — source_location_id=S 또는 target_location_id=S
 //
-// 기존 legacy Approval.tsx (PUBLISHER_ORDER 전용 + DateHistoryTabs) 는 이 파일로 대체.
-import { useState, useMemo } from 'react';
+// 양측 ✓ 완료되면 → APPROVED 전환 → 이 페이지에서 사라짐 → /logistics 로 이동.
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 
-import { fetchPending, postOrderApprove, postOrderReject, type PendingOrder } from '../api';
+import {
+  fetchPending, postOrderApprove, postOrderReject, patchOrder, postOrdersBatchApprove,
+  type PendingOrder,
+} from '../api';
 import { getRole, getScope } from '../auth';
 import { ORDER_TYPE_KO, URGENCY_KO } from '../labels';
 import { useLocations } from '../useLocations';
@@ -32,19 +43,48 @@ function whichSide(o: PendingOrder, scope: { scope_wh_id: number | null; scope_s
   return null;
 }
 
+const PAGE_SIZE = 50;
+
 export default function Approval() {
   const role = getRole();
   const scope = getScope();
-  const { nameOf } = useLocations(role ?? 'hq-admin');
+  const { nameOf, items: locItems } = useLocations(role ?? 'hq-admin');
   const { showToast } = useToast();
   const qc = useQueryClient();
-  const [stage, setStage] = useState<StageFilter>('all');
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const q = useQuery({
-    queryKey: ['approval', role, stage],
+  const initialStage = (() => {
+    const t = searchParams.get('stage');
+    if (t === 'WH_TO_STORE' || t === 'REBALANCE' || t === 'WH_TRANSFER' || t === 'PUBLISHER_ORDER') return t;
+    return 'all';
+  })() as StageFilter;
+  const [stage, setStage] = useState<StageFilter>(initialStage);
+  const [q, setQ] = useState<string>(searchParams.get('q') ?? '');
+  const [page, setPage] = useState(0);
+  const [selfDone, setSelfDone] = useState<Set<string>>(new Set());
+  const [editTarget, setEditTarget] = useState<{
+    order_id: string; isbn13: string; qty: number; target_location_id: number | null;
+  } | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // stage 변경 시 URL searchParam 동기화 + 페이지 리셋
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    if (stage === 'all') next.delete('stage'); else next.set('stage', stage);
+    if (q) next.set('q', q); else next.delete('q');
+    setSearchParams(next, { replace: true });
+    setPage(0);
+  }, [stage, q]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const offset = page * PAGE_SIZE;
+  const queryKey = ['approval', role, stage, q, page] as const;
+  const queryRes = useQuery({
+    queryKey,
     queryFn: () => fetchPending(role!, {
-      limit: 300,
+      limit: PAGE_SIZE,
+      offset,
       ...(stage !== 'all' ? { order_type: stage } : {}),
+      ...(q ? { q } : {}),
     }),
     enabled: !!role,
     staleTime: 5000,
@@ -52,31 +92,71 @@ export default function Approval() {
   });
 
   const items = useMemo(() => {
-    const list = (q.data?.items as PendingOrder[] | undefined) ?? [];
+    const list = (queryRes.data?.items as PendingOrder[] | undefined) ?? [];
     return list.filter((o) => o.status === 'PENDING');
-  }, [q.data]);
+  }, [queryRes.data]);
+  const totalPending = queryRes.data?.total ?? 0;
+
+  // 카운트 보조 — stage_counts (각 order_type 별 count) backend 응답 (있다면)
+  const stageCounts = (queryRes.data?.stage_counts as Record<string, number> | undefined) ?? {};
+
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ['approval'] });
+    qc.invalidateQueries({ queryKey: ['logistics'] });
+    qc.invalidateQueries({ queryKey: ['calendar'] });
+    qc.invalidateQueries({ queryKey: ['pending-active'] });
+  };
 
   const approveMu = useMutation({
     mutationFn: (id: string) => postOrderApprove(role!, id, {}),
-    onSuccess: (r) => {
+    onSuccess: (r, id) => {
       const m = r.transitioned ? '🚚 양측 협의 완료 — 입출고 섹션으로 이동' : '✓ 내 측 동의 완료 (상대 측 대기)';
-      showToast({ type: 'success', message: m });
-      qc.invalidateQueries({ queryKey: ['approval'] });
-      qc.invalidateQueries({ queryKey: ['logistics'] });
-      qc.invalidateQueries({ queryKey: ['calendar'] });
+      showToast({ type: r.transitioned ? 'success' : 'info', message: m });
+      if (!r.transitioned) setSelfDone((prev) => new Set(prev).add(id));
+      invalidateAll();
     },
     onError: (e: Error) => showToast({ type: 'error', message: `동의 실패: ${e.message}` }),
   });
 
   const rejectMu = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => postOrderReject(role!, id, { reject_reason: reason }),
-    onSuccess: () => {
+    onSuccess: (_r, v) => {
       showToast({ type: 'warning', message: '❌ 협의 단계 거부' });
-      qc.invalidateQueries({ queryKey: ['approval'] });
-      qc.invalidateQueries({ queryKey: ['calendar'] });
+      setSelfDone((prev) => new Set(prev).add(v.id));
+      invalidateAll();
     },
     onError: (e: Error) => showToast({ type: 'error', message: `거부 실패: ${e.message}` }),
   });
+
+  const patchMu = useMutation({
+    mutationFn: (body: { qty?: number; target_location_id?: number }) => {
+      if (!editTarget) throw new Error('대상 없음');
+      return patchOrder(role!, editTarget.order_id, body);
+    },
+    onSuccess: () => {
+      showToast({ type: 'success', message: '✓ AI 추천 수정 완료' });
+      setEditTarget(null);
+      invalidateAll();
+    },
+    onError: (e: Error) => showToast({ type: 'error', message: `수정 실패: ${e.message}` }),
+  });
+
+  const bulkApprove = async () => {
+    if (items.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); return; }
+    const ids = items.map((o) => o.order_id);
+    if (!window.confirm(`이 페이지의 PENDING ${ids.length}건 일괄 승인합니다.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await postOrdersBatchApprove(role!, { order_ids: ids });
+      showToast({ type: 'success', message: `✓ 일괄 ${r.ok.length}건 성공 · 실패 ${r.failed.length}` });
+      invalidateAll();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast({ type: 'error', message: `일괄 실패: ${msg}` });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   if (!role) return null;
 
@@ -97,32 +177,60 @@ export default function Approval() {
             양측 협의가 모두 완료되면 자동으로 <a href="/logistics" className="text-bf-primary hover:underline">입출고 섹션</a>으로 이동.
           </div>
         </div>
-        {q.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
+        <div className="flex items-center gap-2">
+          {queryRes.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
+          <button
+            type="button"
+            className="bf-btn-primary text-xs"
+            disabled={bulkBusy || items.length === 0}
+            onClick={bulkApprove}
+            title="이 페이지의 PENDING 전체 일괄 동의"
+          >⚡ 일괄 동의 ({items.length})</button>
+        </div>
       </div>
 
-      <div className="bf-card p-2">
+      <div className="bf-card p-2 space-y-2">
         <div className="flex gap-1 flex-wrap">
-          {stages.map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => setStage(s.key)}
-              className={`px-3 py-1 text-xs rounded ${stage === s.key ? 'bg-bf-primary text-white' : 'bg-bf-surface text-bf-muted hover:text-bf-text'}`}
-            >
-              {s.label}
-            </button>
-          ))}
+          {stages.map((s) => {
+            const c = s.key === 'all' ? totalPending : (stageCounts[s.key] ?? null);
+            return (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => setStage(s.key)}
+                className={`px-3 py-1 text-xs rounded ${stage === s.key ? 'bg-bf-primary text-white' : 'bg-bf-surface text-bf-muted hover:text-bf-text'}`}
+              >
+                {s.label}{c !== null && c !== undefined ? ` (${c})` : ''}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="ISBN · 제목 · 매장명 검색"
+            className="bf-input text-sm flex-1"
+          />
+          {q && (
+            <button type="button" className="bf-btn-secondary text-xs" onClick={() => setQ('')}>초기화</button>
+          )}
         </div>
       </div>
 
       <div className="bf-card divide-y divide-bf-border">
         {items.length === 0 ? (
-          <div className="p-6 text-center text-sm text-bf-muted">협의 대기 중인 항목이 없습니다.</div>
+          <div className="p-6 text-center text-sm text-bf-muted">
+            {totalPending === 0 ? '협의 대기 중인 항목이 없습니다.' : `이 조건으로 표시할 항목이 없습니다 (전체 ${totalPending}건)`}
+          </div>
         ) : (
           items.map((o) => {
             const side = whichSide(o, scope);
             const isHq = role === 'hq-admin';
             const canAct = isHq || side === 'SOURCE' || side === 'TARGET' || side === 'BOTH';
+            const done = selfDone.has(o.order_id);
+            const canEdit = isHq || side === 'SOURCE' || side === 'BOTH';  // qty/target 수정 권한
             return (
               <div key={o.order_id} className="p-3 flex items-center justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -138,13 +246,29 @@ export default function Approval() {
                         {side === 'SOURCE' ? '📤 내 측이 출고' : '📥 내 측이 입고'}
                       </span>
                     )}
+                    {done && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-bf-success/10 text-bf-success border border-bf-success/30">
+                        ✓ 내 측 처리 끝
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-bf-muted mt-1 truncate">
                     ISBN {o.isbn13} · 수량 {o.qty}권 · {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id) ?? '?'}
                   </div>
                 </div>
                 <div className="flex-shrink-0 flex gap-1">
-                  {canAct ? (
+                  {canEdit && !done && (
+                    <button
+                      type="button"
+                      className="bf-btn-secondary text-xs"
+                      onClick={() => setEditTarget({
+                        order_id: o.order_id, isbn13: o.isbn13, qty: o.qty,
+                        target_location_id: o.target_location_id,
+                      })}
+                      title="AI 추천 수정 (수량 · 매장)"
+                    >✎ 수정</button>
+                  )}
+                  {canAct && !done ? (
                     <>
                       <button
                         type="button"
@@ -162,15 +286,80 @@ export default function Approval() {
                         }}
                       >✗ 거부</button>
                     </>
-                  ) : (
+                  ) : !canAct ? (
                     <span className="text-xs text-bf-muted">권한 없음</span>
-                  )}
+                  ) : null}
                 </div>
               </div>
             );
           })
         )}
       </div>
+
+      {/* 페이지네이션 */}
+      {totalPending > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-xs text-bf-muted">
+          <span>{offset + 1}–{Math.min(offset + items.length, totalPending)} / {totalPending}건</span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              className="bf-btn-secondary text-xs"
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >◀ 이전</button>
+            <button
+              type="button"
+              className="bf-btn-secondary text-xs"
+              disabled={offset + items.length >= totalPending}
+              onClick={() => setPage((p) => p + 1)}
+            >다음 ▶</button>
+          </div>
+        </div>
+      )}
+
+      {/* AI 추천 수정 modal */}
+      {editTarget && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setEditTarget(null)}>
+          <div className="bf-card max-w-md w-full p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold">✎ AI 추천 수정</h2>
+            <div className="text-xs text-bf-muted">ISBN {editTarget.isbn13}</div>
+            <label className="block">
+              <span className="text-sm text-bf-muted">수량 (현재 {editTarget.qty})</span>
+              <input
+                type="number"
+                value={editTarget.qty}
+                onChange={(e) => setEditTarget({ ...editTarget, qty: Number(e.target.value) || 0 })}
+                className="bf-input mt-1 w-full"
+                min={1}
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-bf-muted">대상 매장</span>
+              <select
+                value={editTarget.target_location_id ?? ''}
+                onChange={(e) => setEditTarget({ ...editTarget, target_location_id: Number(e.target.value) || null })}
+                className="bf-input mt-1 w-full"
+              >
+                {locItems.map((l) => (
+                  <option key={l.location_id} value={l.location_id}>{l.name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" className="bf-btn-secondary text-sm" onClick={() => setEditTarget(null)}>취소</button>
+              <button
+                type="button"
+                className="bf-btn-primary text-sm"
+                disabled={patchMu.isPending || editTarget.qty <= 0}
+                onClick={() => patchMu.mutate({
+                  qty: editTarget.qty,
+                  target_location_id: editTarget.target_location_id ?? undefined,
+                })}
+              >저장</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

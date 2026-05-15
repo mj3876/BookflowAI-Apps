@@ -34,8 +34,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: '🏬 물류센터 (자기 권역)',
     items: [
       { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간 (지점처럼)', allow: 'WH' },
-      { to: '/wh-approve',      label: '처리 대기',         desc: '권역 승인 + 일자별 처리 기록', allow: 'WH' },
-      { to: '/wh-instructions', label: '출고/입고 지시',    desc: '출고/입고 지시 + 일자별 기록', allow: 'WH' },
+      // PR-C v4: /wh-approve 폐기 — /approval 사이드바 진입점으로 대체. /wh-instructions 는 추후 PR-D 에서 /logistics 흡수.
+      { to: '/wh-instructions', label: '출고/입고 지시',    desc: '출고/입고 지시 + 일자별 기록 (legacy · /logistics 진행 중)', allow: 'WH' },
       { to: '/wh-manual',       label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'WH' },
     ],
   },
