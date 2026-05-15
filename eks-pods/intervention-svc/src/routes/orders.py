@@ -340,7 +340,8 @@ def calendar(
          WHERE COALESCE(expected_arrival_at, exec_date) BETWEEN %s AND %s
          GROUP BY 1 ORDER BY 1
     """
-    qparams = (*params, *params, from_date, to_date, from_date, to_date, from_date, to_date)
+    # params 는 scope_src + scope_tgt %s 매칭용 (hq-admin=[]·wh-manager=[wh,wh]·branch=[store,store])
+    qparams = (*params, from_date, to_date, from_date, to_date, from_date, to_date)
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, qparams)
