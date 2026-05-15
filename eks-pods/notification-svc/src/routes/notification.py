@@ -69,22 +69,31 @@ EVENT_CHANNEL = {
 }
 
 
-_LOGIC_APPS_EVENTS = {
-    "ForecastCompleted", "DailyPlanFinalized",
-    "SpikeUrgent", "NegotiationDelay", "DeliveryCompleted",
+# event_type → Logic Apps 워크플로 매핑
+# notification/        → SpikeUrgent, NegotiationDelay, DailyPlanFinalized (긴급 알림)
+# forecast-completed/  → ForecastCompleted (수요예측 완료 승인요청)
+# delivery-completed/  → DeliveryCompleted (운송완료 입고)
+_EVENT_LOGIC_APPS: dict[str, str] = {
+    "ForecastCompleted":  "forecast_completed",
+    "DailyPlanFinalized": "notification",
+    "SpikeUrgent":        "notification",
+    "NegotiationDelay":   "notification",
+    "DeliveryCompleted":  "delivery_completed",
 }
 
 
-def _needs_logic_apps(event_type: str) -> bool:
-    """Return whether this event should invoke Logic Apps email delivery."""
-    return event_type in _LOGIC_APPS_EVENTS
-
-
-def _logic_apps_endpoint(event_type: str) -> str:
-    base = settings.logic_apps_url.rstrip("/")
-    if "/triggers/" in base or "sig=" in base:
-        return base
-    return f"{base}/workflow/{event_type}"
+def _get_logic_apps_url(event_type: str) -> str | None:
+    """event_type 에 대응하는 Logic Apps SAS URL 반환. 미등록 또는 URL 미설정 시 None."""
+    key = _EVENT_LOGIC_APPS.get(event_type)
+    if key is None:
+        return None
+    url_map = {
+        "notification":       settings.logic_apps_url,
+        "forecast_completed": settings.logic_apps_forecast_completed_url,
+        "delivery_completed": settings.logic_apps_delivery_completed_url,
+    }
+    url = url_map.get(key, "")
+    return url.strip() or None
 
 
 async def _post_logic_apps(
@@ -94,14 +103,16 @@ async def _post_logic_apps(
     correlation_id,
     recipients: list[dict],
 ) -> tuple[bool, str | None]:
+    url = _get_logic_apps_url(event_type)
+    if not url:
+        return False, f"logic_apps URL not configured for {event_type}"
     body = {
         "event_type": event_type,
         "severity": severity,
         "correlation_id": str(correlation_id) if correlation_id else None,
         "payload": payload,
-        "recipients": recipients,  # [{address, displayName}] → ACS Email 수신자
+        "recipients": recipients,
     }
-    url = _logic_apps_endpoint(event_type)
     try:
         async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
             r = await c.post(url, json=body)
@@ -123,7 +134,7 @@ async def send(req: SendRequest, ctx: AuthContext = Depends(require_auth)) -> Se
         except Exception as e:
             ok, err = False, str(e)[:120]
         new_status = "BUFFERED" if ok else "FAILED"
-    elif _needs_logic_apps(req.event_type):
+    elif _get_logic_apps_url(req.event_type):
         recipients = get_recipients(req.event_type, req.payload_summary)
         ok, err = await _post_logic_apps(
             req.event_type,

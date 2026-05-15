@@ -5,7 +5,6 @@ D+1 forecast cache only (D+2~5 lives in BigQuery, accessed by dashboard-bff via 
 import logging
 from datetime import date, datetime, timezone
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import AuthContext, require_auth
@@ -14,7 +13,6 @@ from ..models import (
     ForecastResponse, ForecastRow, RefreshRequest, RefreshResponse,
     InsufficientStockItem, InsufficientStockResponse,
 )
-from ..settings import settings
 
 log = logging.getLogger(__name__)
 
@@ -201,24 +199,6 @@ def refresh(req: RefreshRequest, ctx: AuthContext = Depends(require_auth)):
                     it.confidence_low, it.confidence_high, it.model_version, now,
                 ))
         conn.commit()
-
-    try:
-        with httpx.Client(timeout=settings.notification_svc_timeout) as c:
-            c.post(
-                f"{settings.notification_svc_url.rstrip('/')}/notification/send",
-                json={
-                    "event_type": "ForecastCompleted",
-                    "severity": "INFO",
-                    "payload_summary": {
-                        "snapshot_date": str(req.snapshot_date),
-                        "store_id": req.store_id,
-                        "item_count": len(req.items),
-                    },
-                },
-                headers={"Authorization": "Bearer mock-token-system"},
-            )
-    except Exception as e:
-        log.warning("ForecastCompleted notification failed: %s", e)
 
     return RefreshResponse(
         snapshot_date=req.snapshot_date,

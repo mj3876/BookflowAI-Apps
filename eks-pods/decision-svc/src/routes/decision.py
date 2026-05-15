@@ -29,6 +29,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from ..auth import AuthContext, require_auth
 from ..db import db_conn
+from ..settings import settings
 from ..models import (
     BatchDecideRequest,
     BatchDecideResponse,
@@ -1074,6 +1075,26 @@ def plan_daily(
     for p in plan:
         by_stage[p["stage"]] = by_stage.get(p["stage"], 0) + 1
         isbns_set.add(p["isbn"])
+
+    # PENDING 결정이 대시보드에 등장하는 시점 → ForecastCompleted 이메일 발송
+    try:
+        with httpx.Client(timeout=settings.notification_svc_timeout) as c:
+            c.post(
+                f"{settings.notification_svc_url.rstrip('/')}/notification/send",
+                json={
+                    "event_type": "ForecastCompleted",
+                    "severity": "INFO",
+                    "payload_summary": {
+                        "snapshot_date": str(snapshot_date),
+                        "rows_created": len(plan),
+                        "isbns_planned": len(isbns_set),
+                        "by_stage": by_stage,
+                    },
+                },
+                headers={"Authorization": ctx.token},
+            )
+    except Exception as e:
+        log.warning("ForecastCompleted notification failed: %s", e)
 
     return {
         "snapshot_date": str(snapshot_date),
