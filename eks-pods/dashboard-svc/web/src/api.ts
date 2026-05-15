@@ -131,6 +131,9 @@ export type PendingOrder = {
   expected_arrival_at?: string | null;
   dispatched_at?: string | null;
   rejection_stage?: string | null;
+  // v4 2026-05-15 selfDone 영구화 — 양측 협의 진행 상태 (새로고침 후에도 유지)
+  source_approved?: boolean;
+  target_approved?: boolean;
 };
 
 export const fetchOverview = (whId: number, role: Role) =>
