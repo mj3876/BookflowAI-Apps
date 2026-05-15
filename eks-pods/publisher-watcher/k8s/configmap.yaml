@@ -4,7 +4,7 @@ metadata:
   name: publisher-watcher-env
   namespace: bookflow
 data:
-  PUBWATCH_RDS_HOST: "bookflow-postgres.c9c8iw8ock7h.ap-northeast-1.rds.amazonaws.com"
+  PUBWATCH_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
   PUBWATCH_RDS_PORT: "5432"
   PUBWATCH_RDS_DB: "bookflow"
   PUBWATCH_RDS_USER: "publish_watcher"  # V3 grants role name (under_score 형 · pod 명은 publisher-watcher)

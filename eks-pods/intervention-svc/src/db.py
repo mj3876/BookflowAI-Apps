@@ -32,7 +32,8 @@ def init_pool() -> None:
     except Exception as e:
         log.warning("DB pool init failed (will retry on demand): %s", e)
         _pool = None
-    _redis = redis.Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True)
+    _redis = redis.Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True,
+                         socket_connect_timeout=1.0, socket_timeout=1.0)
 
 
 def close_pool() -> None:

@@ -4,7 +4,7 @@ metadata:
   name: decision-svc-env
   namespace: bookflow
 data:
-  DECISION_RDS_HOST: "bookflow-postgres.c9c8iw8ock7h.ap-northeast-1.rds.amazonaws.com"
+  DECISION_RDS_HOST: "${RDS_HOST}"
   DECISION_RDS_PORT: "5432"
   DECISION_RDS_DB: "bookflow"
   DECISION_RDS_USER: "decision_svc"
@@ -13,3 +13,6 @@ data:
   DECISION_NOTIFICATION_SVC_URL: "http://notification-svc.bookflow.svc.cluster.local"
   DECISION_AUTH_MODE: "mock"
   DECISION_LOG_LEVEL: "INFO"
+  AUTH_MODE: "jwt"
+  AUTH_JWT_ISSUER: "bookflow-auth-pod"
+  AUTH_JWT_AUDIENCE: "bookflow-services"

@@ -4,7 +4,7 @@ metadata:
   name: intervention-svc-env
   namespace: bookflow
 data:
-  INTERVENTION_RDS_HOST: "bookflow-postgres.c9c8iw8ock7h.ap-northeast-1.rds.amazonaws.com"
+  INTERVENTION_RDS_HOST: "${RDS_HOST}"
   INTERVENTION_RDS_PORT: "5432"
   INTERVENTION_RDS_DB: "bookflow"
   INTERVENTION_RDS_USER: "intervention_svc"
@@ -13,3 +13,6 @@ data:
   INTERVENTION_AUTH_MODE: "mock"
   INTERVENTION_LOG_LEVEL: "INFO"
   INTERVENTION_NOTIFICATION_SVC_URL: "http://notification-svc.bookflow.svc.cluster.local"
+  AUTH_MODE: "jwt"
+  AUTH_JWT_ISSUER: "bookflow-auth-pod"
+  AUTH_JWT_AUDIENCE: "bookflow-services"

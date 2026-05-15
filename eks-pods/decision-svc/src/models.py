@@ -13,7 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-OrderType = Literal["REBALANCE", "WH_TRANSFER", "PUBLISHER_ORDER"]
+OrderType = Literal["WH_TO_STORE", "REBALANCE", "WH_TRANSFER", "PUBLISHER_ORDER"]
 Urgency = Literal["NORMAL", "URGENT", "CRITICAL"]
 OrderStatus = Literal["PENDING", "APPROVED", "REJECTED", "EXECUTED", "CANCELLED"]
 
@@ -30,10 +30,28 @@ class DecideRequest(BaseModel):
     note: str | None = None  # 사용자 메모 (audit_log)
 
 
+class BatchDecideRequest(BaseModel):
+    """일괄 cascade 결정 (시연 일괄 발의 · 매일 03:30 batch).
+
+    N items 받아 backend 가 parallel (asyncio.gather) 처리.
+    """
+    items: list[DecideRequest] = Field(min_length=1, max_length=2000)
+
+
+class BatchDecideResponse(BaseModel):
+    total: int
+    s0: int = 0  # WH_TO_STORE (2026-05-14 신규)
+    s1: int = 0
+    s2: int = 0
+    s3: int = 0
+    failed: int = 0
+    errors: list[str] = []
+
+
 class DecideResponse(BaseModel):
     order_id: UUID
     order_type: OrderType
-    stage: Literal[1, 2, 3]
+    stage: Literal[0, 1, 2, 3]
     source_location_id: int | None
     target_location_id: int
     qty: int

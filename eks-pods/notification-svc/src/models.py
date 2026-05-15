@@ -19,7 +19,10 @@ EventType = Literal[
     "StockDepartPending", "StockArrivalPending",
     "NewBookRequest",
     "ReturnPending",
+    "DailyPlanFinalized", "ApprovalDelayed", "InboundRejected",
     "LambdaAlarm", "DeploymentRollback",
+    # D5-8 Notion 3.5 · 매장 → 본사/물류 의견 제출 (운영 확장)
+    "BranchFeedback",
 ]
 
 Severity = Literal["INFO", "WARNING", "CRITICAL"]
@@ -54,3 +57,20 @@ class NotificationRow(BaseModel):
 
 class RecentResponse(BaseModel):
     items: list[NotificationRow]
+
+
+# D5-8 Notion 3.5 · Branch → 본사/물류 의견 제출 채널
+FeedbackType = Literal["SLOW_SELLER", "STOCK_REQUEST", "OTHER"]
+
+
+class BranchFeedbackRequest(BaseModel):
+    """매장 (branch-clerk) 이 본사/물류센터로 제출하는 의견."""
+    feedback_type: FeedbackType
+    isbn13: str | None = Field(default=None, min_length=13, max_length=13)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class BranchFeedbackResponse(BaseModel):
+    notification_id: UUID
+    feedback_type: str
+    submitted_at: datetime

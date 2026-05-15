@@ -1,0 +1,87 @@
+# DuckDNS A record 자동 동기화 CronJob
+# 5분마다 NGINX Ingress LoadBalancer hostname (NLB) -> 외부 IP resolve -> DuckDNS A update
+# 매일 destroy/redeploy 시 NLB hostname 이 변경되므로 Pod 시작 시 kubectl 로 동적 fetch.
+# Token: K8s Secret 'duckdns-token' (key=token) in ingress-nginx ns
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: duckdns-sync
+  namespace: ingress-nginx
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: duckdns-sync
+  namespace: ingress-nginx
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: duckdns-sync
+  namespace: ingress-nginx
+subjects:
+- kind: ServiceAccount
+  name: duckdns-sync
+  namespace: ingress-nginx
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: duckdns-sync
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: duckdns-sync
+  namespace: ingress-nginx
+spec:
+  schedule: "*/5 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: duckdns-sync
+          containers:
+          - name: sync
+            image: public.ecr.aws/docker/library/alpine:3.20
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -e
+                apk add --no-cache curl bind-tools jq >/dev/null 2>&1
+                # Use K8s API directly via in-pod ServiceAccount token (no kubectl binary needed)
+                TOKEN_K8S=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                CACERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                APISERVER="https://kubernetes.default.svc"
+                SVC_JSON=$(curl -sf --cacert $CACERT -H "Authorization: Bearer $TOKEN_K8S" \
+                  "$APISERVER/api/v1/namespaces/ingress-nginx/services/ingress-nginx-controller")
+                HOSTNAME=$(echo "$SVC_JSON" | jq -r '.status.loadBalancer.ingress[0].hostname // empty')
+                if [ -z "$HOSTNAME" ]; then
+                  echo "ERR: NLB hostname not yet provisioned"
+                  exit 1
+                fi
+                IP=$(getent hosts "$HOSTNAME" | awk '{print $1}' | head -1)
+                if [ -z "$IP" ]; then
+                  echo "ERR: failed to resolve $HOSTNAME"
+                  exit 1
+                fi
+                echo "Updating duckdns: $DOMAIN -> $IP (from NLB $HOSTNAME)"
+                RESULT=$(curl -sf "https://www.duckdns.org/update?domains=${DOMAIN}&token=${TOKEN}&ip=${IP}")
+                echo "DuckDNS: $RESULT"
+                [ "$RESULT" = "OK" ]
+            env:
+              - name: DOMAIN
+                value: "bookflow"
+              - name: TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: duckdns-token
+                    key: token

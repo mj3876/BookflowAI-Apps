@@ -1,0 +1,66 @@
+# BookFlowAI-Apps · publisher · CodeBuild buildspec
+# CodeBuild 가 실행하는 명령. (선택) publisher-pipeline.yaml 의 CodeBuildProject 가 reference.
+#
+# Env vars (CodeBuild 환경 또는 GHA 에서 주입):
+#   AWS_REGION · AWS_ACCOUNT_ID · PROJECT_NAME
+#
+# 흐름:
+#   1. Python 문법 검사 (backend/*.py)
+#   2. cp-artifacts S3 버킷 이름 조회
+#   3. publisher 디렉토리 → zip → S3 업로드
+#   4. CodeDeploy create-deployment (Blue/Green · EC2 ASG)
+#   5. 배포 완료 대기
+
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - cd publisher
+
+      # ── 1. Python 문법 검사 ──
+      - echo "=== Python syntax check ==="
+      - python3 -m py_compile backend/main.py backend/auth.py backend/db.py backend/storage.py backend/models.py backend/settings.py
+      - echo "syntax OK"
+
+      # ── 2. S3 버킷 이름 조회 ──
+      - |
+        BUCKET=$(aws cloudformation list-exports \
+          --region "$AWS_REGION" \
+          --query "Exports[?Name=='${PROJECT_NAME}-s3-cp-artifacts-name'].Value" \
+          --output text)
+        if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+          echo "ERROR: cp-artifacts 버킷 이름 조회 실패"
+          exit 1
+        fi
+        echo "BUCKET=$BUCKET"
+
+      # ── 3. zip → S3 업로드 ──
+      - ZIP_KEY="publisher/publisher-${CODEBUILD_RESOLVED_SOURCE_VERSION}.zip"
+      - cd .. && zip -r /tmp/publisher.zip publisher/ -x "publisher/venv/*" && cd publisher
+      - aws s3 cp /tmp/publisher.zip "s3://${BUCKET}/${ZIP_KEY}"
+      - echo "Uploaded s3://${BUCKET}/${ZIP_KEY}"
+
+      # ── 4. CodeDeploy 배포 생성 ──
+      - |
+        DEPLOYMENT_ID=$(aws deploy create-deployment \
+          --application-name "${PROJECT_NAME}-publisher" \
+          --deployment-group-name "${PROJECT_NAME}-publisher-bg" \
+          --s3-location "bucket=${BUCKET},key=${ZIP_KEY},bundleType=zip" \
+          --description "CodeBuild ${CODEBUILD_RESOLVED_SOURCE_VERSION}" \
+          --region "$AWS_REGION" \
+          --query "deploymentId" --output text)
+        echo "DEPLOYMENT_ID=$DEPLOYMENT_ID"
+
+      # ── 5. 배포 완료 대기 ──
+      - aws deploy wait deployment-successful --deployment-id "$DEPLOYMENT_ID" --region "$AWS_REGION"
+      - echo "=== Deployment successful: $DEPLOYMENT_ID ==="
+
+artifacts:
+  files:
+    - appspec.yml
+    - 'src/**/*'
+    - 'backend/**/*'
+    - 'scripts/**/*'
+  base-directory: publisher
+  discard-paths: no

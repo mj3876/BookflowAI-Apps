@@ -1,48 +1,63 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { roleLabel, roleGroup, useRole, type Role } from './auth';
 import { useLiveStream } from './useLiveStream';
+import { useLiveInvalidate } from './useLiveInvalidate';
+import { useLocations } from './useLocations';
 
-type NavItem = { to: string; label: string; allow: 'HQ' | 'WH' | 'BRANCH' | 'ALL' };
+type NavItem = { to: string; label: string; desc: string; allow: 'HQ' | 'WH' | 'BRANCH' | 'ALL' };
 
 const NAV: { section: string; items: NavItem[] }[] = [
   {
-    section: '본사',
+    section: '🏠 오늘 한눈에',
     items: [
-      { to: '/kpi',         label: '실시간 KPI',       allow: 'HQ' },
-      { to: '/inventory',   label: '전사 재고',         allow: 'HQ' },
-      { to: '/books',       label: '도서 카탈로그',     allow: 'HQ' },
-      { to: '/decision',    label: '의사결정',          allow: 'HQ' },
-      { to: '/approval',    label: '승인 / 거절',       allow: 'HQ' },
-      { to: '/returns',     label: '반품 처리',          allow: 'HQ' },
-      { to: '/requests',    label: '신간 신청',          allow: 'HQ' },
-      { to: '/spikes',      label: '급등 감지',          allow: 'HQ' },
+      { to: '/home/hq',     label: '본사 홈',           desc: '오늘 batch 처리 현황 + 검토 필요 한 화면', allow: 'HQ' },
+      { to: '/wh-dashboard', label: '권역 홈',           desc: '내 권역 batch 결과 + 매출/재고 차트 한 화면', allow: 'WH' },
+      { to: '/home/branch', label: '매장 홈',           desc: '오늘 입고 + 부족 도서 + SNS 급등 매칭',     allow: 'BRANCH' },
     ],
   },
   {
-    section: '창고',
+    section: '📊 본사 (전사 관제)',
     items: [
-      { to: '/wh-dashboard',    label: '창고 대시보드',  allow: 'WH' },
-      { to: '/wh-approve',      label: '승인 큐',         allow: 'WH' },
-      { to: '/wh-transfer',     label: '권역 이동',       allow: 'WH' },
-      { to: '/wh-instructions', label: '출고 지시서',     allow: 'WH' },
-      { to: '/wh-manual',       label: '수동 조정',       allow: 'WH' },
+      { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
+      { to: '/inventory',   label: '전사 재고',           desc: '모든 매장 재고와 부족 알림',              allow: 'HQ' },
+      { to: '/decision',    label: '의사결정 현황',       desc: 'AI 추천 검토 + 일자별 처리 기록',          allow: 'HQ' },
+      { to: '/approval',    label: '외부 발주 승인',      desc: '외부 발주 승인 + 일자별 처리 기록 7일',    allow: 'HQ' },
+      { to: '/returns',     label: '반품 처리',           desc: '매장이 신청한 반품 승인 / 거부',           allow: 'HQ' },
+      { to: '/requests',    label: '신간 편입 결정',      desc: '출판사 신간을 우리 매장에 들일지 결정',    allow: 'HQ' },
     ],
   },
   {
-    section: '지점',
+    section: '🏬 물류센터 (자기 권역)',
     items: [
-      { to: '/branch-inventory', label: '매장 재고',     allow: 'BRANCH' },
-      { to: '/branch-inbound',   label: '입고 확인',     allow: 'BRANCH' },
-      { to: '/branch-sales',     label: '매장 매출',     allow: 'BRANCH' },
-      { to: '/branch-curation',  label: '큐레이션',      allow: 'BRANCH' },
-      { to: '/branch-manual',    label: '수동 조정',     allow: 'BRANCH' },
+      { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간 (지점처럼)', allow: 'WH' },
+      { to: '/wh-approve',      label: '처리 대기',         desc: '권역 승인 + 일자별 처리 기록', allow: 'WH' },
+      { to: '/wh-instructions', label: '출고/입고 지시',    desc: '출고/입고 지시 + 일자별 기록', allow: 'WH' },
+      { to: '/wh-manual',       label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'WH' },
     ],
   },
   {
-    section: '공통',
+    section: '🏪 매장 (자기 매장)',
     items: [
-      { to: '/notifications', label: '알림 로그',        allow: 'ALL' },
-      { to: '/live',          label: '실시간 이벤트',     allow: 'ALL' },
+      { to: '/branch-inventory', label: '매장 재고',         desc: '내 매장 도서 재고와 부족 알림',          allow: 'BRANCH' },
+      { to: '/branch-inbound',   label: '입고 확인',         desc: '매장 입고 처리 (승인 대기 분리)',        allow: 'BRANCH' },
+      { to: '/branch-sales',     label: '매장 매출',         desc: '내 매장 실시간 판매 (POS)',              allow: 'BRANCH' },
+      { to: '/branch-curation',  label: '내 매장 SNS 매칭',  desc: '전사 SNS 급등 도서 중 우리 매장 재고 보유분 (입고 요청 발의)', allow: 'BRANCH' },
+      { to: '/branch-manual',    label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'BRANCH' },
+    ],
+  },
+  {
+    section: '📚 카탈로그',
+    items: [
+      { to: '/books',  label: '도서 카탈로그', desc: '전체 도서 검색·정보 조회 (본사만 판매 ON/OFF)', allow: 'ALL' },
+      { to: '/spikes', label: 'SNS 급등 (전사)', desc: '최근 24시간 화제가 된 도서 (수요 급변 · 전사)', allow: 'ALL' },
+    ],
+  },
+  {
+    section: '⚙️ 시스템 (감사·시연)',
+    items: [
+      { to: '/execution',     label: '위치별 실행 추적', desc: '오늘 입·출고 (APPROVED + EXECUTED) 위치별 합산',  allow: 'ALL' },
+      { to: '/notifications', label: '알림 이력',     desc: '주문 / 시스템 이벤트 송신 이력',          allow: 'ALL' },
+      { to: '/live',          label: '실시간 이벤트', desc: '재고 변동 · 주문 · SNS 급등 실시간 스트림', allow: 'ALL' },
     ],
   },
 ];
@@ -55,24 +70,37 @@ const STATUS_LABEL: Record<string, string> = {
   up: '연결됨', connecting: '연결 중', down: '끊김',
 };
 
+// 페이지별 헤더 pill — DateHistoryTabs 적용 페이지에 "📅 일자별 처리 기록" 표시.
+const PAGES_WITH_HISTORY = new Set([
+  'approval',
+  'decision',
+  'wh-approve',
+  'wh-instructions',
+]);
+
 const PAGE_LABEL: Record<string, string> = {
+  'home/hq': '본사 홈',
+  'home/wh': '권역 홈',
+  'home/branch': '매장 홈',
   kpi: '실시간 KPI',
   inventory: '전사 재고',
   books: '도서 카탈로그',
-  decision: '의사결정',
+  decision: '의사결정 현황',
+  'final-plan': '최종 계획안',
+  execution: '위치별 실행 추적',
   approval: '승인 / 거절',
   returns: '반품 처리',
   requests: '신간 신청',
   spikes: '급등 감지',
-  'wh-dashboard': '창고 대시보드',
-  'wh-approve': '창고 승인 큐',
+  'wh-dashboard': '권역 홈',
+  'wh-approve': '권역 처리 대기',
   'wh-transfer': '권역 이동',
   'wh-instructions': '출고 지시서',
   'wh-manual': '창고 수동 조정',
   'branch-inventory': '매장 재고',
   'branch-inbound': '입고 확인',
   'branch-sales': '매장 매출',
-  'branch-curation': '큐레이션',
+  'branch-curation': '내 매장 SNS 매칭',
   'branch-manual': '매장 수동 조정',
   notifications: '알림 로그',
   live: '실시간 이벤트',
@@ -83,6 +111,9 @@ export default function Layout() {
   const nav = useNavigate();
   const loc = useLocation();
   const { status, counts } = useLiveStream(role);
+  // WS → TanStack Query 무효화 bridge — 다른 사용자의 행동도 sub-second 반영
+  useLiveInvalidate(role);
+  const { nameOf } = useLocations(role ?? 'hq-admin');
 
   if (!role) return null;
 
@@ -92,17 +123,28 @@ export default function Layout() {
     items: s.items.filter((i) => i.allow === 'ALL' || i.allow === group),
   })).filter((s) => s.items.length > 0);
 
-  const onLogout = () => { setRole(null); nav('/login', { replace: true }); };
+  const onLogout = () => {
+    // mock localStorage role + Entra OIDC httpOnly cookie 둘 다 정리.
+    // /auth/logout 가 cookie 삭제 + Entra end_session redirect 처리 → 새로고침 시 자동 재로그인 방지.
+    setRole(null);
+    window.location.href = '/auth/logout';
+  };
   const seg = loc.pathname.split('/').filter(Boolean)[0] ?? 'home';
   const pageTitle = PAGE_LABEL[seg] ?? seg;
-  const groupLabel = group === 'HQ' ? '본사' : group === 'WH' ? '창고' : '지점';
+  const groupLabel = group === 'HQ' ? '본사' : group === 'WH' ? '물류센터' : '매장';
+  // 역할별 scope 표시 (본사 = 전사 / wh = 권역 / branch = 매장명)
+  const scopeLabel =
+    role === 'hq-admin' ? '전사 관제'
+    : role === 'wh-manager-1' ? '수도권 권역'
+    : role === 'wh-manager-2' ? '영남 권역'
+    : role === 'branch-clerk' ? `${nameOf(1)}` : '';
 
   return (
     <div className="min-h-screen bg-bf-bg flex">
-      <aside className="w-[220px] shrink-0 bg-bf-sidebar text-white flex flex-col">
+      <aside className="w-[220px] min-w-[220px] max-w-[220px] shrink-0 bg-bf-sidebar text-white flex flex-col overflow-hidden">
         <div className="px-5 py-4 border-b border-bf-sidebar2">
           <div className="text-base font-bold flex items-center gap-2">📚 BookFlow</div>
-          <div className="text-[10px] text-gray-400 mt-0.5">V6.4 · MSA Demo</div>
+          <div className="text-[10px] text-gray-400 mt-0.5">도서 유통 통합 관제</div>
         </div>
         <nav className="flex-1 overflow-y-auto py-3 flex flex-col gap-3">
           {visible.map((s) => (
@@ -113,15 +155,17 @@ export default function Layout() {
                   <li key={i.to}>
                     <NavLink
                       to={i.to}
+                      title={i.desc}
                       className={({ isActive }) =>
-                        `flex items-center px-5 py-1.5 text-xs border-l-[3px] transition ${
+                        `flex flex-col px-5 py-1.5 border-l-[3px] transition ${
                           isActive
                             ? 'bg-bf-sidebar2 text-white border-bf-primary'
                             : 'text-gray-300 hover:bg-bf-sidebar2 hover:text-white border-transparent'
                         }`
                       }
                     >
-                      {i.label}
+                      <span className="text-xs">{i.label}</span>
+                      <span className="text-[10px] text-gray-500 truncate">{i.desc}</span>
                     </NavLink>
                   </li>
                 ))}
@@ -131,7 +175,8 @@ export default function Layout() {
         </nav>
         <div className="px-5 py-3 border-t border-bf-sidebar2">
           <div className="text-[10px] uppercase tracking-wider text-gray-500">{groupLabel}</div>
-          <div className="text-xs text-white mb-2">{roleLabel(role)}</div>
+          <div className="text-xs text-white">{roleLabel(role)}</div>
+          <div className="text-[10px] text-gray-400 mb-2">{scopeLabel}</div>
           <button onClick={onLogout} className="text-[11px] text-gray-400 hover:text-white">
             로그아웃
           </button>
@@ -141,6 +186,14 @@ export default function Layout() {
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-bf-border px-6 flex items-center gap-4 bg-bf-panel shrink-0">
           <div className="text-sm text-bf-text font-semibold">{pageTitle}</div>
+          {PAGES_WITH_HISTORY.has(seg) && (
+            <span
+              className="px-2 py-0.5 rounded text-[10px] bg-bf-panel2 text-bf-muted border border-bf-border"
+              title="이 페이지는 최근 7일 처리 기록을 일자별 탭으로 볼 수 있습니다"
+            >
+              📅 일자별 처리 기록
+            </span>
+          )}
           <span className={STATUS_PILL[status] ?? 'pill-down'} title="WebSocket broker · Redis 4채널">실시간 {STATUS_LABEL[status] ?? status}</span>
           <div className="flex gap-3 ml-auto text-[11px]">
             <span title="stock.changed · pos-ingestor Lambda" className="flex items-center gap-1">

@@ -36,3 +36,5 @@ spark-warehouse/
 
 # Design artifacts (encrypted .pen, accessed via Pencil MCP only)
 *.pen
+web/tsconfig.tsbuildinfo
+**/tsconfig.tsbuildinfo

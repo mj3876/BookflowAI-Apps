@@ -8,11 +8,16 @@ import KPI from './pages/KPI';
 import Books from './pages/Books';
 import Inventory from './pages/Inventory';
 import Decision from './pages/Decision';
+import FinalPlan from './pages/FinalPlan';
+import ExecutionByLocation from './pages/ExecutionByLocation';
 import Approval from './pages/Approval';
 import Returns from './pages/Returns';
 import Requests from './pages/Requests';
 import Spikes from './pages/Spikes';
+import HqHome from './pages/HqHome';
+import BranchHome from './pages/BranchHome';
 import WhDashboard from './pages/WhDashboard';
+import WhInventory from './pages/WhInventory';
 import WhApprove from './pages/WhApprove';
 import WhTransfer from './pages/WhTransfer';
 import WhInstructions from './pages/WhInstructions';
@@ -24,6 +29,7 @@ import BranchCuration from './pages/BranchCuration';
 import Notifications from './pages/Notifications';
 import LiveEvents from './pages/LiveEvents';
 import { getRole, roleGroup } from './auth';
+import { ToastProvider } from './components/Toast';
 import './styles.css';
 
 const qc = new QueryClient({
@@ -41,24 +47,33 @@ function HomeRedirect() {
   const role = getRole();
   if (!role) return <Navigate to="/login" replace />;
   const group = roleGroup(role);
-  const home = group === 'HQ' ? '/kpi' : group === 'WH' ? '/wh-dashboard' : '/branch-inventory';
+  const home = group === 'HQ' ? '/home/hq' : group === 'WH' ? '/wh-dashboard' : '/home/branch';
   return <Navigate to={home} replace />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={qc}>
+      <ToastProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route element={<RequireRole><Layout /></RequireRole>}>
             <Route path="/" element={<HomeRedirect />} />
 
+            {/* 홈 3 페이지 (role 별 진입) */}
+            <Route path="/home/hq"     element={<HqHome />} />
+            {/* 2026-05-13 WhHome 폐기 · WhDashboard 가 권역 진입점. 기존 링크/북마크 보존을 위해 redirect 유지. */}
+            <Route path="/home/wh"     element={<Navigate to="/wh-dashboard" replace />} />
+            <Route path="/home/branch" element={<BranchHome />} />
+
             {/* HQ */}
             <Route path="/kpi"        element={<KPI />} />
             <Route path="/inventory"  element={<Inventory />} />
             <Route path="/books"      element={<Books />} />
             <Route path="/decision"   element={<Decision />} />
+            <Route path="/final-plan" element={<FinalPlan />} />
+            <Route path="/execution"  element={<ExecutionByLocation />} />
             <Route path="/approval"   element={<Approval />} />
             <Route path="/returns"    element={<Returns />} />
             <Route path="/requests"   element={<Requests />} />
@@ -66,6 +81,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
             {/* WH */}
             <Route path="/wh-dashboard"    element={<WhDashboard />} />
+            <Route path="/wh-inventory"    element={<WhInventory />} />
             <Route path="/wh-approve"      element={<WhApprove />} />
             <Route path="/wh-transfer"     element={<WhTransfer />} />
             <Route path="/wh-instructions" element={<WhInstructions />} />
@@ -86,6 +102,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </Route>
         </Routes>
       </BrowserRouter>
+      </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

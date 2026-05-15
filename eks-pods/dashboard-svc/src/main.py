@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .clients import close_client, init_client
@@ -38,8 +39,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="bookflow-dashboard-svc", version="0.1.0", lifespan=lifespan)
-app.include_router(aggregate_router)
+# 정적 path (master /inventory/turnover · by-category 등) 를 먼저 include —
+# aggregate 의 /inventory/{wh_id} 가 정적 path 를 흡수하던 422 fix.
 app.include_router(master_router)
+app.include_router(aggregate_router)
 app.include_router(ws_router)
 
 
@@ -48,8 +51,17 @@ def health():
     return {"status": "ok", "service": "dashboard-svc"}
 
 
-# Mount SPA at root LAST so /dashboard, /ws, /health take precedence.
-# html=True falls back to index.html for unknown paths (SPA router).
+# SPA serve at root LAST so /dashboard, /ws, /health take precedence.
+# StaticFiles(html=True) 만으로는 client-side routing path (예 /branch-curation) fallback 안 됨 →
+# /assets 같은 정적 자원만 명시 mount 하고, 나머지 모든 path 는 catch-all 로 index.html 반환.
 static_dir = Path("/app/static")
 if static_dir.is_dir():
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa")
+    if (static_dir / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        target = static_dir / full_path
+        if target.is_file():
+            return FileResponse(target)
+        return FileResponse(static_dir / "index.html")

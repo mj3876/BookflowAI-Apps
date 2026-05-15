@@ -1,0 +1,89 @@
+# BookFlowAI-Apps · publisher CI/CD
+# 흐름:
+#   publisher/** push (main) → GHA → OIDC → S3 zip 업로드 → CodeDeploy Blue/Green → EC2 ASG
+#
+# 사전 조건 (최초 1회):
+#   1. Platform iam.yaml 스택 업데이트 (GhaPublisherDeployRole 추가)
+#   2. Platform publisher-asg.yaml 스택 업데이트 (CodeDeploy App + DG 추가)
+#   3. Secrets Manager bookflow/publisher-api 시크릿 생성 (RDS 접속 정보 포함)
+# 라이프사이클: 🔒 영구 (GHA)
+
+name: publisher-deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ['publisher/**']
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  PROJECT_NAME: bookflow
+
+jobs:
+  deploy:
+    name: publisher → CodeDeploy Blue/Green
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: OIDC → bookflow-gha-publisher-deploy
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/bookflow-gha-publisher-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: cp-artifacts 버킷 이름 조회
+        id: bucket
+        run: |
+          BUCKET=$(aws cloudformation list-exports \
+            --region "${{ env.AWS_REGION }}" \
+            --query "Exports[?Name=='${{ env.PROJECT_NAME }}-s3-cp-artifacts-name'].Value" \
+            --output text)
+          if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+            echo "::error::cp-artifacts 버킷 이름 조회 실패 — iam 스택 배포 여부 확인"
+            exit 1
+          fi
+          echo "name=$BUCKET" >> "$GITHUB_OUTPUT"
+          echo "Bucket: $BUCKET"
+
+      - name: publisher zip → S3 업로드
+        run: |
+          zip -r /tmp/publisher-${{ github.sha }}.zip publisher/ \
+            --exclude "publisher/venv/*" \
+            --exclude "publisher/__pycache__/*"
+          aws s3 cp /tmp/publisher-${{ github.sha }}.zip \
+            s3://${{ steps.bucket.outputs.name }}/publisher/publisher-${{ github.sha }}.zip
+          echo "Uploaded: s3://${{ steps.bucket.outputs.name }}/publisher/publisher-${{ github.sha }}.zip"
+
+      - name: CodeDeploy 배포 생성
+        id: deploy
+        run: |
+          DEPLOYMENT_ID=$(aws deploy create-deployment \
+            --application-name "${{ env.PROJECT_NAME }}-publisher" \
+            --deployment-group-name "${{ env.PROJECT_NAME }}-publisher-bg" \
+            --s3-location bucket=${{ steps.bucket.outputs.name }},key=publisher/publisher-${{ github.sha }}.zip,bundleType=zip \
+            --description "GHA ${{ github.sha }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query "deploymentId" --output text)
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "Deployment ID: $DEPLOYMENT_ID"
+
+      - name: 배포 완료 대기
+        run: |
+          aws deploy wait deployment-successful \
+            --deployment-id ${{ steps.deploy.outputs.deployment_id }} \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: 배포 결과 출력
+        if: always()
+        run: |
+          aws deploy get-deployment \
+            --deployment-id ${{ steps.deploy.outputs.deployment_id }} \
+            --region "${{ env.AWS_REGION }}" \
+            --query "deploymentInfo.{Status:status,Start:startTime,End:completeTime}" \
+            --output table

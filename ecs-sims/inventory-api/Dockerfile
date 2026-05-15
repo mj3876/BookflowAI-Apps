@@ -1,5 +1,7 @@
-FROM public.ecr.aws/nginx/nginx:1.27-alpine
-# Build context = ecs-sims/ root (see buildspec.yml).
-COPY inventory-api/default.conf /etc/nginx/conf.d/default.conf
-COPY inventory-api/index.html /usr/share/nginx/html/index.html
+FROM public.ecr.aws/docker/library/python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app.py .
 EXPOSE 8080
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]

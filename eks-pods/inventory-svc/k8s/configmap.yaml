@@ -4,7 +4,7 @@ metadata:
   name: inventory-svc-env
   namespace: bookflow
 data:
-  INVENTORY_RDS_HOST: "bookflow-rds.cluster-xxx.ap-northeast-1.rds.amazonaws.com"
+  INVENTORY_RDS_HOST: "${RDS_HOST}"
   INVENTORY_RDS_PORT: "5432"
   INVENTORY_RDS_DB: "bookflow"
   INVENTORY_RDS_USER: "inventory_svc"
@@ -12,3 +12,6 @@ data:
   INVENTORY_REDIS_PORT: "6379"
   INVENTORY_AUTH_MODE: "mock"
   INVENTORY_LOG_LEVEL: "INFO"
+  AUTH_MODE: "jwt"
+  AUTH_JWT_ISSUER: "bookflow-auth-pod"
+  AUTH_JWT_AUDIENCE: "bookflow-services"

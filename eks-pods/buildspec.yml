@@ -36,13 +36,49 @@ phases:
       - cd eks-pods
       - export IMAGE_TAG=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-7)
       - echo "IMAGE_TAG=$IMAGE_TAG  NAMESPACE=$NAMESPACE  REGISTRY=$ECR_REGISTRY"
-      - export PODS=$(find . -mindepth 2 -maxdepth 2 -name Dockerfile -exec dirname {} \; | sed 's|^\./||' | sort)
+      # Dockerfile 가진 모든 pod (apply 대상 base list)
+      - export ALL_PODS=$(find . -mindepth 2 -maxdepth 2 -name Dockerfile -exec dirname {} \; | sed 's|^\./||' | sort)
+      # ── 변경된 pod 만 build (CodeBuild source 가 git history 보유 시 diff 가능) ──
+      # 안전 룰:
+      #   - eks-pods/_shared/, buildspec.yml 변경 → 전체 rebuild (공유 영향)
+      #   - 그 외 → 변경된 pod 만 build (rollout 도 변경 pod 만 검증)
+      #   - git diff 안되면 (shallow clone 등) fallback: 전체 rebuild
+      - |
+        cd ..  # repo root 로 이동 (git diff)
+        BUILD_PODS=""
+        if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD || true)
+          echo "Changed files in this commit:"
+          echo "$CHANGED_FILES" | sed 's/^/  /'
+          if echo "$CHANGED_FILES" | grep -qE "^eks-pods/(_shared/|buildspec\.yml$)"; then
+            echo "shared file changed → rebuild ALL pods"
+            BUILD_PODS="$ALL_PODS"
+          else
+            CHANGED_PODS=$(echo "$CHANGED_FILES" | grep "^eks-pods/" | cut -d/ -f2 | sort -u)
+            for p in $CHANGED_PODS; do
+              if echo "$ALL_PODS" | grep -q "^${p}$"; then
+                BUILD_PODS="$BUILD_PODS $p"
+              fi
+            done
+            BUILD_PODS=$(echo $BUILD_PODS | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          fi
+        else
+          echo "no git history (shallow clone?) → rebuild ALL pods"
+          BUILD_PODS="$ALL_PODS"
+        fi
+        cd eks-pods
+        if [ -z "$BUILD_PODS" ] || [ "$BUILD_PODS" = " " ]; then
+          echo "no pod changed in this commit · skip build (rollout 도 skip)"
+          export PODS=""
+        else
+          export PODS="$BUILD_PODS"
+          echo "Pods to build (changed only):" $PODS
+        fi
       - |
         if [ -z "$PODS" ]; then
-          echo "no Dockerfile found in eks-pods/* · skip build"
+          echo "=== No pods to build · exiting cleanly ==="
           exit 0
         fi
-      - echo "Pods to build:" $PODS
 
       # ── 1. ECR login + docker build/push ──
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
@@ -60,6 +96,10 @@ phases:
       - kubectl get ns "$NAMESPACE" 2>/dev/null || kubectl create namespace "$NAMESPACE"
 
       # ── 3. K8s manifest envsubst → apply ──
+      # RDS endpoint · DuckDNS FQDN 동적 fetch (매일 redeploy 시 stale 방지)
+      - export RDS_HOST=$(aws rds describe-db-instances --region "$AWS_REGION" --db-instance-identifier bookflow-postgres --query "DBInstances[0].Endpoint.Address" --output text)
+      - export DOMAIN="${DOMAIN:-bookflow.myosoon.store}"
+      - echo "RDS_HOST=$RDS_HOST  DOMAIN=$DOMAIN"
       - |
         for pod in $PODS; do
           if [ ! -d "$pod/k8s" ]; then
@@ -70,15 +110,20 @@ phases:
           export POD_NAME="$pod"
           for f in "$pod"/k8s/*.yaml "$pod"/k8s/*.yml; do
             [ -f "$f" ] || continue
+            # *.example.yaml/*.example.yml 은 placeholder 라 cicd 가 apply 하지 않음
+            # ExternalSecret 은 eks_addons 가 ESO helm + ClusterSecretStore 깔아두므로 정상 apply
+            case "$f" in *.example.yaml|*.example.yml) echo "  skip $f (example)"; continue;; esac
             envsubst < "$f" | kubectl apply -n "$NAMESPACE" -f -
           done
         done
 
       # ── 4. Rollout status (Deployment 만 · CronJob 은 skip) ──
+      # dashboard-svc 는 multi-stage (node build → python serve · web bundle 큼) 라
+      # 시작 시간 더 길어서 timeout 300s. 다른 pod 도 graceful term + readiness 여유 고려해 동일.
       - |
         for pod in $PODS; do
           if kubectl get deployment "$pod" -n "$NAMESPACE" >/dev/null 2>&1; then
-            kubectl rollout status deployment/"$pod" -n "$NAMESPACE" --timeout=180s || exit 1
+            kubectl rollout status deployment/"$pod" -n "$NAMESPACE" --timeout=300s || exit 1
           fi
         done
       - echo "=== Build complete ==="

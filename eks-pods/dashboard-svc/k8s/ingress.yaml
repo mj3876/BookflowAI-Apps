@@ -1,0 +1,39 @@
+# Public HTTPS Ingress for dashboard-svc (TLS via cert-manager · NGINX Ingress)
+# NLB → NGINX Ingress → dashboard-svc:80
+# Certificate 'bookflow-tls' 가 bookflow namespace 에 있어야 (certificate.yaml)
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard-svc
+  namespace: bookflow
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - bookflow.myosoon.store
+    secretName: bookflow-tls
+  rules:
+  - host: bookflow.myosoon.store
+    http:
+      paths:
+      # /auth/* → auth-pod (Entra OIDC login/callback/whoami/logout)
+      - path: /auth
+        pathType: Prefix
+        backend:
+          service:
+            name: auth-pod
+            port:
+              number: 80
+      # / → dashboard-svc (BFF + SPA)
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: dashboard-svc
+            port:
+              number: 80

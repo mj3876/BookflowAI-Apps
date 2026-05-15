@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reservation-ttl-cleanup
+  namespace: bookflow
+  labels:
+    app: inventory-svc
+    component: cronjob
+spec:
+  # 매 5분 — TTL 만료 reservation 자동 EXPIRED 처리 + reserved_qty 차감
+  # dev RDS 가 야간 destroy 되면 그 동안 cron 자체는 fail 가능 (acceptable · day 시간대만 의미)
+  schedule: "*/5 * * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: inventory-svc
+            component: cronjob
+        spec:
+          serviceAccountName: inventory-svc
+          restartPolicy: Never
+          containers:
+            - name: cleanup
+              image: ${ECR_REGISTRY}/bookflow/inventory-svc:${IMAGE_TAG}
+              imagePullPolicy: Always
+              command: ["python", "-m", "src.cron.reservation_cleanup"]
+              envFrom:
+                - configMapRef:
+                    name: inventory-svc-env
+                - secretRef:
+                    name: inventory-svc-secret
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
