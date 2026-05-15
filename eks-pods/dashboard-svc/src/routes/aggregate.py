@@ -408,3 +408,80 @@ async def overview(wh_id: int, ctx: AuthContext = Depends(require_auth)) -> dict
             ] if val is None
         ],
     }
+
+
+# ─── PR-B (2026-05-15) 4-step state machine v2 — /dashboard/orders/* proxy ──
+# intervention-svc /intervention/orders/* 호출 (state_machine.py · race-safe SQL).
+# 매트릭스: approve / dispatch / receive / reject / patch + batch + calendar.
+from ..clients import (
+    post_orders_approve, post_orders_dispatch, post_orders_receive,
+    post_orders_reject, patch_orders,
+    post_orders_batch_approve, post_orders_batch_dispatch, post_orders_batch_receive,
+    get_orders_calendar,
+)
+
+
+@router.post("/orders/{order_id}/approve")
+async def orders_approve(order_id: str, body: dict = Body(default={}),
+                          ctx: AuthContext = Depends(require_auth)):
+    """PENDING → APPROVED (양측 ✓) · body: {approval_side?: 'SOURCE'|'TARGET'|'FINAL'}"""
+    sc, data = await post_orders_approve(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/orders/{order_id}/dispatch")
+async def orders_dispatch(order_id: str, body: dict = Body(default={}),
+                           ctx: AuthContext = Depends(require_auth)):
+    """APPROVED → IN_TRANSIT · source -qty (inventory-svc /adjust 단일 writer)."""
+    sc, data = await post_orders_dispatch(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/orders/{order_id}/receive")
+async def orders_receive(order_id: str, body: dict = Body(default={}),
+                          ctx: AuthContext = Depends(require_auth)):
+    """IN_TRANSIT → EXECUTED · target +qty."""
+    sc, data = await post_orders_receive(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/orders/{order_id}/reject")
+async def orders_reject(order_id: str, body: dict = Body(...),
+                         ctx: AuthContext = Depends(require_auth)):
+    """any → REJECTED · rejection_stage 자동 기록 · IN_TRANSIT 거부 시만 source +qty 복원."""
+    sc, data = await post_orders_reject(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.patch("/orders/{order_id}")
+async def orders_patch(order_id: str, body: dict = Body(...),
+                        ctx: AuthContext = Depends(require_auth)):
+    """qty / target_location 수정 (PENDING/APPROVED 만)."""
+    sc, data = await patch_orders(order_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/orders/batch-approve")
+async def orders_batch_approve(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    """일괄 승인 · body: {order_ids: list[str]}"""
+    sc, data = await post_orders_batch_approve(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/orders/batch-dispatch")
+async def orders_batch_dispatch(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    sc, data = await post_orders_batch_dispatch(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.post("/orders/batch-receive")
+async def orders_batch_receive(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    sc, data = await post_orders_batch_receive(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.get("/orders/calendar")
+async def orders_calendar(from_date: str, to_date: str, ctx: AuthContext = Depends(require_auth)):
+    """캘린더 cell count · role/scope 자동 필터 (date × {inbound,outbound,in_transit,executed})."""
+    data = await get_orders_calendar(from_date, to_date, ctx.token)
+    return data or {"items": [], "_source": "intervention-svc unavailable"}

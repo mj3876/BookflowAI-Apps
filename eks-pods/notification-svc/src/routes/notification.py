@@ -40,21 +40,32 @@ router = APIRouter(prefix="/notification", tags=["notification"])
 #   spike.detected    - SNS 급등 도서 (SpikeUrgent 단 1종)
 #   newbook.request   - 출판사 신간 신청 (NewBookRequest 단 1종)
 #
-# 시트04 12 + 운영 확장 1 = 13 events.
-# 위 4 종 (Order/Spike/NewBook) 만 Redis 채널 publish, 나머지는 Logic Apps webhook 만.
-# OrderExecuted = 운영 확장 (매장 수령 처리 시점 · 시트04 미정의 · A1 inbound receive 신설).
+# PR-B (2026-05-15) 4-step state machine v2 정합 — 8 channel 로 확장:
+#   order.pending     - PENDING 발의 (OrderPending · ReturnPending)
+#   order.approved    - PENDING → APPROVED (OrderApproved · OrderApprovedFinal)
+#   order.dispatched  - APPROVED → IN_TRANSIT (OrderDispatched · AutoExecutedUrgent · StockDepartPending · StockArrivalPending)
+#   order.executed    - IN_TRANSIT → EXECUTED (OrderExecuted)
+#   order.rejected    - any → REJECTED (OrderRejected · OrderRejectedAfterDispatch · AutoRejectedBatch · payload 에 rejection_stage 포함)
+#   stock.changed     - inventory.on_hand 변동 (inventory-svc /adjust 가 직접 publish)
+#   spike.detected    - SNS 급등 (SpikeUrgent)
+#   newbook.request   - 신간 (NewBookRequest)
+#
+# 모든 order.* event 는 frontend useLiveInvalidate 가 invalidateQueries 트리거 (cross-user 정합).
 EVENT_CHANNEL = {
-    "OrderPending":         "order.pending",
-    "OrderApproved":        None,
-    "OrderRejected":        None,
-    "OrderExecuted":        None,
-    "AutoExecutedUrgent":   None,
-    "AutoRejectedBatch":    None,
-    "SpikeUrgent":          "spike.detected",
-    "StockDepartPending":   None,
-    "StockArrivalPending":  None,
-    "NewBookRequest":       "newbook.request",
-    "ReturnPending":        None,
+    "OrderPending":             "order.pending",
+    "OrderApproved":            "order.approved",      # PR-B 신규 (한쪽 동의)
+    "OrderApprovedFinal":       "order.approved",      # PR-B 신규 (양측 ✓ 완료)
+    "OrderDispatched":          "order.dispatched",    # PR-B 신규 (source 발송)
+    "OrderExecuted":            "order.executed",
+    "OrderRejected":            "order.rejected",
+    "OrderRejectedAfterDispatch": "order.rejected",    # PR-B 신규 (IN_TRANSIT 후 반품 · rename from After Approval)
+    "AutoExecutedUrgent":       "order.dispatched",    # 07:00 cron 자동 dispatch
+    "AutoRejectedBatch":        "order.rejected",      # 18:00 cron 자동 reject
+    "SpikeUrgent":              "spike.detected",
+    "StockDepartPending":       "order.dispatched",
+    "StockArrivalPending":      "order.dispatched",
+    "NewBookRequest":           "newbook.request",
+    "ReturnPending":            "order.pending",
 }
 
 

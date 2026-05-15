@@ -150,10 +150,12 @@ def _reject_overaccumulated(conn) -> list[dict]:
         rows = cur.fetchall()
         for r in rows:
             order_id, order_type, isbn13, qty, rc = r
+            # PR-B 4-step state machine v2: rejection_stage='PENDING' (자동 reject 는 PENDING 상태에서만 작동)
             cur.execute(
                 """
                 UPDATE pending_orders
                    SET status = 'REJECTED',
+                       rejection_stage = 'PENDING',
                        reject_reason = COALESCE(reject_reason, '누적 거절 자동 종결')
                  WHERE order_id = %s
                 """,

@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from .db import close_pool, init_pool
 from .models import ErrorResponse
 from .routes.intervention import router as intervention_router
+from .routes.orders import router as orders_router
 from .settings import settings
 
 logging.basicConfig(level=settings.log_level)
@@ -27,8 +28,10 @@ async def lifespan(app: FastAPI):
     close_pool()
 
 
-app = FastAPI(title="bookflow-intervention-svc", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="bookflow-intervention-svc", version="0.3.0", lifespan=lifespan)
 app.include_router(intervention_router)
+# PR-B: 4-step state machine v2 — /intervention/orders/* (dashboard-svc proxy 정합)
+app.include_router(orders_router, prefix="/intervention")
 
 
 # ─── A5 X-Request-ID middleware ──────────────────────────────────────────────
