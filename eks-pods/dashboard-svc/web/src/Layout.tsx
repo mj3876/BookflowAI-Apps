@@ -22,10 +22,9 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: '📊 본사 (전사 관제)',
     items: [
+      { to: '/plan',        label: '🎬 시연 발의',        desc: 'D+1 cascade 자동 발의 + 단건 발주',         allow: 'HQ' },
       { to: '/kpi',         label: '실시간 KPI',         desc: '전사 매출·거래량 한눈에',                allow: 'HQ' },
       { to: '/inventory',   label: '전사 재고',           desc: '모든 매장 재고와 부족 알림',              allow: 'HQ' },
-      { to: '/decision',    label: '의사결정 현황',       desc: 'AI 추천 검토 + 일자별 처리 기록',          allow: 'HQ' },
-      // PR-C v3: '외부 발주 승인' 은 /approval (모든 role 진입점) 으로 흡수됨
       { to: '/returns',     label: '반품 처리',           desc: '매장이 신청한 반품 승인 / 거부',           allow: 'HQ' },
       { to: '/requests',    label: '신간 편입 결정',      desc: '출판사 신간을 우리 매장에 들일지 결정',    allow: 'HQ' },
     ],
@@ -33,33 +32,28 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: '🏬 물류센터 (자기 권역)',
     items: [
-      { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간 (지점처럼)', allow: 'WH' },
-      // PR-C v4: /wh-approve 폐기 — /approval 사이드바 진입점으로 대체. /wh-instructions 는 추후 PR-D 에서 /logistics 흡수.
-      { to: '/wh-instructions', label: '출고/입고 지시',    desc: '출고/입고 지시 + 일자별 기록 (legacy · /logistics 진행 중)', allow: 'WH' },
-      { to: '/wh-manual',       label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'WH' },
+      { to: '/wh-inventory',    label: '내 거점창고 재고',  desc: '거점창고 1,000 SKU 책 단위 실시간', allow: 'WH' },
+      // 처리 (협의 · 출고/입고) 는 위 /approval + /logistics 사이드바 진입점 사용
     ],
   },
   {
     section: '🏪 매장 (자기 매장)',
     items: [
-      { to: '/branch-inventory', label: '매장 재고',         desc: '내 매장 도서 재고와 부족 알림',          allow: 'BRANCH' },
-      { to: '/branch-inbound',   label: '입고 확인',         desc: '매장 입고 처리 (승인 대기 분리)',        allow: 'BRANCH' },
+      { to: '/inventory',        label: '매장 재고',         desc: '내 매장 도서 재고와 부족 알림 (scope 자동)', allow: 'BRANCH' },
       { to: '/branch-sales',     label: '매장 매출',         desc: '내 매장 실시간 판매 (POS)',              allow: 'BRANCH' },
-      { to: '/branch-curation',  label: '내 매장 SNS 매칭',  desc: '전사 SNS 급등 도서 중 우리 매장 재고 보유분 (입고 요청 발의)', allow: 'BRANCH' },
-      { to: '/branch-manual',    label: '재고 수동 조정',    desc: '파손 / 분실 등 재고 보정',                allow: 'BRANCH' },
+      // 처리 (협의 · 입고) 는 위 /approval + /logistics 진입점 사용. SNS 매칭은 /spikes 의 내 매장 탭.
     ],
   },
   {
     section: '📚 카탈로그',
     items: [
       { to: '/books',  label: '도서 카탈로그', desc: '전체 도서 검색·정보 조회 (본사만 판매 ON/OFF)', allow: 'ALL' },
-      { to: '/spikes', label: 'SNS 급등 (전사)', desc: '최근 24시간 화제가 된 도서 (수요 급변 · 전사)', allow: 'ALL' },
+      { to: '/spikes', label: 'SNS 급등',     desc: '최근 24시간 화제 도서 (matched: 내 매장 보유분)', allow: 'ALL' },
     ],
   },
   {
     section: '⚙️ 시스템 (감사·시연)',
     items: [
-      { to: '/execution',     label: '위치별 실행 추적', desc: '오늘 입·출고 (APPROVED + EXECUTED) 위치별 합산',  allow: 'ALL' },
       { to: '/notifications', label: '알림 이력',     desc: '주문 / 시스템 이벤트 송신 이력',          allow: 'ALL' },
       { to: '/live',          label: '실시간 이벤트', desc: '재고 변동 · 주문 · SNS 급등 실시간 스트림', allow: 'ALL' },
     ],
@@ -74,13 +68,8 @@ const STATUS_LABEL: Record<string, string> = {
   up: '연결됨', connecting: '연결 중', down: '끊김',
 };
 
-// 페이지별 헤더 pill — DateHistoryTabs 적용 페이지에 "📅 일자별 처리 기록" 표시.
-const PAGES_WITH_HISTORY = new Set([
-  'approval',
-  'decision',
-  'wh-approve',
-  'wh-instructions',
-]);
+// PR-D: DateHistoryTabs 폐기 — 일자별 기록은 캘린더에서 (PAGES_WITH_HISTORY 미사용)
+const PAGES_WITH_HISTORY = new Set<string>([]);
 
 const PAGE_LABEL: Record<string, string> = {
   'home/hq': '본사 홈',
@@ -89,23 +78,16 @@ const PAGE_LABEL: Record<string, string> = {
   kpi: '실시간 KPI',
   inventory: '전사 재고',
   books: '도서 카탈로그',
-  decision: '의사결정 현황',
-  'final-plan': '최종 계획안',
-  execution: '위치별 실행 추적',
-  approval: '승인 / 거절',
+  approval: '협의 중',
+  logistics: '입출고',
+  calendar: '캘린더',
+  plan: '시연 발의',
   returns: '반품 처리',
   requests: '신간 신청',
   spikes: '급등 감지',
   'wh-dashboard': '권역 홈',
-  'wh-approve': '권역 처리 대기',
-  'wh-transfer': '권역 이동',
-  'wh-instructions': '출고 지시서',
-  'wh-manual': '창고 수동 조정',
-  'branch-inventory': '매장 재고',
-  'branch-inbound': '입고 확인',
+  'wh-inventory': '거점창고 재고',
   'branch-sales': '매장 매출',
-  'branch-curation': '내 매장 SNS 매칭',
-  'branch-manual': '매장 수동 조정',
   notifications: '알림 로그',
   live: '실시간 이벤트',
 };
