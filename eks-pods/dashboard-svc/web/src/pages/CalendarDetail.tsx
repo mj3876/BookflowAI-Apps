@@ -138,33 +138,27 @@ export default function CalendarDetail() {
   const { nameOf } = useLocations(role ?? 'hq-admin');
   const [tab, setTab] = useState<Tab>('inbound');
 
-  // backend 가 정확히 expected_arrival_at 기반 filter 안 함 (fetchPending 은 일반 PENDING 큐).
-  // 시연용 단순화: 모든 PENDING/APPROVED/IN_TRANSIT/EXECUTED 가져온 후 frontend 에서 date filter.
-  // (full 재설계 시 backend /dashboard/orders?date=... 추가 권장 — PR-D 또는 후속)
+  // fetchPending(date=YYYY-MM-DD) — backend 가 DATE(COALESCE(approved_at, executed_at, created_at))
+  // 기반으로 모든 status (PENDING/APPROVED/IN_TRANSIT/EXECUTED/REJECTED) 응답.
+  // expected_arrival_at 기반 정확도 차이는 시연용 충분 (PR-D 에서 backend /orders/list 신규 endpoint 권장).
   const q = useQuery({
     queryKey: ['orders', 'day', role, date],
-    queryFn: () => fetchPending(role!, { limit: 500 }),
-    enabled: !!role,
+    queryFn: () => fetchPending(role!, { limit: 500, date }),
+    enabled: !!role && !!date,
     staleTime: 5000,
     refetchInterval: 10000,
   });
 
   const grouped = useMemo(() => {
     if (!q.data || !role) return { inbound: [], outbound: [], in_transit: [], executed: [] };
+    // backend 가 이미 date filter — frontend 는 4 탭 분류만 수행.
     const result: Record<Tab, PendingOrder[]> = { inbound: [], outbound: [], in_transit: [], executed: [] };
     for (const o of q.data.items as PendingOrder[]) {
-      const exp = (o as PendingOrder & { expected_arrival_at?: string | null }).expected_arrival_at;
-      const exec = (o as PendingOrder & { executed_at?: string | null }).executed_at;
-      // 날짜 매칭: expected_arrival_at === date OR (executed_at 의 date 부분 === date)
-      const expDate = exp ? exp.slice(0, 10) : null;
-      const execDate = exec ? exec.slice(0, 10) : null;
-      const matches = expDate === date || execDate === date;
-      if (!matches) continue;
       const { tab: t } = classify(o, role, scope);
       if (t) result[t].push(o);
     }
     return result;
-  }, [q.data, role, date, scope]);
+  }, [q.data, role, scope]);
 
   if (!role || !date) return null;
   const counts = {
