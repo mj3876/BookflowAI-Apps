@@ -132,7 +132,7 @@ def _to_in_transit(cur, order_id: str, ctx: AuthContext) -> dict:
     # inventory-svc /adjust (source -qty) · PUBLISHER_ORDER 는 source=NULL → skip
     if src is not None and order_type != "PUBLISHER_ORDER":
         _call_inventory_adjust(ctx, location_id=src, isbn13=isbn, delta=-qty,
-                               reason=f"dispatch order={order_id}")
+                               reason=f"dispatch:{order_id[:8]}")
 
     _audit(cur, ctx, "order.dispatch", order_id)
     return {"order_id": order_id, "status": "IN_TRANSIT"}
@@ -155,7 +155,7 @@ def _to_executed(cur, order_id: str, ctx: AuthContext) -> dict:
     tgt, isbn, qty = row
 
     _call_inventory_adjust(ctx, location_id=tgt, isbn13=isbn, delta=+qty,
-                           reason=f"receive order={order_id}")
+                           reason=f"receive:{order_id[:8]}")
     _audit(cur, ctx, "order.receive", order_id)
     return {"order_id": order_id, "status": "EXECUTED"}
 
@@ -187,7 +187,7 @@ def _to_rejected(cur, order_id: str, ctx: AuthContext, reject_reason: str) -> di
     # IN_TRANSIT 거부만 source 복원 (출고된 재고 되돌림)
     if stage == "IN_TRANSIT" and src is not None and order_type != "PUBLISHER_ORDER":
         _call_inventory_adjust(ctx, location_id=src, isbn13=isbn, delta=+qty,
-                               reason=f"reject restore order={order_id}")
+                               reason=f"reject-restore:{order_id[:8]}")
 
     _audit(cur, ctx, f"order.reject.stage={stage}", order_id)
     return {"order_id": order_id, "status": "REJECTED", "rejection_stage": stage}
