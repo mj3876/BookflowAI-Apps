@@ -14,8 +14,13 @@ class Settings(BaseSettings):
     redis_host: str
     redis_port: int = 6379
 
-    # Azure Logic Apps webhook (ACS Email 발신 담당).
-    logic_apps_url: str = "http://azure-logic-apps-mock.stubs.svc.cluster.local"
+    # Azure Logic Apps SAS URL (워크플로 별 분리).
+    # notification/        → SpikeUrgent, NegotiationDelay, DailyPlanFinalized
+    # forecast-completed/  → ForecastCompleted
+    # delivery-completed/  → DeliveryCompleted
+    logic_apps_url: str = ""                        # la-bookflowmj-notification SAS URL
+    logic_apps_forecast_completed_url: str = ""     # la-bookflowmj-forecast-completed SAS URL
+    logic_apps_delivery_completed_url: str = ""     # la-bookflowmj-delivery-completed SAS URL
     logic_apps_timeout_seconds: float = 5.0
 
     auth_mode: str = "mock"
