@@ -18,7 +18,7 @@ import HqHome from './pages/HqHome';
 import BranchHome from './pages/BranchHome';
 import WhDashboard from './pages/WhDashboard';
 import WhInventory from './pages/WhInventory';
-import WhApprove from './pages/WhApprove';
+// PR-C v4 (2026-05-15): WhApprove → Approval 흡수됨 (사이드바 /approval 진입점 단일화)
 import WhTransfer from './pages/WhTransfer';
 import WhInstructions from './pages/WhInstructions';
 import Manual from './pages/Manual';
@@ -86,7 +86,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             {/* WH */}
             <Route path="/wh-dashboard"    element={<WhDashboard />} />
             <Route path="/wh-inventory"    element={<WhInventory />} />
-            <Route path="/wh-approve"      element={<WhApprove />} />
+            {/* /wh-approve 폐기 — /approval 로 대체 (PR-C v4) */}
+            <Route path="/wh-approve"      element={<Navigate to="/approval" replace />} />
             <Route path="/wh-transfer"     element={<WhTransfer />} />
             <Route path="/wh-instructions" element={<WhInstructions />} />
             <Route path="/wh-manual"       element={<Manual scope="WH" />} />
