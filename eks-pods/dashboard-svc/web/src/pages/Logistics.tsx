@@ -130,6 +130,65 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
   return <span className="text-xs text-bf-muted">{ORDER_STATUS_KO[st] ?? st}</span>;
 }
 
+function ExecutedGroup({ label, rows, nameOf, role, scope, onDone }: {
+  label: string;
+  rows: PendingOrder[];
+  nameOf: (id: number | undefined) => string | undefined;
+  role: string;
+  scope: { scope_wh_id: number | null; scope_store_id: number | null };
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  // 책별 sub-그룹 (같은 ISBN 묶기 — 과거 기록 가시성 ↑)
+  const byBook: Record<string, PendingOrder[]> = {};
+  for (const o of rows) {
+    const key = `${o.isbn13}|${o.title ?? ''}`;
+    (byBook[key] = byBook[key] || []).push(o);
+  }
+  const books = Object.entries(byBook).sort((a, b) => b[1].length - a[1].length);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-3 py-2 flex items-center justify-between text-sm font-medium bg-bf-surface/50 hover:bg-bf-surface"
+      >
+        <span>{open ? '▼' : '▶'} {label}</span>
+        <span className="text-xs text-bf-muted">{books.length} 도서 · {rows.length} 건</span>
+      </button>
+      {open && (
+        <div className="divide-y divide-bf-border">
+          {books.map(([key, list]) => {
+            const [isbn, title] = key.split('|');
+            const totalQty = list.reduce((s, o) => s + o.qty, 0);
+            return (
+              <div key={key} className="px-3 py-2">
+                <div className="text-sm font-medium truncate">
+                  {title || `ISBN ${isbn}`} <span className="text-xs text-bf-muted">· ISBN {isbn} · 총 {totalQty}권 · {list.length}건</span>
+                </div>
+                <div className="mt-1 space-y-0.5">
+                  {list.map((o) => {
+                    const { side } = classify(o, role, scope);
+                    return (
+                      <div key={o.order_id} className="text-xs text-bf-muted flex items-center gap-2">
+                        <span>{nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id ?? undefined) ?? '?'} · {o.qty}권</span>
+                        <span className="px-1.5 py-0.5 rounded bg-bf-surface border border-bf-border">
+                          {ORDER_STATUS_KO[o.status] ?? o.status}
+                        </span>
+                        <span className="ml-auto"><ActionButtons order={o} side={side} onDone={onDone} /></span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Logistics() {
   const role = getRole();
   const scope = getScope();
@@ -198,6 +257,27 @@ export default function Logistics() {
         <div className="divide-y divide-bf-border">
           {items.length === 0 ? (
             <div className="p-6 text-center text-sm text-bf-muted">오늘 처리할 항목이 없습니다.</div>
+          ) : tab === 'executed' ? (
+            /* 완료 탭 — order_type 별 그룹핑 (사용자 요청: 리스트만이라 보기 어려움) */
+            (() => {
+              const groups: Record<string, PendingOrder[]> = {};
+              for (const o of items) {
+                const key = o.order_type;
+                (groups[key] = groups[key] || []).push(o);
+              }
+              const order: string[] = ['REBALANCE', 'WH_TO_STORE', 'WH_TRANSFER', 'PUBLISHER_ORDER'];
+              return order.filter((k) => groups[k]?.length).map((k) => (
+                <ExecutedGroup
+                  key={k}
+                  label={`${ORDER_TYPE_KO[k] ?? k} (${groups[k].length})`}
+                  rows={groups[k]}
+                  nameOf={nameOf}
+                  role={role}
+                  scope={scope}
+                  onDone={() => q.refetch()}
+                />
+              ));
+            })()
           ) : (
             items.map((o) => {
               const { side } = classify(o, role, scope);
