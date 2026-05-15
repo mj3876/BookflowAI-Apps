@@ -138,6 +138,8 @@ export const fetchPending = (
     wh_id?: number;
     /** 특정 일자 (YYYY-MM-DD KST) detail · lazy fetch. summary count 와 함께 사용 권장. */
     date?: string;
+    /** PR-C v2: expected_arrival_at 기반 일자 — 캘린더 cell click 정합 (모든 status 포함) */
+    expected_date?: string;
     /** isbn13 / title / location 이름 검색 (intervention-svc /queue 의 q 파라미터) */
     q?: string;
     /** @deprecated 365일치 통째 fetch — 사용 자제. summary + date 조합 권장. */
@@ -151,7 +153,9 @@ export const fetchPending = (
   if (opts.order_type) qs.set('order_type', opts.order_type);
   if (opts.wh_id !== undefined) qs.set('wh_id', String(opts.wh_id));
   if (opts.q) qs.set('q', opts.q);
-  if (opts.date) {
+  if (opts.expected_date) {
+    qs.set('expected_date', opts.expected_date);
+  } else if (opts.date) {
     qs.set('date', opts.date);
   } else if (opts.include_history) {
     qs.set('include_history', 'true');

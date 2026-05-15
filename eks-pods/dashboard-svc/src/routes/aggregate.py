@@ -83,17 +83,19 @@ async def pending(
     include_history: bool = False,
     days: int = 7,
     date: str | None = None,
+    expected_date: str | None = None,
 ) -> Any:
     """V6.2 3-stage 의사결정 큐.
 
     - default: PENDING 만
-    - date=YYYY-MM-DD: 그 일자 (KST) 의 row 만 (lazy detail · DateHistoryTabs 가 호출)
+    - expected_date=YYYY-MM-DD: expected_arrival_at 기반 (캘린더 cell click 정합 · PR-C v2)
+    - date=YYYY-MM-DD: COALESCE(approved_at, executed_at, created_at) 기반 (legacy)
     - include_history=true (deprecated): PENDING + 최근 N일. /pending/summary + date 권장.
     intervention-svc 가 role/scope 자동 적용 (wh-manager 는 자기 wh 만, hq-admin 은 옵션 wh_id).
     """
     data = await get_pending_orders(
         ctx.token, limit=limit, offset=offset, order_type=order_type, wh_id=wh_id,
-        include_history=include_history, days=days, date=date,
+        include_history=include_history, days=days, date=date, expected_date=expected_date,
     )
     if data is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="intervention-svc unavailable")
