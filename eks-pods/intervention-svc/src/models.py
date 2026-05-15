@@ -30,6 +30,12 @@ class QueueItem(BaseModel):
     title: str | None = None  # P3-1 ISBN → 제목 우선 표시 (LEFT JOIN books · 일부 ISBN 은 books 에 없을 수도)
     approved_at: datetime | None = None
     executed_at: datetime | None = None
+    # 2026-05-15 v3: frontend whichSide 의 wh_id 매핑 정합 + 4-step state machine 표시
+    source_wh_id: int | None = None
+    target_wh_id: int | None = None
+    expected_arrival_at: str | None = None  # DATE 컬럼
+    dispatched_at: datetime | None = None
+    rejection_stage: str | None = None
 
 
 class QueueResponse(BaseModel):

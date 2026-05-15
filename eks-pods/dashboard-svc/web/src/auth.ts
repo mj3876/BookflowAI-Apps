@@ -30,6 +30,7 @@ export async function fetchSessionRole(): Promise<{ role: Role; scope: Scope } |
 const STORAGE_KEY = 'bookflow.role';
 const SCOPE_KEY = 'bookflow.scope';
 const MODE_KEY = 'bookflow.auth_mode';   // 'entra' (cookie) · 'mock' (Authorization mock-token)
+const TOKEN_OVERRIDE_KEY = 'bookflow.mock_token';  // 2026-05-15 v3 — 매장별 mock-token-branch-clerk-N
 
 export type AuthMode = 'entra' | 'mock';
 export function getAuthMode(): AuthMode {
@@ -60,21 +61,29 @@ const ROLE_GROUP: Record<Role, 'HQ' | 'WH' | 'BRANCH'> = {
 
 export function roleLabel(r: Role): string { return ROLE_LABELS[r]; }
 export function roleGroup(r: Role): 'HQ' | 'WH' | 'BRANCH' { return ROLE_GROUP[r]; }
-export function token(role: Role): string { return `Bearer mock-token-${role}`; }
+export function token(role: Role): string {
+  // 매장별 mock token override (Login.tsx 의 onPickStore 가 설정)
+  const override = localStorage.getItem(TOKEN_OVERRIDE_KEY);
+  if (override) return `Bearer ${override}`;
+  return `Bearer mock-token-${role}`;
+}
 
 export function getRole(): Role | null {
   const v = localStorage.getItem(STORAGE_KEY);
   return v ? (v as Role) : null;
 }
-export function setRole(r: Role | null, scope?: Scope): void {
+export function setRole(r: Role | null, scope?: Scope, tokenOverride?: string): void {
   if (r) {
     localStorage.setItem(STORAGE_KEY, r);
     const s = scope ?? MOCK_SCOPE[r];
     localStorage.setItem(SCOPE_KEY, JSON.stringify(s));
+    if (tokenOverride) localStorage.setItem(TOKEN_OVERRIDE_KEY, tokenOverride);
+    else localStorage.removeItem(TOKEN_OVERRIDE_KEY);
   } else {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(SCOPE_KEY);
     localStorage.removeItem(MODE_KEY);
+    localStorage.removeItem(TOKEN_OVERRIDE_KEY);
   }
   window.dispatchEvent(new Event('bookflow-role-changed'));
 }

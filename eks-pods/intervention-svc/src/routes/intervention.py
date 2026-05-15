@@ -556,10 +556,14 @@ def queue(
                po.source_location_id, po.target_location_id, po.qty,
                po.urgency_level, po.auto_execute_eligible, po.status, po.created_at,
                {rationale_col}, b.title,
-               po.approved_at, po.executed_at
+               po.approved_at, po.executed_at,
+               sl.wh_id AS source_wh_id, tl.wh_id AS target_wh_id,
+               po.expected_arrival_at, po.dispatched_at, po.rejection_stage
           FROM pending_orders po
           LEFT JOIN books b ON b.isbn13 = po.isbn13
           LEFT JOIN locations l ON l.location_id = po.target_location_id
+          LEFT JOIN locations sl ON sl.location_id = po.source_location_id
+          LEFT JOIN locations tl ON tl.location_id = po.target_location_id
          WHERE {' AND '.join(where)}
          {order_clause}
          LIMIT %s OFFSET %s
@@ -590,6 +594,9 @@ def queue(
             status=r[8], created_at=r[9],
             forecast_rationale=r[10], title=r[11],
             approved_at=r[12], executed_at=r[13],
+            source_wh_id=r[14], target_wh_id=r[15],
+            expected_arrival_at=r[16].isoformat() if r[16] else None,
+            dispatched_at=r[17], rejection_stage=r[18],
         )
         for r in rows
     ]

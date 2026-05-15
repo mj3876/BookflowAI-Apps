@@ -124,6 +124,13 @@ export type PendingOrder = {
   // include_history=true 응답에서 채워짐 (PENDING 모드는 null)
   approved_at?: string | null;
   executed_at?: string | null;
+  // 2026-05-15 v3 — frontend whichSide 정합 (wh-manager 권한 판정)
+  source_wh_id?: number | null;
+  target_wh_id?: number | null;
+  // 4-step state machine v2 표시용
+  expected_arrival_at?: string | null;
+  dispatched_at?: string | null;
+  rejection_stage?: string | null;
 };
 
 export const fetchOverview = (whId: number, role: Role) =>

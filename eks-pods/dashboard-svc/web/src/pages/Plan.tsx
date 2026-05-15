@@ -11,7 +11,11 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 
-import { postPlanDaily, postDecide } from '../api';
+import {
+  postPlanDaily, postDecide, fetchPending,
+  postOrdersBatchApprove, postOrdersBatchDispatch, postOrdersBatchReceive,
+  type PendingOrder,
+} from '../api';
 import { getRole } from '../auth';
 import { useToast } from '../components/Toast';
 
@@ -41,16 +45,56 @@ export default function Plan() {
   const planMu = useMutation({
     mutationFn: () => postPlanDaily(role!),
     onSuccess: (r: { snapshot_date: string; rows_created: number; isbns_planned: number; by_stage?: Record<string, number> }) => {
-      const s1 = r.by_stage?.['1'] ?? 0;
-      const s2 = r.by_stage?.['2'] ?? 0;
-      const s3 = r.by_stage?.['3'] ?? 0;
-      const msg = `✓ D+1 (${r.snapshot_date}) plan 발의 — ${r.rows_created}건 (${r.isbns_planned} 도서) · 1단계 ${s1} · 2단계 ${s2} · 3단계 ${s3}`;
+      const s0 = r.by_stage?.['0'] ?? 0;  // REBALANCE
+      const s1 = r.by_stage?.['1'] ?? 0;  // WH_TO_STORE
+      const s2 = r.by_stage?.['2'] ?? 0;  // WH_TRANSFER
+      const s3 = r.by_stage?.['3'] ?? 0;  // PUBLISHER_ORDER
+      const msg = `✓ D+1 (${r.snapshot_date}) plan — 총 ${r.rows_created}건 (${r.isbns_planned} 도서) · 🔄 재분배 ${s0} · 🏬 매장 보충 ${s1} · 🚛 권역 이동 ${s2} · 📦 외부 발주 ${s3}`;
       setDemoResult(msg);
       showToast({ type: 'success', message: msg });
       invalidateAll();
     },
     onError: (e: Error) => showToast({ type: 'error', message: `plan 발의 실패: ${e.message}` }),
   });
+
+  // 시연용 풀 cycle 자동 (T) — PENDING → APPROVED → IN_TRANSIT → EXECUTED 일괄
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoProgress, setAutoProgress] = useState<string | null>(null);
+  const autoFullCycle = async () => {
+    if (!window.confirm('현재 PENDING 모두 (강제 승인) → 출고 → 입고 한 번에 진행합니다. 시연용 풀 cycle.')) return;
+    setAutoBusy(true);
+    setAutoProgress('1/3 PENDING fetch 중…');
+    try {
+      // 1. PENDING 모두 가져옴 (limit 500)
+      const pendRes = await fetchPending(role!, { limit: 500 });
+      const pendIds = (pendRes.items as PendingOrder[]).filter((o) => o.status === 'PENDING').map((o) => o.order_id);
+      if (pendIds.length === 0) {
+        showToast({ type: 'info', message: 'PENDING 없음 — 먼저 시연 발의' });
+        return;
+      }
+      setAutoProgress(`2/3 ${pendIds.length}건 강제 승인 중…`);
+      const appr = await postOrdersBatchApprove(role!, { order_ids: pendIds });
+      const approvedIds = appr.ok.map((o: unknown) => (o as { order_id: string }).order_id);
+
+      setAutoProgress(`3/3 ${approvedIds.length}건 출고+입고 중…`);
+      const disp = await postOrdersBatchDispatch(role!, { order_ids: approvedIds });
+      const dispatchedIds = disp.ok.map((o: unknown) => (o as { order_id: string }).order_id);
+
+      const recv = await postOrdersBatchReceive(role!, { order_ids: dispatchedIds });
+      const executedIds = recv.ok.map((o: unknown) => (o as { order_id: string }).order_id);
+
+      const result = `✓ 풀 cycle 완료 — 승인 ${appr.ok.length} · 출고 ${disp.ok.length} · 입고 ${recv.ok.length} · 최종 EXECUTED ${executedIds.length}`;
+      setAutoProgress(result);
+      showToast({ type: 'success', message: result });
+      invalidateAll();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast({ type: 'error', message: `풀 cycle 실패: ${msg}` });
+      setAutoProgress(`✗ 실패: ${msg}`);
+    } finally {
+      setAutoBusy(false);
+    }
+  };
 
   const decideMu = useMutation({
     mutationFn: () => postDecide(role!, {
@@ -105,6 +149,29 @@ export default function Plan() {
         {demoResult && (
           <div className="text-xs px-3 py-2 rounded bg-bf-success/10 text-bf-success border border-bf-success/30">
             {demoResult}
+          </div>
+        )}
+      </div>
+
+      {/* 시연용 풀 cycle 자동 완성 (T) */}
+      <div className="bf-card p-4 space-y-3 border-bf-warn/40">
+        <div>
+          <h2 className="text-lg font-semibold">⚡ 시연 풀 cycle 자동</h2>
+          <div className="text-sm text-bf-muted mt-1">
+            현재 PENDING 전체 → 강제 승인 (escalation 양측 자동) → 출고 → 입고 → EXECUTED 한 번에. <strong className="text-bf-warn">시연 시간 절약용</strong>.
+          </div>
+        </div>
+        <button
+          type="button"
+          className="px-5 py-2.5 rounded bg-bf-warn text-white font-medium hover:opacity-90 disabled:opacity-40"
+          disabled={autoBusy}
+          onClick={autoFullCycle}
+        >
+          {autoBusy ? autoProgress ?? '진행 중…' : '⚡ PENDING → APPROVED → IN_TRANSIT → EXECUTED 풀 cycle'}
+        </button>
+        {autoProgress && !autoBusy && (
+          <div className="text-xs px-3 py-2 rounded bg-bf-warn/10 text-bf-warn border border-bf-warn/30">
+            {autoProgress}
           </div>
         )}
       </div>

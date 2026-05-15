@@ -28,7 +28,7 @@ def _fetch_order_meta(cur, order_id: str) -> dict:
     cur.execute(
         """
         SELECT po.order_type, po.source_location_id, po.target_location_id, po.status,
-               s.wh_id AS source_wh, t.wh_id AS target_wh
+               s.wh_id AS source_wh, t.wh_id AS target_wh, po.urgency_level
           FROM pending_orders po
           LEFT JOIN locations s ON s.location_id = po.source_location_id
           LEFT JOIN locations t ON t.location_id = po.target_location_id
@@ -46,6 +46,7 @@ def _fetch_order_meta(cur, order_id: str) -> dict:
         "status": row[3],
         "source_wh": row[4],
         "target_wh": row[5],
+        "urgency_level": row[6],
     }
 
 
@@ -66,20 +67,34 @@ def _is_target_party(ctx: AuthContext, meta: dict) -> bool:
 
 
 class Authority:
+    """2026-05-15 v3 권한 매트릭스 (사용자 정정):
+      - REBALANCE: 양측 매장 branch-clerk (정상) · hq-admin/외부 wh-manager (escalation BOTH)
+      - WH_TO_STORE: source wh-manager + target branch-clerk · hq escalation
+      - WH_TRANSFER: 양측 wh-manager · hq escalation
+      - PUBLISHER_ORDER + NEWBOOK: hq-admin FINAL 단독
+      - PUBLISHER_ORDER 그 외: hq-admin 또는 target wh-manager FINAL
+    """
+
     @staticmethod
     def can_approve(ctx: AuthContext, meta: dict) -> bool:
         if ctx.role == "hq-admin":
-            return True
+            return True  # 모든 order 강제 승인 가능 (escalation = BOTH)
         if meta["order_type"] == "PUBLISHER_ORDER":
-            return False  # 외부 발주 = hq 단독
-        return _is_source_party(ctx, meta) or _is_target_party(ctx, meta)
+            # NEWBOOK = hq 단독 · 그 외 = target wh-manager 가능
+            if meta.get("urgency_level") == "NEWBOOK":
+                return False
+            return ctx.role == "wh-manager" and ctx.scope_wh_id == meta["target_wh"]
+        # REBALANCE / WH_TO_STORE / WH_TRANSFER — 양측 협의 또는 escalation
+        # branch-clerk: source/target 매장 매칭 (정상)
+        # wh-manager: source/target wh 매칭 (정상) 또는 escalation (BOTH)
+        return _is_source_party(ctx, meta) or _is_target_party(ctx, meta) or ctx.role == "wh-manager"
 
     @staticmethod
     def can_dispatch(ctx: AuthContext, meta: dict) -> bool:
         if ctx.role == "hq-admin":
             return True
         if meta["order_type"] == "PUBLISHER_ORDER":
-            return False
+            return ctx.role == "wh-manager" and ctx.scope_wh_id == meta["target_wh"]
         # source 측 단독 (양측 협의 이미 끝남)
         return _is_source_party(ctx, meta)
 
@@ -88,7 +103,7 @@ class Authority:
         if ctx.role == "hq-admin":
             return True
         if meta["order_type"] == "PUBLISHER_ORDER":
-            return False
+            return ctx.role == "wh-manager" and ctx.scope_wh_id == meta["target_wh"]
         return _is_target_party(ctx, meta)
 
     @staticmethod
@@ -96,7 +111,9 @@ class Authority:
         if ctx.role == "hq-admin":
             return True
         if meta["order_type"] == "PUBLISHER_ORDER":
-            return False
+            if meta.get("urgency_level") == "NEWBOOK":
+                return False
+            return ctx.role == "wh-manager" and ctx.scope_wh_id == meta["target_wh"]
         # IN_TRANSIT 후 reject = 반품 (target 측만)
         if meta["status"] == "IN_TRANSIT":
             return _is_target_party(ctx, meta)

@@ -168,6 +168,16 @@ export default function Approval() {
     { key: 'PUBLISHER_ORDER', label: '📦 외부 발주' },
   ];
 
+  // 사용자별 overview 통계
+  const mySide = { source: 0, target: 0, escalation: 0 };
+  for (const o of items) {
+    const side = whichSide(o, scope);
+    if (side === 'SOURCE') mySide.source++;
+    else if (side === 'TARGET') mySide.target++;
+    else if (side === 'BOTH') mySide.source++;
+    else if (role === 'hq-admin') mySide.escalation++;
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -181,11 +191,31 @@ export default function Approval() {
           {queryRes.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
           <button
             type="button"
-            className="bf-btn-primary text-xs"
+            className="bg-bf-primary text-white px-4 py-2 rounded font-medium text-sm hover:opacity-90 disabled:opacity-40"
             disabled={bulkBusy || items.length === 0}
             onClick={bulkApprove}
-            title="이 페이지의 PENDING 전체 일괄 동의"
-          >⚡ 일괄 동의 ({items.length})</button>
+            title={role === 'hq-admin' ? '이 페이지의 PENDING 전체 강제 승인 (escalation · 양측 자동)' : '이 페이지의 PENDING 전체 자기 측 동의'}
+          >{role === 'hq-admin' ? `⚡ 강제 승인 (${items.length})` : `⚡ 일괄 동의 (${items.length})`}</button>
+        </div>
+      </div>
+
+      {/* 사용자별 overview card */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div className="bf-card p-3">
+          <div className="text-xs text-bf-muted">전체 협의 대기</div>
+          <div className="text-2xl font-semibold mt-0.5">{totalPending.toLocaleString()}</div>
+        </div>
+        <div className="bf-card p-3">
+          <div className="text-xs text-bf-muted">📤 내 측이 출고</div>
+          <div className="text-2xl font-semibold mt-0.5 text-bf-primary">{mySide.source.toLocaleString()}</div>
+        </div>
+        <div className="bf-card p-3">
+          <div className="text-xs text-bf-muted">📥 내 측이 입고</div>
+          <div className="text-2xl font-semibold mt-0.5 text-bf-success">{mySide.target.toLocaleString()}</div>
+        </div>
+        <div className="bf-card p-3">
+          <div className="text-xs text-bf-muted">{role === 'hq-admin' ? '⚡ 강제 승인 대상' : '🔒 권한 없음'}</div>
+          <div className="text-2xl font-semibold mt-0.5 text-bf-muted">{role === 'hq-admin' ? mySide.escalation.toLocaleString() : (items.length - mySide.source - mySide.target).toLocaleString()}</div>
         </div>
       </div>
 
@@ -252,15 +282,18 @@ export default function Approval() {
                       </span>
                     )}
                   </div>
+                  {o.title && (
+                    <div className="text-sm text-bf-text mt-0.5 truncate">{o.title}</div>
+                  )}
                   <div className="text-xs text-bf-muted mt-1 truncate">
-                    ISBN {o.isbn13} · 수량 {o.qty}권 · {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id) ?? '?'}
+                    ISBN {o.isbn13} · 수량 {o.qty}권 · {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id ?? undefined) ?? '?'}
                   </div>
                 </div>
-                <div className="flex-shrink-0 flex gap-1">
+                <div className="flex-shrink-0 flex items-center gap-2">
                   {canEdit && !done && (
                     <button
                       type="button"
-                      className="bf-btn-secondary text-xs"
+                      className="px-3 py-1.5 text-xs rounded border border-bf-border bg-bf-surface hover:border-bf-primary hover:text-bf-primary transition"
                       onClick={() => setEditTarget({
                         order_id: o.order_id, isbn13: o.isbn13, qty: o.qty,
                         target_location_id: o.target_location_id,
@@ -272,13 +305,14 @@ export default function Approval() {
                     <>
                       <button
                         type="button"
-                        className="bf-btn-primary text-xs"
+                        className="px-3 py-1.5 text-xs rounded bg-bf-primary text-white font-medium hover:opacity-90 disabled:opacity-40"
                         disabled={approveMu.isPending}
                         onClick={() => approveMu.mutate(o.order_id)}
-                      >✓ 동의</button>
+                        title={role === 'hq-admin' ? '강제 승인 (양측 자동 · escalation)' : '내 측 동의'}
+                      >{role === 'hq-admin' ? '⚡ 강제 승인' : '✓ 동의'}</button>
                       <button
                         type="button"
-                        className="bf-btn-danger-secondary text-xs"
+                        className="px-3 py-1.5 text-xs rounded border border-bf-danger/40 text-bf-danger bg-bf-danger/5 hover:bg-bf-danger/15 transition disabled:opacity-40"
                         disabled={rejectMu.isPending}
                         onClick={() => {
                           const reason = window.prompt('거부 사유');
@@ -287,7 +321,7 @@ export default function Approval() {
                       >✗ 거부</button>
                     </>
                   ) : !canAct ? (
-                    <span className="text-xs text-bf-muted">권한 없음</span>
+                    <span className="text-xs text-bf-muted px-2 py-1">권한 없음</span>
                   ) : null}
                 </div>
               </div>

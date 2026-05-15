@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchSessionRole, setAuthMode, setRole, type Role } from '../auth';
+import { fetchSessionRole, setAuthMode, setRole, type Role, type Scope } from '../auth';
 
 const ROLES: { id: Role; label: string; group: string; desc: string }[] = [
-  { id: 'hq-admin',     label: '본사 관리자',  group: 'HQ',     desc: 'KPI · Books · Decision · Approval · Returns · Requests' },
-  { id: 'wh-manager-1', label: '창고 매니저 (수도권)', group: 'WH',     desc: 'Dashboard · Approve · Transfer · Manual' },
-  { id: 'wh-manager-2', label: '창고 매니저 (영남)',   group: 'WH',     desc: 'Dashboard · Approve · Transfer · Manual' },
-  { id: 'branch-clerk', label: '지점 직원',     group: 'BRANCH', desc: 'Inventory · Inbound · Sales · Curation' },
+  { id: 'hq-admin',     label: '본사 관리자',  group: 'HQ',     desc: '시연 발의 + 전사 관제' },
+  { id: 'wh-manager-1', label: '창고 매니저 (수도권)', group: 'WH',     desc: '수도권 권역 협의 + 입출고' },
+  { id: 'wh-manager-2', label: '창고 매니저 (영남)',   group: 'WH',     desc: '영남 권역 협의 + 입출고' },
+];
+
+// 2026-05-15 v3 시연 편의 — 12 매장 별도 mock (실제 운영은 Entra ID OIDC)
+const STORES: { id: number; name: string; wh: number }[] = [
+  { id: 1, name: '강남점',    wh: 1 }, { id: 2, name: '광화문점',  wh: 1 },
+  { id: 3, name: '잠실점',    wh: 1 }, { id: 4, name: '홍대점',    wh: 1 },
+  { id: 5, name: '신촌점',    wh: 1 }, { id: 6, name: '용산점',    wh: 1 },
+  { id: 7, name: '부산 센텀점', wh: 2 }, { id: 8, name: '부산 서면점', wh: 2 },
+  { id: 9, name: '울산 삼산점', wh: 2 }, { id: 10, name: '대구 교대점', wh: 2 },
+  { id: 11, name: '대구 서구점', wh: 2 }, { id: 12, name: '포항 양덕점', wh: 2 },
 ];
 
 export default function Login() {
@@ -29,6 +38,15 @@ export default function Login() {
   const onPick = (r: Role) => {
     setAuthMode('mock');  // mock 버튼 → Authorization Bearer mock-token-{role}
     setRole(r);
+    nav('/', { replace: true });
+  };
+
+  // 매장 직원 mock — store_id 별 별도 mock token + scope override
+  const onPickStore = (storeId: number) => {
+    setAuthMode('mock');
+    const scope: Scope = { scope_wh_id: null, scope_store_id: storeId };
+    // store-specific role key ('branch-clerk' 로 frontend Role type 유지하되 mockSuffix 로 token 구분)
+    setRole('branch-clerk', scope, `mock-token-branch-clerk-${storeId}`);
     nav('/', { replace: true });
   };
 
@@ -73,7 +91,7 @@ export default function Login() {
           —— 또는 개발용 mock 역할 선택 ——
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
           {ROLES.map((r) => (
             <button
               key={r.id}
@@ -87,6 +105,22 @@ export default function Login() {
                 <span className="text-base font-semibold text-bf-text">{r.label}</span>
               </div>
               <div className="text-xs text-bf-muted">{r.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        <div className="text-center text-[11px] text-bf-muted mb-2 mt-4">
+          —— 매장 직원 (12 매장 시연용) ——
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {STORES.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => onPickStore(s.id)}
+              className="text-left p-2 card hover:border-bf-primary hover:shadow transition cursor-pointer"
+            >
+              <div className="text-[10px] text-bf-muted">{s.wh === 1 ? '수도권' : '영남'}</div>
+              <div className="text-sm font-semibold text-bf-text">{s.name}</div>
             </button>
           ))}
         </div>
