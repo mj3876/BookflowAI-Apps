@@ -98,8 +98,10 @@ phases:
       # ── 3. K8s manifest envsubst → apply ──
       # RDS endpoint · DuckDNS FQDN 동적 fetch (매일 redeploy 시 stale 방지)
       - export RDS_HOST=$(aws rds describe-db-instances --region "$AWS_REGION" --db-instance-identifier bookflow-postgres --query "DBInstances[0].Endpoint.Address" --output text)
+      # 2026-05-15: REDIS_HOST 동적 fetch (매일 redeploy 시 ElastiCache endpoint 변동 — configmap stale 회피)
+      - export REDIS_HOST=$(aws elasticache describe-cache-clusters --region "$AWS_REGION" --cache-cluster-id bookflow-redis --show-cache-node-info --query "CacheClusters[0].CacheNodes[0].Endpoint.Address" --output text)
       - export DOMAIN="${DOMAIN:-bookflow.myosoon.store}"
-      - echo "RDS_HOST=$RDS_HOST  DOMAIN=$DOMAIN"
+      - echo "RDS_HOST=$RDS_HOST  REDIS_HOST=$REDIS_HOST  DOMAIN=$DOMAIN"
       - |
         for pod in $PODS; do
           if [ ! -d "$pod/k8s" ]; then

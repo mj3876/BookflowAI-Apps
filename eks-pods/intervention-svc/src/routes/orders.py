@@ -317,6 +317,13 @@ def calendar(
     else:
         raise HTTPException(status_code=403, detail=f"unknown role: {ctx.role}")
 
+    # 2026-05-15 v4: 캘린더 = 입출고 (logistics) 현황만 표시 — 협의 (PENDING) 제외.
+    # 사용자 요구 "승인과 입출고를 명확히 분리".
+    # 단계별 의미:
+    #   📥 inbound  = target=내 측 · APPROVED + IN_TRANSIT (출고 대기 + 운송 중 도착 예정)
+    #   📤 outbound = source=내 측 · APPROVED (발송 대기)
+    #   🚚 in_transit = 양측 · IN_TRANSIT (운송 중)
+    #   ✅ executed = 양측 · EXECUTED/AUTO_EXECUTED · executed_at = day
     sql = f"""
         WITH base AS (
             SELECT po.order_id, po.status, po.expected_arrival_at,
@@ -326,13 +333,14 @@ def calendar(
               FROM pending_orders po
               LEFT JOIN locations s ON s.location_id = po.source_location_id
               LEFT JOIN locations t ON t.location_id = po.target_location_id
-             WHERE po.expected_arrival_at BETWEEN %s AND %s
-                OR (po.executed_at IS NOT NULL AND po.executed_at::date BETWEEN %s AND %s)
+             WHERE po.status IN ('APPROVED','IN_TRANSIT','EXECUTED','AUTO_EXECUTED')
+               AND (po.expected_arrival_at BETWEEN %s AND %s
+                    OR (po.executed_at IS NOT NULL AND po.executed_at::date BETWEEN %s AND %s))
         )
         SELECT
             COALESCE(expected_arrival_at, exec_date) AS day,
-            COUNT(*) FILTER (WHERE is_tgt AND status IN ('PENDING','APPROVED','IN_TRANSIT')) AS inbound,
-            COUNT(*) FILTER (WHERE is_src AND status IN ('PENDING','APPROVED')) AS outbound,
+            COUNT(*) FILTER (WHERE is_tgt AND status IN ('APPROVED','IN_TRANSIT')) AS inbound,
+            COUNT(*) FILTER (WHERE is_src AND status = 'APPROVED') AS outbound,
             COUNT(*) FILTER (WHERE (is_src OR is_tgt) AND status = 'IN_TRANSIT') AS in_transit,
             COUNT(*) FILTER (WHERE (is_src OR is_tgt) AND status IN ('EXECUTED','AUTO_EXECUTED')
                                    AND exec_date = COALESCE(expected_arrival_at, exec_date)) AS executed

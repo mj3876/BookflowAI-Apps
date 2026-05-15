@@ -8,7 +8,7 @@ data:
   FORECAST_RDS_PORT: "5432"
   FORECAST_RDS_DB: "bookflow"
   FORECAST_RDS_USER: "forecast_svc"
-  FORECAST_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  FORECAST_REDIS_HOST: "${REDIS_HOST}"
   FORECAST_REDIS_PORT: "6379"
   FORECAST_AUTH_MODE: "mock"
   FORECAST_LOG_LEVEL: "INFO"

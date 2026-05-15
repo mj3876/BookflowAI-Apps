@@ -8,7 +8,7 @@ data:
   NOTIFICATION_RDS_PORT: "5432"
   NOTIFICATION_RDS_DB: "bookflow"
   NOTIFICATION_RDS_USER: "notification_svc"
-  NOTIFICATION_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  NOTIFICATION_REDIS_HOST: "${REDIS_HOST}"
   NOTIFICATION_REDIS_PORT: "6379"
   # Phase 4: Azure Logic Apps HTTP trigger callback URL.
   # TODO: move signed callback URL to Secret/ESO after integration testing.

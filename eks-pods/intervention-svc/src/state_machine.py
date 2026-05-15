@@ -145,19 +145,79 @@ def _to_executed(cur, order_id: str, ctx: AuthContext) -> dict:
         UPDATE pending_orders
            SET status = 'EXECUTED', executed_at = NOW(), executed_by = %s
          WHERE order_id = %s AND status = 'IN_TRANSIT'
-        RETURNING target_location_id, isbn13, qty
+        RETURNING target_location_id, isbn13, qty, order_type
         """,
         (ctx.user_id, order_id),
     )
     row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=409, detail="order not in IN_TRANSIT state")
-    tgt, isbn, qty = row
+    tgt, isbn, qty, order_type = row
 
     _call_inventory_adjust(ctx, location_id=tgt, isbn13=isbn, delta=+qty,
                            reason=f"receive:{order_id[:8]}")
     _audit(cur, ctx, "order.receive", order_id)
-    return {"order_id": order_id, "status": "EXECUTED"}
+
+    # 2026-05-15 v4 GG: chained order automation
+    # PUBLISHER_ORDER 또는 WH_TRANSFER 의 target=wh 본체 receive 시 → 부족 매장 1개로 WH_TO_STORE 자동 INSERT
+    # (외부 발주 / 권역 이동 모두 wh 도착 후 매장 분배 단계 자연스럽게 trigger)
+    chained_id = None
+    if order_type in ("PUBLISHER_ORDER", "WH_TRANSFER"):
+        chained_id = _trigger_chained_wh_to_store(cur, order_id, tgt, isbn, qty, ctx)
+    return {"order_id": order_id, "status": "EXECUTED", "chained_order_id": chained_id}
+
+
+def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qty: int, ctx: AuthContext) -> str | None:
+    """PUBLISHER_ORDER / WH_TRANSFER 도착 후 매장 분배 (chained WH_TO_STORE).
+    가장 부족한 매장 (effective_available 최저) 1개 선택 + 자동 PENDING INSERT.
+    """
+    # 1. target wh_id 결정 (wh 본체 location 의 wh_id)
+    cur.execute("SELECT wh_id FROM locations WHERE location_id = %s AND location_type='WH'", (wh_loc,))
+    row = cur.fetchone()
+    if not row:
+        return None  # wh 가 아니면 chained 안 함 (이미 매장 발주)
+    wh_id = row[0]
+
+    # 2. 그 wh 권역의 매장 중 isbn 가용 재고 가장 낮은 1개 선택
+    cur.execute(
+        """
+        SELECT i.location_id, COALESCE(i.on_hand, 0) - COALESCE(i.reserved_qty, 0) AS available
+          FROM inventory i
+          JOIN locations l ON l.location_id = i.location_id
+         WHERE l.wh_id = %s AND l.location_type = 'STORE_OFFLINE' AND l.active = TRUE
+           AND i.isbn13 = %s
+         ORDER BY available ASC
+         LIMIT 1
+        """,
+        (wh_id, isbn),
+    )
+    target_row = cur.fetchone()
+    if not target_row:
+        return None
+    target_store = target_row[0]
+
+    # 3. WH_TO_STORE PENDING 자동 INSERT (LEAD_DAYS=1 → expected_arrival_at = NOW + 1d)
+    chained_id = None
+    cur.execute(
+        """
+        INSERT INTO pending_orders
+            (order_id, order_type, isbn13, source_location_id, target_location_id, qty,
+             est_lead_time_hours, est_cost, urgency_level, auto_execute_eligible,
+             status, created_at, expected_arrival_at,
+             forecast_rationale)
+        VALUES (gen_random_uuid(), 'WH_TO_STORE', %s, %s, %s, %s,
+                6, %s * 500, 'NORMAL', false,
+                'PENDING', NOW(), (NOW() + INTERVAL '1 day')::date,
+                jsonb_build_object('reason', 'chained_from_wh_arrival', 'parent_order_id', %s, 'expected_arrival_date', (NOW() + INTERVAL '1 day')::date::text))
+        RETURNING order_id
+        """,
+        (isbn, wh_loc, target_store, qty, qty, parent_id),
+    )
+    chained = cur.fetchone()
+    if chained:
+        chained_id = str(chained[0])
+        _audit(cur, ctx, f"order.chained_wh_to_store.from={parent_id[:8]}", chained_id)
+    return chained_id
 
 
 # ─── any → REJECTED (rejection_stage 자동 기록 · IN_TRANSIT 시만 source 복원) ─

@@ -9,7 +9,7 @@ data:
   DASHBOARD_DECISION_SVC_URL:     "http://decision-svc.bookflow.svc.cluster.local"
   DASHBOARD_NOTIFICATION_SVC_URL: "http://notification-svc.bookflow.svc.cluster.local"
   DASHBOARD_INTERVENTION_SVC_URL: "http://intervention-svc.bookflow.svc.cluster.local"
-  DASHBOARD_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  DASHBOARD_REDIS_HOST: "${REDIS_HOST}"
   DASHBOARD_REDIS_PORT: "6379"
   DASHBOARD_RDS_HOST: "${RDS_HOST}"
   DASHBOARD_RDS_PORT: "5432"

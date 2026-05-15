@@ -91,14 +91,36 @@ export default function Approval() {
     refetchInterval: 10000,
   });
 
+  // 별도 stats query — stage filter 무시한 전체 stage_counts + total + mySide overview 용
+  // (탭 변경/검색 시에도 4 탭 카운트 모두 표시 · EE+FF · 그리고 CC overview 전체 기준)
+  const statsRes = useQuery({
+    queryKey: ['approval-stats', role, q],
+    queryFn: () => fetchPending(role!, { limit: 1, ...(q ? { q } : {}) }),
+    enabled: !!role,
+    staleTime: 5000,
+    refetchInterval: 15000,
+  });
+  const fullStats = statsRes.data;
+
   const items = useMemo(() => {
     const list = (queryRes.data?.items as PendingOrder[] | undefined) ?? [];
     return list.filter((o) => o.status === 'PENDING');
   }, [queryRes.data]);
   const totalPending = queryRes.data?.total ?? 0;
+  const totalAll = fullStats?.total ?? 0;  // 전체 (stage filter 무시)
 
-  // 카운트 보조 — stage_counts (각 order_type 별 count) backend 응답 (있다면)
-  const stageCounts = (queryRes.data?.stage_counts as Record<string, number> | undefined) ?? {};
+  // 카운트 보조 — stage filter 무시한 전체 stage_counts (4 탭 모두 정확히)
+  const stageCounts = (fullStats?.stage_counts as Record<string, number> | undefined) ?? {};
+
+  // 전체 row 의 mySide overview (페이지 50 만 아닌) — 별도 limit 큰 fetch
+  // (한 사용자가 자기 측 row 가 전체 몇 건인지 보기 위해)
+  const mySideRes = useQuery({
+    queryKey: ['approval-myside', role],
+    queryFn: () => fetchPending(role!, { limit: 500 }),
+    enabled: !!role,
+    staleTime: 10000,
+    refetchInterval: 30000,
+  });
 
   const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ['approval'] });
@@ -144,11 +166,16 @@ export default function Approval() {
   const bulkApprove = async () => {
     if (items.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); return; }
     const ids = items.map((o) => o.order_id);
-    if (!window.confirm(`이 페이지의 PENDING ${ids.length}건 일괄 승인합니다.`)) return;
+    const label = role === 'hq-admin' ? '강제 승인 (escalation · 양측 자동)' : '동의';
+    if (!window.confirm(`이 페이지의 PENDING ${ids.length}건 ${label} 합니다.\n(전체 ${totalAll}건 중 현재 페이지)`)) return;
     setBulkBusy(true);
     try {
       const r = await postOrdersBatchApprove(role!, { order_ids: ids });
-      showToast({ type: 'success', message: `✓ 일괄 ${r.ok.length}건 성공 · 실패 ${r.failed.length}` });
+      showToast({
+        type: 'success',
+        message: `✓ ${label} 완료 — 성공 ${r.ok.length}건${r.failed.length > 0 ? ` · 실패 ${r.failed.length}건` : ''}`,
+        details: r.failed.length > 0 ? `${r.failed.length}건 실패 (권한 미달 또는 status 변경)` : undefined,
+      });
       invalidateAll();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -168,9 +195,11 @@ export default function Approval() {
     { key: 'PUBLISHER_ORDER', label: '📦 외부 발주' },
   ];
 
-  // 사용자별 overview 통계
+  // 사용자별 overview 통계 — 전체 mySideRes 기반 (페이지 50 X · CC + X 정합)
   const mySide = { source: 0, target: 0, escalation: 0 };
-  for (const o of items) {
+  const mySideItems = (mySideRes.data?.items as PendingOrder[] | undefined) ?? [];
+  for (const o of mySideItems) {
+    if (o.status !== 'PENDING') continue;
     const side = whichSide(o, scope);
     if (side === 'SOURCE') mySide.source++;
     else if (side === 'TARGET') mySide.target++;
@@ -203,7 +232,7 @@ export default function Approval() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <div className="bf-card p-3">
           <div className="text-xs text-bf-muted">전체 협의 대기</div>
-          <div className="text-2xl font-semibold mt-0.5">{totalPending.toLocaleString()}</div>
+          <div className="text-2xl font-semibold mt-0.5">{totalAll.toLocaleString()}</div>
         </div>
         <div className="bf-card p-3">
           <div className="text-xs text-bf-muted">📤 내 측이 출고</div>
@@ -215,14 +244,15 @@ export default function Approval() {
         </div>
         <div className="bf-card p-3">
           <div className="text-xs text-bf-muted">{role === 'hq-admin' ? '⚡ 강제 승인 대상' : '🔒 권한 없음'}</div>
-          <div className="text-2xl font-semibold mt-0.5 text-bf-muted">{role === 'hq-admin' ? mySide.escalation.toLocaleString() : (items.length - mySide.source - mySide.target).toLocaleString()}</div>
+          <div className="text-2xl font-semibold mt-0.5 text-bf-muted">{role === 'hq-admin' ? mySide.escalation.toLocaleString() : Math.max(0, totalAll - mySide.source - mySide.target).toLocaleString()}</div>
         </div>
       </div>
 
       <div className="bf-card p-2 space-y-2">
         <div className="flex gap-1 flex-wrap">
           {stages.map((s) => {
-            const c = s.key === 'all' ? totalPending : (stageCounts[s.key] ?? null);
+            // 탭별 카운트 — 항상 4 stage 모두 표시 (FF · stage filter 무시한 전체 stage_counts)
+            const c = s.key === 'all' ? totalAll : (stageCounts[s.key] ?? 0);
             return (
               <button
                 key={s.key}
@@ -230,7 +260,7 @@ export default function Approval() {
                 onClick={() => setStage(s.key)}
                 className={`px-3 py-1 text-xs rounded ${stage === s.key ? 'bg-bf-primary text-white' : 'bg-bf-surface text-bf-muted hover:text-bf-text'}`}
               >
-                {s.label}{c !== null && c !== undefined ? ` (${c})` : ''}
+                {s.label} ({c})
               </button>
             );
           })}

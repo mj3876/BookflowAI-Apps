@@ -16,6 +16,7 @@
 //   양측(BOTH) — 둘 다 가능 (예: hq-admin)
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 
 import {
   fetchPending, postOrderDispatch, postOrderReceive, postOrderReject,
@@ -172,8 +173,18 @@ export default function Logistics() {
                       </span>
                     )}
                   </div>
+                  {o.title && (
+                    <div className="text-sm text-bf-text mt-0.5 truncate">{o.title}</div>
+                  )}
                   <div className="text-xs text-bf-muted mt-1 truncate">
-                    ISBN {o.isbn13} · 수량 {o.qty}권 · {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id) ?? '?'}
+                    ISBN {o.isbn13} · 수량 {o.qty}권 · {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id ?? undefined) ?? '?'}
+                    {/* AA: 캘린더 연동 — 도착 예정일 클릭 시 그 날짜 detail */}
+                    {(o as PendingOrder & { expected_arrival_at?: string | null }).expected_arrival_at && (
+                      <Link
+                        to={`/cal/${(o as PendingOrder & { expected_arrival_at?: string | null }).expected_arrival_at}`}
+                        className="ml-2 text-bf-primary hover:underline"
+                      >📅 {(o as PendingOrder & { expected_arrival_at?: string | null }).expected_arrival_at}</Link>
+                    )}
                   </div>
                 </div>
                 <div className="flex-shrink-0 flex gap-1">

@@ -8,7 +8,7 @@ data:
   INVENTORY_RDS_PORT: "5432"
   INVENTORY_RDS_DB: "bookflow"
   INVENTORY_RDS_USER: "inventory_svc"
-  INVENTORY_REDIS_HOST: "bookflow-redis.xxx.cache.amazonaws.com"
+  INVENTORY_REDIS_HOST: "${REDIS_HOST}"
   INVENTORY_REDIS_PORT: "6379"
   INVENTORY_AUTH_MODE: "mock"
   INVENTORY_LOG_LEVEL: "INFO"

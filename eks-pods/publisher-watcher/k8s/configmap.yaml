@@ -8,7 +8,7 @@ data:
   PUBWATCH_RDS_PORT: "5432"
   PUBWATCH_RDS_DB: "bookflow"
   PUBWATCH_RDS_USER: "publish_watcher"  # V3 grants role name (under_score 형 · pod 명은 publisher-watcher)
-  PUBWATCH_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  PUBWATCH_REDIS_HOST: "${REDIS_HOST}"
   PUBWATCH_REDIS_PORT: "6379"
   # Empty default = no-op cron. Phase 4: real publisher API URL via Egress NAT.
   PUBWATCH_PUBLISHER_API_URL: ""
