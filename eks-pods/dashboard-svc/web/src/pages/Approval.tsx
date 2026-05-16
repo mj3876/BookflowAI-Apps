@@ -158,13 +158,14 @@ export default function Approval() {
   });
   const fullStats = statsRes.data;
 
-  const items = useMemo(() => {
-    const list = (queryRes.data?.items as PendingOrder[] | undefined) ?? [];
+  // 현재 필터(planView + 검색 + REBALANCE sub-tab) 를 한 PENDING row 에 적용 — 한 곳에서 정의.
+  //   items(현재 페이지) · bulkApprove(전체) · 라벨 카운트(전체) 가 동일 규칙을 공유 (이슈17).
+  const matchesFilter = useMemo(() => {
     const trimmedIsbn = qIsbn.trim().toLowerCase();
     const trimmedTitle = qTitle.trim().toLowerCase();
     const trimmedStore = qStore.trim().toLowerCase();
     const allowTypes = planView !== 'all' ? PLAN_VIEW_TYPES[planView] : null;
-    return list.filter((o) => {
+    return (o: PendingOrder): boolean => {
       if (o.status !== 'PENDING') return false;
       if (allowTypes && !allowTypes.includes(o.order_type)) return false;
       if (trimmedIsbn && !o.isbn13.toLowerCase().includes(trimmedIsbn)) return false;
@@ -181,10 +182,34 @@ export default function Approval() {
         if (rebalanceSide === 'outbound' && !(side === 'SOURCE' || side === 'BOTH')) return false;
       }
       return true;
-    });
-  }, [queryRes.data, qIsbn, qTitle, qStore, nameOf, stage, rebalanceSide, scope, planView]);
+    };
+  }, [qIsbn, qTitle, qStore, nameOf, stage, rebalanceSide, scope, planView]);
+
+  const items = useMemo(() => {
+    const list = (queryRes.data?.items as PendingOrder[] | undefined) ?? [];
+    return list.filter(matchesFilter);
+  }, [queryRes.data, matchesFilter]);
   const totalPending = queryRes.data?.total ?? 0;
   const totalAll = fullStats?.total ?? 0;  // 전체 (stage filter 무시)
+
+  // 이슈17 2026-05-16: 일괄/강제 승인 대상은 "현재 필터 전체" — pagination 페이지(50)에 종속 금지.
+  //   현재 stage(order_type) 의 모든 PENDING 을 가져와 client 필터 적용 → 전체 건수 산정.
+  //   bulkApprove 와 버튼 라벨 카운트가 이 동일 집합을 공유.
+  const allFilteredRes = useQuery({
+    queryKey: ['approval-all-filtered', role, stage],
+    queryFn: () => fetchPending(role!, {
+      limit: 5000,
+      ...(stage !== 'all' ? { order_type: stage } : {}),
+    }),
+    enabled: !!role,
+    staleTime: 5000,
+    refetchInterval: 15000,
+  });
+  const filteredIds = useMemo(() => {
+    const list = (allFilteredRes.data?.items as PendingOrder[] | undefined) ?? [];
+    return list.filter(matchesFilter).map((o) => o.order_id);
+  }, [allFilteredRes.data, matchesFilter]);
+  const bulkCount = filteredIds.length;
 
   // 카운트 보조 — stage filter 무시한 전체 stage_counts (4 탭 모두 정확히)
   const stageCounts = (fullStats?.stage_counts as Record<string, number> | undefined) ?? {};
@@ -241,34 +266,32 @@ export default function Approval() {
   });
 
   const bulkApprove = async () => {
-    // 일괄 동의는 pagination 무관 — 모든 PENDING 가져와서 처리 (CHUNK 200 단위).
+    // 이슈17: 일괄/강제 승인 대상 = "현재 필터 전체" (order_type 탭 + scope + 검색 + sub-tab).
+    //   pagination 페이지(50)에 종속 금지. filteredIds 가 그 전체 집합 (allFilteredRes + matchesFilter).
     const label = role === 'hq-admin' ? '강제 승인 (escalation · 양측 자동)' : '동의';
+    const allIds = filteredIds;
+    if (allIds.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); return; }
+    if (!window.confirm(`현재 필터의 PENDING 전체 ${allIds.length}건 ${label} 합니다.\n(${stage === 'all' ? '모든 stage' : stage} · pagination 무관)`)) {
+      return;
+    }
     setBulkBusy(true);
     try {
-      // 전체 PENDING IDs fetch (limit 5000 — 시연 데이터 1000+ 대응)
-      const allRes = await fetchPending(role!, {
-        limit: 5000,
-        ...(stage !== 'all' ? { order_type: stage } : {}),
-      });
-      const allowTypes = planView !== 'all' ? PLAN_VIEW_TYPES[planView] : null;
-      const allIds = ((allRes.items as PendingOrder[] | undefined) ?? [])
-        .filter((o) => o.status === 'PENDING')
-        .filter((o) => !allowTypes || allowTypes.includes(o.order_type))
-        .map((o) => o.order_id);
-      if (allIds.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); setBulkBusy(false); return; }
-      if (!window.confirm(`전체 PENDING ${allIds.length}건 ${label} 합니다.\n(${stage === 'all' ? '모든 stage' : stage} · pagination 무관 전체)`)) {
-        setBulkBusy(false); return;
+      // 대량(1000+) 대응 — backend batch_approve 가 큰 리스트도 받지만 안전하게 청크 분할.
+      const CHUNK = 500;
+      let okCnt = 0;
+      let failCnt = 0;
+      for (let i = 0; i < allIds.length; i += CHUNK) {
+        const r = await postOrdersBatchApprove(role!, { order_ids: allIds.slice(i, i + CHUNK) });
+        okCnt += r.ok.length;
+        failCnt += r.failed.length;
       }
-      // 전체 한 번에 — backend batch_approve limit 없음.
-      const r = await postOrdersBatchApprove(role!, { order_ids: allIds });
-      const okCnt = r.ok.length;
-      const failCnt = r.failed.length;
       showToast({
         type: 'success',
         message: `✓ ${label} 완료 — 성공 ${okCnt}건${failCnt > 0 ? ` · 실패 ${failCnt}건` : ''}`,
         details: failCnt > 0 ? `${failCnt}건 실패 (권한 미달 또는 status 변경)` : undefined,
       });
       invalidateAll();
+      qc.invalidateQueries({ queryKey: ['approval-all-filtered'] });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       showToast({ type: 'error', message: `일괄 실패: ${msg}` });
@@ -341,10 +364,10 @@ export default function Approval() {
           <button
             type="button"
             className="bg-bf-primary text-white px-4 py-2 rounded font-medium text-sm hover:opacity-90 disabled:opacity-40"
-            disabled={bulkBusy || items.length === 0}
+            disabled={bulkBusy || bulkCount === 0}
             onClick={bulkApprove}
-            title={role === 'hq-admin' ? '이 페이지의 PENDING 전체 강제 승인 (escalation · 양측 자동)' : '이 페이지의 PENDING 전체 자기 측 동의'}
-          >{role === 'hq-admin' ? `⚡ 강제 승인 (${items.length})` : `⚡ 일괄 동의 (${items.length})`}</button>
+            title={role === 'hq-admin' ? '현재 필터의 PENDING 전체 강제 승인 (pagination 무관 · escalation · 양측 자동)' : '현재 필터의 PENDING 전체 자기 측 동의 (pagination 무관)'}
+          >{role === 'hq-admin' ? `⚡ 강제 승인 (${bulkCount})` : `⚡ 일괄 동의 (${bulkCount})`}</button>
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { roleLabel, roleGroup, useRole, type Role } from './auth';
+import { roleLabel, roleGroup, useRole, getScope, type Role } from './auth';
 import { useLiveStream } from './useLiveStream';
 import { useLiveInvalidate } from './useLiveInvalidate';
 import { useLocations } from './useLocations';
@@ -122,11 +122,13 @@ export default function Layout() {
   const pageTitle = PAGE_LABEL[seg] ?? seg;
   const groupLabel = group === 'HQ' ? '본사' : group === 'WH' ? '물류센터' : '매장';
   // 역할별 scope 표시 (본사 = 전사 / wh = 권역 / branch = 매장명)
+  // 이슈16 2026-05-16: branch-clerk 매장명 — location_id 1 하드코딩 제거.
+  //   현재 로그인 매장의 scope_store_id 로 (어느 매장으로 로그인하든 정확).
   const scopeLabel =
     role === 'hq-admin' ? '전사 관제'
     : role === 'wh-manager-1' ? '수도권 권역'
     : role === 'wh-manager-2' ? '영남 권역'
-    : role === 'branch-clerk' ? `${nameOf(1)}` : '';
+    : role === 'branch-clerk' ? nameOf(getScope().scope_store_id ?? undefined) : '';
 
   return (
     <div className="min-h-screen bg-bf-bg flex">

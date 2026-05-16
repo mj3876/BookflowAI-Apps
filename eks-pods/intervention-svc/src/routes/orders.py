@@ -294,12 +294,15 @@ def patch_order(
 
 # ─── GET /orders/calendar — date × count matrix ──────────────────────────────
 # plan_view — order_type 기반 계획 단위 분리 (scope 자동 필터와 독립 layer):
-#   mine    — 물류센터 경유 계획 (WH_TO_STORE · WH_TRANSFER · PUBLISHER_ORDER)
-#   observe — 지점 간 재분배 계획 (REBALANCE)
+#   mine    — 물류센터 계획 (WH-kind face 가 있는 order_type)
+#   observe — 지점 계획 (STORE-kind face 가 있는 order_type)
 #   all     — 전체 (default)
+# 2026-05-16 walkthrough-10 이슈18: observe 에 WH_TO_STORE 추가 —
+#   WH_TO_STORE 의 target 은 STORE 라 지점 계획에 매장 입고면이 떠야 함.
+#   (tgt_vis 는 이미 WH_TO_STORE 를 STORE-kind 로 잡지만 pv_frag 가 row 자체를 떨궈 cell 0 이었음)
 _PLAN_VIEW_TYPES: dict[str, tuple[str, ...]] = {
     "mine": ("WH_TO_STORE", "WH_TRANSFER", "PUBLISHER_ORDER"),
-    "observe": ("REBALANCE",),
+    "observe": ("REBALANCE", "WH_TO_STORE"),
 }
 
 
@@ -351,9 +354,15 @@ def calendar(
         else:  # all — 양면 다.
             src_vis = "TRUE"; tgt_vis = "TRUE"; params = []
     elif ctx.role == "wh-manager":
-        src_vis = "(s.wh_id = %s)"; tgt_vis = "(t.wh_id = %s)"
+        # 2026-05-16 walkthrough-10 이슈19: WH-kind face 만 — 그 face 가 WH 이고 내 창고일 때.
+        #   기존 (s.wh_id=%s) 는 WH_TO_STORE 의 target(STORE) 도 그 STORE 의 권역이 내 권역이면
+        #   tgt_vis=true 로 잡아 wh-manager 가 매장 입고면을 잘못 보던 버그.
+        #   location_type='WH' 조건으로 WH-kind face 만 노출 (frontend visibleFaces 와 동일 규칙).
+        src_vis = "(s.location_type = 'WH' AND s.wh_id = %s)"
+        tgt_vis = "(t.location_type = 'WH' AND t.wh_id = %s)"
         params = [ctx.scope_wh_id, ctx.scope_wh_id]
     elif ctx.role == "branch-clerk":
+        # STORE-kind face 만 — location_id 가 유일하므로 source/target_location_id 일치로 충분.
         src_vis = "(po.source_location_id = %s)"; tgt_vis = "(po.target_location_id = %s)"
         params = [ctx.scope_store_id, ctx.scope_store_id]
     else:

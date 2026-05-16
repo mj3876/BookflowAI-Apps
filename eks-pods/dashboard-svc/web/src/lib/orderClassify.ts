@@ -9,7 +9,14 @@
 //
 // 이슈13   — planView(scope 필터) 미반영 → 물류센터 계획에 WH_TO_STORE 입고면 오출현.
 // 이슈13-2 — hq 가 isSrc=isTgt 라 모든 APPROVED 가 "BOTH→inbound" 로 떨어져 입고 탭에 발송버튼.
-// → face 기반 명시 매트릭스로 재설계.
+//
+// 2026-05-16 walkthrough-10 이슈18·19 — face 판정 단일 규칙으로 통일.
+//   기존엔 hq(planView) 경로와 wh/branch(scope) 경로가 서로 다른 코드라
+//   wh-manager 가 WH_TO_STORE 의 target(STORE) 을 자기 권역으로 잘못 잡아 입고면까지 노출.
+//   → face 가시성을 "그 face 의 kind + 그 entity 가 내 것인지" 단일 규칙으로 판정.
+//     hq(planView) · wh-manager scope · branch-clerk scope 가 전부 같은 함수를 탐.
+//     불변식: "HQ 물류센터 계획 == 해당 wh-manager 자기 뷰",
+//             "HQ 지점 계획     == 해당 branch-clerk 자기 뷰".
 
 import type { PendingOrder } from '../api';
 
@@ -43,33 +50,51 @@ function faceKinds(orderType: string): { src: FaceKind; tgt: FaceKind } {
   }
 }
 
-// 내 스코프가 source/target face 에 닿는지 (branch-clerk / wh-manager 용).
-function scopeTouch(o: PendingOrder, scope: Scope): { src: boolean; tgt: boolean } {
-  const srcWh = (o as PendingOrder & { source_wh_id?: number | null }).source_wh_id;
-  const tgtWh = (o as PendingOrder & { target_wh_id?: number | null }).target_wh_id;
-  const src =
-    (scope.scope_store_id != null && o.source_location_id === scope.scope_store_id) ||
-    (scope.scope_wh_id != null && srcWh === scope.scope_wh_id);
-  const tgt =
-    (scope.scope_store_id != null && o.target_location_id === scope.scope_store_id) ||
-    (scope.scope_wh_id != null && tgtWh === scope.scope_wh_id);
-  return { src, tgt };
-}
-
-// 노출할 face 결정 — (role, scope, planView) 조합.
-//   branch-clerk / wh-manager: 내 스코프가 닿는 face 만.
-//   hq-admin: planView='all' → 양면 · 'mine'(물류센터) → WH face 만 · 'observe'(지점) → STORE face 만.
+// ── face 가시성 단일 규칙 ──────────────────────────────────────────────
+// 보는 주체별 entity:
+//   hq-admin     — 제한 없음. planView 가 어느 face-kind 를 볼지 선택.
+//   wh-manager   — 자기 창고(WH). WH-kind face 이고 그 WH 가 내 창고일 때만.
+//   branch-clerk — 자기 매장(STORE). STORE-kind face 이고 그 STORE 가 내 매장일 때만.
+//
+// face 별 (kind, 그 entity 가 내 것인지) 판정 — hq 든 wh 든 branch 든 동일 함수.
+//   WH-kind face   → 그 위치의 wh_id (source_wh_id / target_wh_id) 가 내 scope_wh_id 와 일치.
+//   STORE-kind face→ 그 위치의 location_id (source/target_location_id) 가 내 scope_store_id 와 일치.
+//   EXT face (PUBLISHER source) → 어떤 내부 주체에게도 "내 것" 아님.
 function visibleFaces(
   o: PendingOrder, role: string, scope: Scope, planView: PlanView,
 ): { src: boolean; tgt: boolean } {
+  const kind = faceKinds(o.order_type);
+  const srcWh = (o as PendingOrder & { source_wh_id?: number | null }).source_wh_id;
+  const tgtWh = (o as PendingOrder & { target_wh_id?: number | null }).target_wh_id;
+
   if (role === 'hq-admin') {
+    // hq 는 entity 제한 없음 — planView 로 face-kind 만 선택.
+    //   all     → 양면 · mine(물류센터 계획) → WH-kind face 만 · observe(지점 계획) → STORE-kind face 만.
     if (planView === 'all') return { src: true, tgt: true };
-    const kind = faceKinds(o.order_type);
     const want: FaceKind = planView === 'mine' ? 'WH' : 'STORE';
     return { src: kind.src === want, tgt: kind.tgt === want };
   }
-  // branch-clerk / wh-manager — backend 가 scope 보장하지만 frontend 도 face 단위로 분해.
-  return scopeTouch(o, scope);
+
+  if (role.startsWith('wh-manager')) {
+    // wh-manager — WH-kind face 이고 그 WH 가 내 창고일 때만.
+    //   WH_TO_STORE  : src(WH=내창고) 출고면만 · tgt(STORE) 은 안 보임.
+    //   WH_TRANSFER  : 내 창고가 src 면 출고면 / tgt 면 입고면.
+    //   PUBLISHER    : tgt(WH=내창고) 입고면 · src(EXT) 안 보임.
+    const my = scope.scope_wh_id;
+    return {
+      src: kind.src === 'WH' && my != null && srcWh === my,
+      tgt: kind.tgt === 'WH' && my != null && tgtWh === my,
+    };
+  }
+
+  // branch-clerk — STORE-kind face 이고 그 STORE 가 내 매장일 때만.
+  //   REBALANCE   : 내 매장이 src 면 출고면 / tgt 면 입고면.
+  //   WH_TO_STORE : tgt(STORE=내매장) 입고면만 · src(WH) 안 보임.
+  const myStore = scope.scope_store_id;
+  return {
+    src: kind.src === 'STORE' && myStore != null && o.source_location_id === myStore,
+    tgt: kind.tgt === 'STORE' && myStore != null && o.target_location_id === myStore,
+  };
 }
 
 // 각 order → placement 목록 (탭 + 그 탭의 face).
