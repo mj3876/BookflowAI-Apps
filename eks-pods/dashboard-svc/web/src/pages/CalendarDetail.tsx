@@ -1,24 +1,25 @@
 // PR-C (2026-05-15) 4-step state machine v2 — 날짜별 상세 (4 탭).
+// 2026-05-16 walkthrough-9 이슈15: /logistics 도 이 컴포넌트를 date 없이(=오늘) 렌더.
 //
-// 📥 입고 — target = 내 측 · status ∈ {PENDING, APPROVED, IN_TRANSIT}
-// 📤 출고 — source = 내 측 · status ∈ {PENDING, APPROVED}
-// 🚚 운송 — 양측 중 하나 · status = IN_TRANSIT
-// ✅ 완료 — 양측 중 하나 · status ∈ {EXECUTED, AUTO_EXECUTED} · executed_at::date = day
+// 📥 입고 — target face · status ∈ {APPROVED, IN_TRANSIT}
+// 📤 출고 — source face · status = APPROVED
+// 🚚 운송 — source face · status = IN_TRANSIT
+// ✅ 완료 — 노출 face · status ∈ {EXECUTED, AUTO_EXECUTED}
 //
-// 액션 매트릭스 (ActionButtons 컴포넌트 책임):
-//   PENDING        → [✓ 동의] [✗ 거부]
-//   APPROVED (src) → [🚚 발송] [✗ 취소]
-//   APPROVED (tgt) → (대기)
-//   IN_TRANSIT(tgt)→ [📦 수령] [↩ 반품]
-//   IN_TRANSIT(src)→ (운송 중)
-//   EXECUTED       → (완료)
-//   REJECTED       → (거부 사유)
+// 분류/액션 규칙은 lib/orderClassify.ts 단일 모듈 — CalendarDetail · /logistics 공유.
+// 액션 매트릭스 (ActionButtons 컴포넌트 책임 · placement.side 만 따름):
+//   APPROVED  (source) → [🚚 발송] [✗ 취소]
+//   APPROVED  (target) → (상대 측 발송 대기)
+//   IN_TRANSIT(target) → [📦 수령] [↩ 반품]
+//   IN_TRANSIT(source) → (운송 중)
+//   EXECUTED           → (완료)
+//   REJECTED           → (거부 사유)
 import { useMemo, useState } from 'react';
-import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
-  fetchPending, postOrderApprove, postOrderDispatch, postOrderReceive, postOrderReject,
+  fetchPending, postOrderDispatch, postOrderReceive, postOrderReject,
   type PendingOrder, type PlanView,
 } from '../api';
 import { getRole, getScope } from '../auth';
@@ -26,70 +27,50 @@ import { ORDER_STATUS_KO, ORDER_TYPE_KO, REJECTION_STAGE_KO, orderTypeClass } fr
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
 import { PlanViewToggle, planViewOptions } from '../components/PlanViewToggle';
-
-// plan_view (order_type 기반) — 캘린더 분리 토글과 동일 매핑.
-const PLAN_VIEW_TYPES: Record<Exclude<PlanView, 'all'>, string[]> = {
-  mine: ['WH_TO_STORE', 'WH_TRANSFER', 'PUBLISHER_ORDER'],
-  observe: ['REBALANCE'],
-};
+import UsageGuide, { type GuideEntry } from '../components/UsageGuide';
+import { classify, isChained, type Tab, type Side } from '../lib/orderClassify';
 
 type ToastShow = (msg: string, type: 'success' | 'error' | 'info' | 'warning') => void;
 
-// 이슈10 2026-05-16: chained WH_TO_STORE 판별 —
-//   상위 발주(WH_TRANSFER/PUBLISHER_ORDER) 실행 후 자동 생성된 결과물(이미 APPROVED 강제).
-//   forecast_rationale.auto_approved=true 로 표식. hq 는 강제승인/발송/수령 대상 아님(read-only 관제).
-//   발송(물류센터)·수령(지점) 실행 주체만 액션. hq 액션 버튼 미노출.
-function isChained(o: PendingOrder): boolean {
-  return o.forecast_rationale?.auto_approved === true;
+// 이슈5 2026-05-16 — 입출고(오늘) 페이지 role별 사용법 안내 (구 Logistics.tsx 에서 이전).
+const LOGISTICS_GUIDE: GuideEntry[] = [
+  {
+    role: 'hq-admin',
+    label: '🏢 본사 관리자',
+    lines: [
+      '오늘 처리할 입고·출고·운송·완료를 4개 탭으로 봅니다.',
+      '📤 출고 — 발송(🚚) · 📥 입고 — 수령(📦) 처리.',
+      '매장 보충(WH_TO_STORE)은 물류센터(출고)·지점(입고) 양쪽 탭에 함께 나타납니다.',
+      '외부 발주는 출판사가 발송하므로 운송 탭에 바로 나타나고, 수령만 처리합니다.',
+    ],
+  },
+  {
+    role: 'wh-manager',
+    label: '📦 물류센터 담당자',
+    lines: [
+      '📤 출고 탭 — 내 권역에서 보내는 건을 발송(🚚)합니다.',
+      '📥 입고 탭 — 내 권역으로 들어오는 건을 수령(📦)합니다.',
+      '매장 보충은 출고(물류센터)·입고(지점) 양면 업무 — 출고 탭에서 발송하면 지점이 입고 탭에서 수령합니다.',
+      '🚚 운송 탭 — 발송 후 도착 대기 중인 건을 확인합니다.',
+    ],
+  },
+  {
+    role: 'branch-clerk',
+    label: '🏬 지점 담당자',
+    lines: [
+      '📥 입고 탭 — 내 지점으로 도착하는 건을 수령(📦)합니다.',
+      '📤 출고 탭 — 내 지점에서 다른 매장으로 보내는 재분배 건을 발송(🚚)합니다.',
+      '✅ 완료 탭 — 오늘 처리가 끝난 건을 도서별로 확인합니다.',
+    ],
+  },
+];
+
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-type Tab = 'inbound' | 'outbound' | 'in_transit' | 'executed';
-type Side = 'source' | 'target' | 'both' | 'none';
-type Placement = { tab: Tab; side: Side };
-
-// 이슈3 2026-05-16: WH_TO_STORE (물류센터→지점) 는 양면 업무 —
-//   source(물류센터)=출고 탭 · target(지점)=입고 탭 양쪽에 분류.
-//   그 외 order_type 은 기존대로 한 탭에만 분류.
-function classify(o: PendingOrder, role: string, scope: { scope_wh_id: number | null; scope_store_id: number | null }): {
-  side: Side;
-  placements: Placement[];
-} {
-  // hq-admin 은 모든 row 의 양측을 볼 수 있음
-  const isHq = role === 'hq-admin';
-  // simplistic check using location IDs (backend filter 가 scope 보장하므로 frontend 는 표시용)
-  const isSrc = isHq
-    || (scope.scope_store_id != null && o.source_location_id === scope.scope_store_id)
-    || (scope.scope_wh_id != null && (o as any).source_wh_id === scope.scope_wh_id);
-  const isTgt = isHq
-    || (scope.scope_store_id != null && o.target_location_id === scope.scope_store_id)
-    || (scope.scope_wh_id != null && (o as any).target_wh_id === scope.scope_wh_id);
-
-  const side: Side = isSrc && isTgt ? 'both' : isSrc ? 'source' : isTgt ? 'target' : 'none';
-  const status = o.status;
-  const placements: Placement[] = [];
-
-  // v5 2026-05-15 피드백 #8: PENDING 은 /approval 전용 · CalendarDetail 는 APPROVED+ 만
-  if (status === 'IN_TRANSIT') {
-    placements.push({ tab: 'in_transit', side });
-  } else if (status === 'EXECUTED' || status === 'AUTO_EXECUTED') {
-    placements.push({ tab: 'executed', side });
-  } else if (status === 'APPROVED') {
-    if (o.order_type === 'WH_TO_STORE') {
-      if (isSrc) placements.push({ tab: 'outbound', side: 'source' });
-      if (isTgt) placements.push({ tab: 'inbound', side: 'target' });
-      if (!isSrc && !isTgt) placements.push({ tab: 'inbound', side });
-    } else if (isTgt && !isSrc) {
-      placements.push({ tab: 'inbound', side });
-    } else if (isSrc && !isTgt) {
-      placements.push({ tab: 'outbound', side });
-    } else {
-      placements.push({ tab: 'inbound', side });  // BOTH (hq) default
-    }
-  }
-  return { side, placements };
-}
-
-function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'source' | 'target' | 'both' | 'none'; onDone: () => void }) {
+function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: Side; onDone: () => void }) {
   const role = getRole()!;
   const { showToast } = useToast();
   const qc = useQueryClient();
@@ -112,7 +93,6 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
     }
   };
 
-  const onApprove = () => wrap('동의', () => postOrderApprove(role, order.order_id, {}));
   const onDispatch = () => wrap('발송', () => postOrderDispatch(role, order.order_id, {}));
   const onReceive = () => wrap('수령', () => postOrderReceive(role, order.order_id, {}));
   const onReject = () => {
@@ -128,17 +108,10 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
   if (chainedReadOnly) {
     return <span className="text-xs text-bf-muted">{ORDER_STATUS_KO[st] ?? st} · 자동 (관제)</span>;
   }
-  // 액션 매트릭스
-  if (st === 'PENDING') {
-    return (
-      <div className="flex gap-1">
-        <button className="bf-btn-primary text-xs" disabled={busy} onClick={onApprove}>✓ 동의</button>
-        <button className="bf-btn-danger-secondary text-xs" disabled={busy} onClick={onReject}>✗ 거부</button>
-      </div>
-    );
-  }
+  // 액션 매트릭스 — 이슈13-2: hq 블랭킷 override 제거. 오직 placement.side 만 따름.
+  //   출고 탭(side='source') = 발송 행위 · 입고 탭(side='target') = 수령 행위.
   if (st === 'APPROVED') {
-    if (side === 'source' || side === 'both' || role === 'hq-admin') {
+    if (side === 'source') {
       return (
         <div className="flex gap-1">
           <button className="bf-btn-primary text-xs" disabled={busy} onClick={onDispatch}>🚚 발송</button>
@@ -149,7 +122,7 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
     return <span className="text-xs text-bf-muted">상대 측 발송 대기</span>;
   }
   if (st === 'IN_TRANSIT') {
-    if (side === 'target' || side === 'both' || role === 'hq-admin') {
+    if (side === 'target') {
       return (
         <div className="flex gap-1">
           <button className="bf-btn-primary text-xs" disabled={busy} onClick={onReceive}>📦 수령</button>
@@ -166,9 +139,74 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
   return <span className="text-xs text-bf-muted">{ORDER_STATUS_KO[st] ?? st}</span>;
 }
 
+// 이슈11 2026-05-16: 일괄 발송/수령 — 현재 탭/scope 대상 일괄 처리 (구 Logistics.tsx 에서 이전).
+//   출고 탭 → APPROVED source face 일괄 발송 · 입고 탭 → IN_TRANSIT target face 일괄 수령.
+//   chained(auto_approved) hq read-only 는 제외 — placement.side 만 따름.
+function BulkActionBar({ tab, items, onDone }: {
+  tab: Tab;
+  items: { order: PendingOrder; side: Side }[];
+  onDone: () => void;
+}) {
+  const role = getRole()!;
+  const { showToast } = useToast();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+
+  if (tab !== 'outbound' && tab !== 'inbound') return null;
+
+  const eligible = items.filter(({ order, side }) => {
+    if (isChained(order) && role === 'hq-admin') return false;
+    if (tab === 'outbound') return order.status === 'APPROVED' && side === 'source';
+    return order.status === 'IN_TRANSIT' && side === 'target';
+  });
+
+  if (eligible.length === 0) return null;
+
+  const isOutbound = tab === 'outbound';
+  const label = isOutbound ? '일괄 발송' : '일괄 수령';
+  const icon = isOutbound ? '🚚' : '📦';
+
+  const run = async () => {
+    if (busy) return;
+    if (!window.confirm(`${eligible.length}건을 ${label}하시겠습니까?`)) return;
+    setBusy(true);
+    let ok = 0;
+    let fail = 0;
+    for (const { order } of eligible) {
+      try {
+        if (isOutbound) await postOrderDispatch(role, order.order_id, {});
+        else await postOrderReceive(role, order.order_id, {});
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    qc.invalidateQueries({ queryKey: ['orders'] });
+    qc.invalidateQueries({ queryKey: ['calendar'] });
+    qc.invalidateQueries({ queryKey: ['approval'] });
+    showToast({
+      type: fail === 0 ? 'success' : 'warning',
+      message: `${label} 완료 — 성공 ${ok}건${fail ? ` · 실패 ${fail}건` : ''}`,
+    });
+    setBusy(false);
+    onDone();
+  };
+
+  return (
+    <div className="px-3 py-2 flex items-center justify-between bg-bf-panel2/60 border-b border-bf-border">
+      <span className="text-xs text-bf-muted">{label} 대상 {eligible.length}건</span>
+      <button type="button" className="bf-btn-primary text-xs" disabled={busy} onClick={run}>
+        {icon} {label} ({eligible.length})
+      </button>
+    </div>
+  );
+}
+
+// /cal/:date — 날짜별 상세. /logistics — date 파라미터 없음 → 오늘(today) 로 렌더 (이슈15).
 export default function CalendarDetail() {
-  const { date } = useParams<{ date: string }>();
-  const navigate = useNavigate();
+  const { date: paramDate } = useParams<{ date: string }>();
+  const isLogistics = !paramDate;            // /logistics 진입 (date 파라미터 없음)
+  const date = paramDate ?? todayIso();
   const role = getRole();
   const scope = getScope();
   const { nameOf } = useLocations(role ?? 'hq-admin');
@@ -191,29 +229,27 @@ export default function CalendarDetail() {
   const q = useQuery({
     queryKey: ['orders', 'day', role, date],
     queryFn: () => fetchPending(role!, { limit: 5000, expected_date: date }),
-    enabled: !!role && !!date,
+    enabled: !!role,
     staleTime: 5000,
     refetchInterval: 10000,
   });
 
-  // 이슈3: WH_TO_STORE 는 두 탭(출고+입고)에 출현 가능 → row 별 placement 별 entry 보관.
+  // classify(order, role, scope, planView) — face 기반 분류 (lib/orderClassify.ts).
+  //   planView 필터·face 가시성 모두 classify 안에서 처리. WH_TO_STORE 양면도 동일 규칙.
   const grouped = useMemo(() => {
     const empty: Record<Tab, { order: PendingOrder; side: Side }[]> =
       { inbound: [], outbound: [], in_transit: [], executed: [] };
     if (!q.data || !role) return empty;
-    // backend 가 이미 date filter — frontend 는 4 탭 분류 + plan_view(order_type) 필터.
     const result: Record<Tab, { order: PendingOrder; side: Side }[]> =
       { inbound: [], outbound: [], in_transit: [], executed: [] };
-    const allowTypes = planView !== 'all' ? PLAN_VIEW_TYPES[planView] : null;
     for (const o of q.data.items as PendingOrder[]) {
-      if (allowTypes && !allowTypes.includes(o.order_type)) continue;
-      const { placements } = classify(o, role, scope);
+      const { placements } = classify(o, role, scope, planView);
       for (const p of placements) result[p.tab].push({ order: o, side: p.side });
     }
     return result;
   }, [q.data, role, scope, planView]);
 
-  if (!role || !date) return null;
+  if (!role) return null;
   const counts = {
     inbound: grouped.inbound.length,
     outbound: grouped.outbound.length,
@@ -234,17 +270,29 @@ export default function CalendarDetail() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-semibold">📅 {date}</h1>
+            <h1 className="text-xl font-semibold">
+              {isLogistics ? `🚚 입출고 · 오늘 ${date}` : `📅 ${date}`}
+            </h1>
             {viewBadge && (
               <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${viewBadge.cls}`}>
                 {viewBadge.text}
               </span>
             )}
           </div>
-          <Link to={backHref} className="text-xs text-bf-primary hover:underline">← 캘린더로</Link>
+          {isLogistics ? (
+            <div className="text-xs text-bf-muted mt-0.5">
+              <Link to="/calendar" className="text-bf-primary hover:underline">📅 캘린더</Link> 의 오늘 cell 과 동일. 다른 날짜는 캘린더에서 클릭.
+            </div>
+          ) : (
+            <Link to={backHref} className="text-xs text-bf-primary hover:underline">← 캘린더로</Link>
+          )}
         </div>
         {q.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
       </div>
+
+      {isLogistics && (
+        <UsageGuide title="입출고 페이지 사용법" role={role} entries={LOGISTICS_GUIDE} />
+      )}
 
       {hasToggle && (
         <PlanViewToggle role={role} value={planView} onChange={setPlanView} />
@@ -269,6 +317,9 @@ export default function CalendarDetail() {
             );
           })}
         </div>
+        {(tab === 'outbound' || tab === 'inbound') && (
+          <BulkActionBar tab={tab} items={items} onDone={() => q.refetch()} />
+        )}
         <div className="divide-y divide-bf-border">
           {items.length === 0 ? (
             <div className="p-6 text-center text-sm text-bf-muted">해당 날짜에 항목이 없습니다.</div>

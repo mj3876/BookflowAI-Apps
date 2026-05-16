@@ -303,6 +303,15 @@ _PLAN_VIEW_TYPES: dict[str, tuple[str, ...]] = {
 }
 
 
+# order_type 별 source/target face 의 종류 — frontend lib/orderClassify.ts faceKinds 와 동일.
+#   WH_TO_STORE  src=WH tgt=STORE · WH_TRANSFER src=WH tgt=WH
+#   REBALANCE    src=STORE tgt=STORE · PUBLISHER_ORDER src=EXT tgt=WH
+_FACE_SRC_WH = ("WH_TO_STORE", "WH_TRANSFER")
+_FACE_TGT_WH = ("WH_TRANSFER", "PUBLISHER_ORDER")
+_FACE_SRC_STORE = ("REBALANCE",)
+_FACE_TGT_STORE = ("WH_TO_STORE", "REBALANCE")
+
+
 @router.get("/calendar", response_model=CalendarResp)
 def calendar(
     from_date: date_type,
@@ -310,26 +319,49 @@ def calendar(
     plan_view: Literal["all", "mine", "observe"] = "all",
     ctx: AuthContext = Depends(require_auth),
 ):
-    """캘린더 cell count — role/scope 자동 필터 + plan_view (order_type) 분리 집계.
-      inbound:    target = ctx scope · status IN (PENDING, APPROVED, IN_TRANSIT)
-      outbound:   source = ctx scope · status IN (PENDING, APPROVED)
-      in_transit: 자기 측 (source or target) · status = IN_TRANSIT
-      executed:   자기 측 · status IN (EXECUTED, AUTO_EXECUTED) · executed_at::date = day
-      plan_view:  mine=물류센터 계획 · observe=지점 계획 · all=전체
+    """캘린더 cell count — frontend lib/orderClassify.ts classify 와 동일 face 기반 규칙.
+
+    각 order 를 source face / target face 2면으로 분해, 노출 face 만 카운트:
+      outbound   : source face 노출 · status = APPROVED
+      in_transit : source face 노출 · status = IN_TRANSIT
+      inbound    : target face 노출 · status IN (APPROVED, IN_TRANSIT)
+      executed   : 노출 face 1개 이상 · status IN (EXECUTED, AUTO_EXECUTED) · exec_date = day
+
+    face 가시성:
+      wh-manager / branch-clerk — 내 scope 가 닿는 face 만.
+      hq-admin — all: 양면 · mine: WH face 만 · observe: STORE face 만.
+    4 탭 합계 = CalendarDetail 4 탭 placement 합계 (정합 보장).
     """
-    # scope filter SQL fragment
+    # face 가시성 SQL — src_vis / tgt_vis. 각 face 가 cell 에 카운트되는지.
     if ctx.role == "hq-admin":
-        scope_src = "TRUE"; scope_tgt = "TRUE"; params: list = []
+        if plan_view == "mine":
+            # WH face 만 — order_type 으로 판정.
+            src_in = ",".join(["%s"] * len(_FACE_SRC_WH))
+            tgt_in = ",".join(["%s"] * len(_FACE_TGT_WH))
+            src_vis = f"(po.order_type IN ({src_in}))"
+            tgt_vis = f"(po.order_type IN ({tgt_in}))"
+            params: list = [*_FACE_SRC_WH, *_FACE_TGT_WH]
+        elif plan_view == "observe":
+            # STORE face 만.
+            src_in = ",".join(["%s"] * len(_FACE_SRC_STORE))
+            tgt_in = ",".join(["%s"] * len(_FACE_TGT_STORE))
+            src_vis = f"(po.order_type IN ({src_in}))"
+            tgt_vis = f"(po.order_type IN ({tgt_in}))"
+            params = [*_FACE_SRC_STORE, *_FACE_TGT_STORE]
+        else:  # all — 양면 다.
+            src_vis = "TRUE"; tgt_vis = "TRUE"; params = []
     elif ctx.role == "wh-manager":
-        scope_src = "s.wh_id = %s"; scope_tgt = "t.wh_id = %s"
+        src_vis = "(s.wh_id = %s)"; tgt_vis = "(t.wh_id = %s)"
         params = [ctx.scope_wh_id, ctx.scope_wh_id]
     elif ctx.role == "branch-clerk":
-        scope_src = "po.source_location_id = %s"; scope_tgt = "po.target_location_id = %s"
+        src_vis = "(po.source_location_id = %s)"; tgt_vis = "(po.target_location_id = %s)"
         params = [ctx.scope_store_id, ctx.scope_store_id]
     else:
         raise HTTPException(status_code=403, detail=f"unknown role: {ctx.role}")
 
-    # plan_view → order_type IN (...) fragment (scope 필터와 독립)
+    # plan_view → order_type IN (...) fragment (scope 필터와 독립).
+    #   hq-admin mine/observe 는 src_vis/tgt_vis 가 이미 order_type 으로 면을 거르지만
+    #   row 자체도 plan_view 집합으로 제한해야 다른 order_type 의 노출 0-면 row 가 안 섞임.
     pv_types = _PLAN_VIEW_TYPES.get(plan_view)
     if pv_types:
         pv_frag = "AND po.order_type IN (" + ",".join(["%s"] * len(pv_types)) + ")"
@@ -338,20 +370,12 @@ def calendar(
         pv_frag = ""
         pv_params = []
 
-    # v5 2026-05-15 피드백 #10: frontend classify 와 일치 — 같은 row 가 inbound + outbound 둘 다 카운트 X.
-    # BOTH (is_src AND is_tgt · hq scope) → inbound 만 (frontend classify 와 동일).
-    # row 단일 분류 보장 → 합계 = row 수.
-    #
-    # 이슈3 2026-05-16: WH_TO_STORE (물류센터→지점) 는 본질적으로 양면 업무 —
-    #   source(물류센터)=출고 · target(지점)=입고 두 측 모두 처리 필요.
-    #   따라서 WH_TO_STORE 만 BOTH 일 때 inbound + outbound 양쪽 카운트 (예외).
-    #   그 외 order_type 은 기존대로 BOTH→inbound 단일 분류.
     sql = f"""
         WITH base AS (
             SELECT po.order_id, po.status, po.order_type, po.expected_arrival_at,
                    po.executed_at::date AS exec_date,
-                   ({scope_src}) AS is_src,
-                   ({scope_tgt}) AS is_tgt
+                   ({src_vis}) AS src_vis,
+                   ({tgt_vis}) AS tgt_vis
               FROM pending_orders po
               LEFT JOIN locations s ON s.location_id = po.source_location_id
               LEFT JOIN locations t ON t.location_id = po.target_location_id
@@ -362,23 +386,20 @@ def calendar(
         )
         SELECT
             COALESCE(expected_arrival_at, exec_date) AS day,
-            -- inbound: APPROVED + target=내 측 (BOTH 포함 — hq 면 모두 이쪽)
-            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_tgt) AS inbound,
-            -- outbound: APPROVED + source=내 측 · BOTH 제외 (inbound 중복 방지)
-            --   단 WH_TO_STORE 는 양면 업무라 BOTH 여도 outbound 도 카운트 (이슈3).
-            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_src
-                                   AND (NOT is_tgt OR order_type = 'WH_TO_STORE')) AS outbound,
-            -- in_transit: IN_TRANSIT + 자기 측
-            COUNT(*) FILTER (WHERE status = 'IN_TRANSIT' AND (is_src OR is_tgt)) AS in_transit,
-            -- executed: EXECUTED/AUTO_EXECUTED + 자기 측 + executed_at = day
-            COUNT(*) FILTER (WHERE status IN ('EXECUTED','AUTO_EXECUTED') AND (is_src OR is_tgt)
+            -- inbound: APPROVED/IN_TRANSIT + target face 노출
+            COUNT(*) FILTER (WHERE status IN ('APPROVED','IN_TRANSIT') AND tgt_vis) AS inbound,
+            -- outbound: APPROVED + source face 노출
+            COUNT(*) FILTER (WHERE status = 'APPROVED' AND src_vis) AS outbound,
+            -- in_transit: IN_TRANSIT + source face 노출
+            COUNT(*) FILTER (WHERE status = 'IN_TRANSIT' AND src_vis) AS in_transit,
+            -- executed: EXECUTED/AUTO_EXECUTED + 노출 face 1개 이상 + executed_at = day
+            COUNT(*) FILTER (WHERE status IN ('EXECUTED','AUTO_EXECUTED') AND (src_vis OR tgt_vis)
                                    AND exec_date = COALESCE(expected_arrival_at, exec_date)) AS executed
           FROM base
          WHERE COALESCE(expected_arrival_at, exec_date) BETWEEN %s AND %s
          GROUP BY 1 ORDER BY 1
     """
-    # params 순서: scope_src/scope_tgt(SELECT 절) → plan_view(WHERE) → date×3.
-    # base CTE 안에서 scope %s 가 SELECT 절, pv_frag %s 가 WHERE 절에 위치하므로 이 순서 고정.
+    # params 순서: src_vis/tgt_vis(SELECT 절) → plan_view(WHERE) → date×3.
     qparams = (*params, *pv_params, from_date, to_date, from_date, to_date, from_date, to_date)
     with db_conn() as conn:
         with conn.cursor() as cur:
