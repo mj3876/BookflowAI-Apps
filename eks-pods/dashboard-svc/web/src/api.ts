@@ -438,6 +438,7 @@ export type StoreInventoryRow = {
   author: string | null;
   category: string | null;
   price_sales: number | null;
+  cover_url: string | null;
 };
 export const fetchInventoryByStore = (role: Role, store_id: number) =>
   getJson<{ store_id: number; items: StoreInventoryRow[] }>(
