@@ -18,9 +18,15 @@ class Settings(BaseSettings):
     # notification/        → SpikeUrgent, NegotiationDelay, DailyPlanFinalized
     # forecast-completed/  → ForecastCompleted
     # delivery-completed/  → DeliveryCompleted
+    # approval-request/    → OrderPending (승인요청)
+    # stock-depart/        → StockDepartPending (운송시작)
+    # stock-arrival/       → StockArrivalPending (운송완료)
     logic_apps_url: str = ""                        # la-bookflowmj-notification SAS URL
     logic_apps_forecast_completed_url: str = ""     # la-bookflowmj-forecast-completed SAS URL
     logic_apps_delivery_completed_url: str = ""     # la-bookflowmj-delivery-completed SAS URL
+    logic_apps_approval_request_url: str = ""       # la-bookflowmj-approval-request SAS URL
+    logic_apps_stock_depart_url: str = ""           # la-bookflowmj-stock-depart SAS URL
+    logic_apps_stock_arrival_url: str = ""          # la-bookflowmj-stock-arrival SAS URL
     logic_apps_timeout_seconds: float = 5.0
 
     auth_mode: str = "mock"

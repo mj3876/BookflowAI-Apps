@@ -10,13 +10,18 @@ data:
   NOTIFICATION_RDS_USER: "notification_svc"
   NOTIFICATION_REDIS_HOST: "${REDIS_HOST}"
   NOTIFICATION_REDIS_PORT: "6379"
-  # Phase 4: Azure Logic Apps HTTP trigger callback URL.
-  # TODO: move signed callback URL to Secret/ESO after integration testing.
+  # Azure Logic Apps HTTP trigger SAS URL (워크플로별 분리).
+  # TODO: move signed SAS URLs to Secret/ESO after integration testing.
   NOTIFICATION_LOGIC_APPS_URL: "https://prod-06.japanwest.logic.azure.com:443/workflows/dd6cf919e5d5477ab09cd42eabe489ea/triggers/manual/paths/invoke?api-version=2019-05-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=o3SWHvMXcVJqUm4Sx85TWdx8QlfqPIk4WJM7qts-WJI"
+  NOTIFICATION_LOGIC_APPS_FORECAST_COMPLETED_URL: ""   # 배포 후 az logicapp workflow trigger show 로 SAS URL 발급
+  NOTIFICATION_LOGIC_APPS_DELIVERY_COMPLETED_URL: ""   # 배포 후 SAS URL 발급
+  NOTIFICATION_LOGIC_APPS_APPROVAL_REQUEST_URL: "https://prod-13.japanwest.logic.azure.com:443/workflows/97e76a17f085456f9ae2ac5d78beae67/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=hiWryuAPfuLtTCD3CE8TMQhQjxzoLgsR0OS3cNPsldA"
+  NOTIFICATION_LOGIC_APPS_STOCK_DEPART_URL: "https://prod-30.japanwest.logic.azure.com:443/workflows/22e48f59005242b1a244f2d0e8e00501/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=TXri1Yjw8M33juhZylpJGT_uDzTuf7Q22OeZwppOr7U"
+  NOTIFICATION_LOGIC_APPS_STOCK_ARRIVAL_URL: "https://prod-21.japanwest.logic.azure.com:443/workflows/f9ac9a6c16d645ff92eea469f7019826/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=1YmigFmBPWxxmYEK57ya2fagB1omzpJWhaJoTlKoK2A"
   NOTIFICATION_LOGIC_APPS_TIMEOUT_SECONDS: "5.0"
   NOTIFICATION_AUTH_MODE: "mock"
   NOTIFICATION_LOG_LEVEL: "INFO"
-  NOTIFICATION_CONTACT_HQ_EMAILS: "ms8405493@gmail.com"
+  NOTIFICATION_CONTACT_HQ_EMAILS: "redfox@yonsei.ac.kr"
   NOTIFICATION_CONTACT_WH_EMAILS: "rladudgjs0427@gmail.com"
   NOTIFICATION_CONTACT_BRANCH_EMAILS: "woohek00@gmail.com"
   AUTH_MODE: "jwt"

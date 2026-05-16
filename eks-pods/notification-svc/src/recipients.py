@@ -53,19 +53,23 @@ def get_recipients(event_type: str, payload: dict | None = None) -> list[dict]:
         "SpikeUrgent":         _hq() + _wh(),
         "ApprovalDelayed":     _hq() + _wh(),
         "InboundRejected":     _hq() + _wh(),
-        "StockDepartPending":  _hq() + _wh(),
-        "StockArrivalPending": _hq() + _wh(),
+        "NegotiationDelay":    _hq() + _wh(),
 
         # 전 레벨 — 본사+경영진+물류센터+지점
         "ForecastCompleted":   _hq() + _wh() + _branches(),
         "DailyPlanFinalized":  _hq() + _wh() + _branches(),
         "DeliveryCompleted":   _hq() + _wh() + _branches(),
 
-        # 본사 + 물류센터
-        "NegotiationDelay":    _hq() + _wh(),
+        # 승인요청 — 출발지/도착지 유형 무관하게 전 레벨 수신
+        "OrderPending":        _hq() + _wh() + _branches(),
 
-        # 이메일 불필요 (Redis/웹소켓 전용)
-        "OrderPending":  [],
+        # 운송시작 — 도착지가 지점일 수 있으므로 전 레벨
+        "StockDepartPending":  _hq() + _wh() + _branches(),
+
+        # 운송완료 — 출발지가 지점(REBALANCE)일 수 있으므로 전 레벨
+        "StockArrivalPending": _hq() + _wh() + _branches(),
+
+        # Redis/웹소켓 전용 (이메일 불필요)
         "OrderApproved": [],
         "OrderRejected": [],
         "OrderExecuted": [],
