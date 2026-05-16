@@ -341,9 +341,14 @@ def calendar(
     # v5 2026-05-15 피드백 #10: frontend classify 와 일치 — 같은 row 가 inbound + outbound 둘 다 카운트 X.
     # BOTH (is_src AND is_tgt · hq scope) → inbound 만 (frontend classify 와 동일).
     # row 단일 분류 보장 → 합계 = row 수.
+    #
+    # 이슈3 2026-05-16: WH_TO_STORE (물류센터→지점) 는 본질적으로 양면 업무 —
+    #   source(물류센터)=출고 · target(지점)=입고 두 측 모두 처리 필요.
+    #   따라서 WH_TO_STORE 만 BOTH 일 때 inbound + outbound 양쪽 카운트 (예외).
+    #   그 외 order_type 은 기존대로 BOTH→inbound 단일 분류.
     sql = f"""
         WITH base AS (
-            SELECT po.order_id, po.status, po.expected_arrival_at,
+            SELECT po.order_id, po.status, po.order_type, po.expected_arrival_at,
                    po.executed_at::date AS exec_date,
                    ({scope_src}) AS is_src,
                    ({scope_tgt}) AS is_tgt
@@ -359,8 +364,10 @@ def calendar(
             COALESCE(expected_arrival_at, exec_date) AS day,
             -- inbound: APPROVED + target=내 측 (BOTH 포함 — hq 면 모두 이쪽)
             COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_tgt) AS inbound,
-            -- outbound: APPROVED + source=내 측 + NOT target=내 측 (BOTH 제외 → inbound 와 중복 카운트 방지)
-            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_src AND NOT is_tgt) AS outbound,
+            -- outbound: APPROVED + source=내 측 · BOTH 제외 (inbound 중복 방지)
+            --   단 WH_TO_STORE 는 양면 업무라 BOTH 여도 outbound 도 카운트 (이슈3).
+            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_src
+                                   AND (NOT is_tgt OR order_type = 'WH_TO_STORE')) AS outbound,
             -- in_transit: IN_TRANSIT + 자기 측
             COUNT(*) FILTER (WHERE status = 'IN_TRANSIT' AND (is_src OR is_tgt)) AS in_transit,
             -- executed: EXECUTED/AUTO_EXECUTED + 자기 측 + executed_at = day

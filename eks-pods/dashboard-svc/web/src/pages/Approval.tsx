@@ -28,6 +28,40 @@ import { ORDER_TYPE_KO, URGENCY_KO, orderTypeClass } from '../labels';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
 import { planViewOptions } from '../components/PlanViewToggle';
+import UsageGuide, { type GuideEntry } from '../components/UsageGuide';
+
+// 이슈5 2026-05-16 — 협의 페이지 role별 사용법 안내.
+const APPROVAL_GUIDE: GuideEntry[] = [
+  {
+    role: 'hq-admin',
+    label: '🏢 본사 관리자',
+    lines: [
+      '협의 중(PENDING) 상태의 모든 발의를 검토합니다.',
+      '⚡ 강제 승인 — 양측 동의를 기다리지 않고 즉시 승인(escalation)합니다.',
+      '✎ 수정 — AI 추천 수량·대상 매장을 조정한 뒤 승인할 수 있습니다.',
+      '외부 발주(PUBLISHER_ORDER)는 본사 단독 승인이며, 승인 시 출판사 발송(운송)이 바로 시작됩니다.',
+    ],
+  },
+  {
+    role: 'wh-manager',
+    label: '📦 물류센터 담당자',
+    lines: [
+      '내 권역이 출발(출고) 또는 도착(입고)인 발의만 표시됩니다.',
+      '✓ 동의 — 내 측 동의를 등록합니다. 상대 측도 동의해야 승인(APPROVED)됩니다.',
+      '권역 이동(WH_TRANSFER)·매장 보충(WH_TO_STORE)에서 출고 측 동의가 곧 발송 준비입니다.',
+      '양측 동의가 끝나면 자동으로 입출고 페이지로 넘어갑니다.',
+    ],
+  },
+  {
+    role: 'branch-clerk',
+    label: '🏬 지점 담당자',
+    lines: [
+      '내 지점이 출발 또는 도착인 재분배·매장 보충 발의만 표시됩니다.',
+      '✓ 동의 / ✗ 거부 — 내 지점 입장에서 검토합니다.',
+      '재분배(REBALANCE)는 매장 간 협의로 양측 모두 동의해야 진행됩니다.',
+    ],
+  },
+];
 
 type StageFilter = 'all' | 'REBALANCE' | 'WH_TO_STORE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
 
@@ -313,6 +347,8 @@ export default function Approval() {
           >{role === 'hq-admin' ? `⚡ 강제 승인 (${items.length})` : `⚡ 일괄 동의 (${items.length})`}</button>
         </div>
       </div>
+
+      <UsageGuide title="협의 페이지 사용법" role={role} entries={APPROVAL_GUIDE} />
 
       {/* 사용자별 overview card */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">

@@ -109,15 +109,32 @@ def _to_approved(cur, order_id: str, ctx: AuthContext, approval_side: str | None
     # 승인 = 계획 잠김 = 전 경로(물류센터 도착 + 매장 분배) 확정 → 다른 order 와 동일하게
     # 승인 즉시 캘린더에 출현. chained 매장 도착 = 상위 물류센터 도착 + 1일.
     chained_ids: list[str] = []
+    publisher_in_transit = False
     if transitioned:
         order_type, tgt_loc, isbn, qty, exp_arrival = row[1], row[3], row[4], row[5], row[6]
         if order_type in ("PUBLISHER_ORDER", "WH_TRANSFER"):
             chained_ids = _trigger_chained_wh_to_store(
                 cur, order_id, tgt_loc, isbn, qty, exp_arrival, ctx)
+        # 이슈1 2026-05-16 — PUBLISHER_ORDER 외부 발주는 발송 주체가 출판사 (우리 X).
+        # 승인 = 출판사 발송 = 운송 시작 → APPROVED 즉시 IN_TRANSIT 자동 전환.
+        # 우리는 수령(EXECUTED)만. source NULL 이라 _to_in_transit 이 inventory 차감 skip.
+        if order_type == "PUBLISHER_ORDER":
+            cur.execute(
+                """
+                UPDATE pending_orders
+                   SET status = 'IN_TRANSIT', dispatched_at = NOW(), dispatched_by = %s
+                 WHERE order_id = %s AND status = 'APPROVED'
+                """,
+                (ctx.user_id, order_id),
+            )
+            if cur.rowcount > 0:
+                publisher_in_transit = True
+                _audit(cur, ctx, "order.dispatch.publisher_auto", order_id)
 
     _audit(cur, ctx, f"order.approve.side={side}" + (".final" if transitioned else ""), order_id)
     return {"order_id": order_id, "side": side, "transitioned": transitioned,
-            "chained_order_ids": chained_ids}
+            "chained_order_ids": chained_ids,
+            "publisher_in_transit": publisher_in_transit}
 
 
 # ─── APPROVED → IN_TRANSIT (source -qty · single-writer) ─────────────────────
@@ -174,13 +191,60 @@ def _to_executed(cur, order_id: str, ctx: AuthContext) -> dict:
     return {"order_id": order_id, "status": "EXECUTED"}
 
 
+def _forecast_split(cur, wh_id: int, isbn: str, qty: int) -> list[tuple[int, int]] | None:
+    """이슈4 2026-05-16 — 권역 매장별 forecast_cache.predicted_demand 비율로 qty 분배.
+
+    "발주는 재고가 아예 부족한 시점에 · 지점별 예측 수요가 다른데 균등 분배는 틀림" (사용자).
+    decision-svc 의 forecast 기반 산정 원칙을 chained 분배에도 적용.
+
+    snapshot_date 별로 row 가 여러 개일 수 있으므로 매장별 향후 14일 predicted_demand 합으로 비중 산정.
+    forecast 데이터가 아예 없으면 None 반환 → caller 가 shortage fallback 사용.
+    """
+    cur.execute(
+        """
+        SELECT fc.store_id, COALESCE(SUM(fc.predicted_demand), 0)::float AS demand
+          FROM forecast_cache fc
+          JOIN locations l ON l.location_id = fc.store_id
+         WHERE l.wh_id = %s::smallint
+           AND l.location_type = 'STORE_OFFLINE'
+           AND l.active = TRUE
+           AND fc.isbn13 = %s::varchar
+           AND fc.snapshot_date >= CURRENT_DATE
+           AND fc.snapshot_date <  CURRENT_DATE + INTERVAL '14 days'
+         GROUP BY fc.store_id
+        """,
+        (wh_id, isbn),
+        prepare=False,
+    )
+    demand_list = [(int(loc_id), max(float(d or 0.0), 0.0)) for loc_id, d in cur.fetchall()]
+    total_demand = sum(d for _, d in demand_list)
+    if not demand_list or total_demand <= 0:
+        return None
+    # 예측 수요 비율 split — 마지막 매장이 잔량 흡수 (반올림 손실 보정)
+    demand_list.sort(key=lambda x: -x[1])
+    splits: list[tuple[int, int]] = []
+    remaining = qty
+    for i, (loc_id, d) in enumerate(demand_list):
+        if i == len(demand_list) - 1:
+            allocate = max(remaining, 0)
+        else:
+            allocate = max(int(qty * d / total_demand), 0)
+            if allocate > remaining:
+                allocate = remaining
+        if allocate > 0:
+            splits.append((loc_id, allocate))
+            remaining -= allocate
+    return splits
+
+
 def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qty: int,
                                  parent_expected_arrival, ctx: AuthContext) -> list[str]:
     """PUBLISHER_ORDER / WH_TRANSFER 승인 시 매장 분배 chained WH_TO_STORE 생성.
 
     2026-05-16 사용자 결정:
       - 상위 order 승인(_to_approved) 시점에 생성 — 승인=계획 잠김=전 경로 확정.
-      - 권역 내 모든 부족 매장에 자동 분배 (qty 비율 split, 부족 클수록 더 많이).
+      - 매장별 분배량은 forecast_cache.predicted_demand 비율 기준 (이슈4 · decision forecast 원칙).
+        forecast 없으면 shortage(safety_stock 부족량) 비율 fallback · 그것도 없으면 균등.
       - status='APPROVED' 강제 (chained 는 협의 대상 X · 자동 분배).
       - expected_arrival_at = 상위 물류센터 도착(parent_expected_arrival) + 1일.
         도착일 새벽 계획은 도착 전 잠겨 그 다음날 편입 → WH_TRANSFER chained D+1 · PUBLISHER chained D+4.
@@ -193,43 +257,46 @@ def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qt
         return []
     wh_id = row[0]
 
-    # 권역 내 모든 매장 중 부족 매장 (effective_available < safety_stock) — 부족량 큰 순
-    cur.execute(
-        """
-        SELECT i.location_id,
-               GREATEST(COALESCE(i.safety_stock, 0) - (COALESCE(i.on_hand, 0) - COALESCE(i.reserved_qty, 0)), 0) AS shortage
-          FROM inventory i
-          JOIN locations l ON l.location_id = i.location_id
-         WHERE l.wh_id = %s AND l.location_type = 'STORE_OFFLINE' AND l.active = TRUE
-           AND i.isbn13 = %s
-        """,
-        (wh_id, isbn),
-    )
-    rows = cur.fetchall()
-    shortage_list = [(loc_id, max(int(s or 0), 0)) for loc_id, s in rows]
-    total_shortage = sum(s for _, s in shortage_list)
-    if total_shortage <= 0:
-        # 부족 매장 없으면 권역 모든 매장에 균등 분배 (signal: forecast 큰 신간)
-        loc_ids = [loc_id for loc_id, _ in shortage_list]
-        if not loc_ids:
-            return []
-        base = qty // len(loc_ids)
-        extra = qty - base * len(loc_ids)
-        splits = [(loc_id, base + (1 if i < extra else 0)) for i, loc_id in enumerate(loc_ids)]
-    else:
-        # 부족량 비율로 split (작은 부족 매장은 skip · base 1 보장)
-        splits = []
-        remaining = qty
-        for i, (loc_id, s) in enumerate(shortage_list):
-            if i == len(shortage_list) - 1:
-                allocate = max(remaining, 0)
-            else:
-                allocate = max(int(qty * s / total_shortage), 0)
-                if allocate > remaining:
-                    allocate = remaining
-            if allocate > 0:
-                splits.append((loc_id, allocate))
-                remaining -= allocate
+    # 이슈4 — 1순위: forecast_cache 예측 수요 비율 분배.
+    splits = _forecast_split(cur, wh_id, isbn, qty)
+    if splits is None:
+        # forecast 미존재 → 기존 shortage(safety_stock) 비율 fallback.
+        cur.execute(
+            """
+            SELECT i.location_id,
+                   GREATEST(COALESCE(i.safety_stock, 0) - (COALESCE(i.on_hand, 0) - COALESCE(i.reserved_qty, 0)), 0) AS shortage
+              FROM inventory i
+              JOIN locations l ON l.location_id = i.location_id
+             WHERE l.wh_id = %s AND l.location_type = 'STORE_OFFLINE' AND l.active = TRUE
+               AND i.isbn13 = %s
+            """,
+            (wh_id, isbn),
+        )
+        rows = cur.fetchall()
+        shortage_list = [(loc_id, max(int(s or 0), 0)) for loc_id, s in rows]
+        total_shortage = sum(s for _, s in shortage_list)
+        if total_shortage <= 0:
+            # 부족 매장도 없으면 권역 모든 매장에 균등 분배 (signal: forecast 큰 신간)
+            loc_ids = [loc_id for loc_id, _ in shortage_list]
+            if not loc_ids:
+                return []
+            base = qty // len(loc_ids)
+            extra = qty - base * len(loc_ids)
+            splits = [(loc_id, base + (1 if i < extra else 0)) for i, loc_id in enumerate(loc_ids)]
+        else:
+            # 부족량 비율로 split (작은 부족 매장은 skip · base 1 보장)
+            splits = []
+            remaining = qty
+            for i, (loc_id, s) in enumerate(shortage_list):
+                if i == len(shortage_list) - 1:
+                    allocate = max(remaining, 0)
+                else:
+                    allocate = max(int(qty * s / total_shortage), 0)
+                    if allocate > remaining:
+                        allocate = remaining
+                if allocate > 0:
+                    splits.append((loc_id, allocate))
+                    remaining -= allocate
 
     chained_ids: list[str] = []
     for target_store, allocate_qty in splits:
