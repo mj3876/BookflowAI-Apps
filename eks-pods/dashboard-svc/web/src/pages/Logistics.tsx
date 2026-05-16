@@ -56,6 +56,13 @@ const LOGISTICS_GUIDE: GuideEntry[] = [
   },
 ];
 
+// 이슈10 2026-05-16: chained WH_TO_STORE 판별 —
+//   상위 발주(WH_TRANSFER/PUBLISHER_ORDER) 실행 후 자동 생성된 결과물(이미 APPROVED 강제).
+//   forecast_rationale.auto_approved=true 표식. hq 는 강제승인/발송/수령 대상 아님(read-only 관제).
+function isChained(o: PendingOrder): boolean {
+  return o.forecast_rationale?.auto_approved === true;
+}
+
 function todayIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -146,6 +153,12 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
   };
 
   const st = order.status;
+  // 이슈10: chained WH_TO_STORE 는 hq read-only (관제) — 강제승인/발송/수령 버튼 미노출.
+  //   실행 주체는 물류센터(발송)·지점(수령)뿐.
+  const chainedReadOnly = isChained(order) && role === 'hq-admin';
+  if (chainedReadOnly) {
+    return <span className="text-xs text-bf-muted">{ORDER_STATUS_KO[st] ?? st} · 자동 (관제)</span>;
+  }
   if (st === 'PENDING') {
     return (
       <div className="flex gap-1">
@@ -237,6 +250,73 @@ function ExecutedGroup({ label, rows, nameOf, onDone }: {
   );
 }
 
+// 이슈11 2026-05-16: 일괄 발송/수령 — 현재 탭/scope 대상 일괄 처리.
+//   출고 탭 → APPROVED 발송 대상 일괄 발송 · 입고 탭 → IN_TRANSIT 수령 대상 일괄 수령.
+//   chained(auto_approved) 도 물류센터/지점 실행 주체는 일괄 대상에 포함 (hq read-only 제외).
+function BulkActionBar({ tab, items, onDone }: {
+  tab: Tab;
+  items: { order: PendingOrder; side: Side }[];
+  onDone: () => void;
+}) {
+  const role = getRole()!;
+  const { showToast } = useToast();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+
+  if (tab !== 'outbound' && tab !== 'inbound') return null;
+
+  // hq 는 chained read-only — 일괄 대상에서 제외.
+  const eligible = items.filter(({ order, side }) => {
+    if (isChained(order) && role === 'hq-admin') return false;
+    if (tab === 'outbound') {
+      return order.status === 'APPROVED' && (side === 'source' || side === 'both' || role === 'hq-admin');
+    }
+    return order.status === 'IN_TRANSIT' && (side === 'target' || side === 'both' || role === 'hq-admin');
+  });
+
+  if (eligible.length === 0) return null;
+
+  const isOutbound = tab === 'outbound';
+  const label = isOutbound ? '일괄 발송' : '일괄 수령';
+  const icon = isOutbound ? '🚚' : '📦';
+
+  const run = async () => {
+    if (busy) return;
+    if (!window.confirm(`${eligible.length}건을 ${label}하시겠습니까?`)) return;
+    setBusy(true);
+    let ok = 0;
+    let fail = 0;
+    for (const { order } of eligible) {
+      try {
+        if (isOutbound) await postOrderDispatch(role, order.order_id, {});
+        else await postOrderReceive(role, order.order_id, {});
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    qc.invalidateQueries({ queryKey: ['orders'] });
+    qc.invalidateQueries({ queryKey: ['logistics'] });
+    qc.invalidateQueries({ queryKey: ['calendar'] });
+    qc.invalidateQueries({ queryKey: ['approval'] });
+    showToast({
+      type: fail === 0 ? 'success' : 'warning',
+      message: `${label} 완료 — 성공 ${ok}건${fail ? ` · 실패 ${fail}건` : ''}`,
+    });
+    setBusy(false);
+    onDone();
+  };
+
+  return (
+    <div className="px-3 py-2 flex items-center justify-between bg-bf-panel2/60 border-b border-bf-border">
+      <span className="text-xs text-bf-muted">{label} 대상 {eligible.length}건</span>
+      <button type="button" className="bf-btn-primary text-xs" disabled={busy} onClick={run}>
+        {icon} {label} ({eligible.length})
+      </button>
+    </div>
+  );
+}
+
 export default function Logistics() {
   const role = getRole();
   const scope = getScope();
@@ -308,6 +388,9 @@ export default function Logistics() {
             );
           })}
         </div>
+        {(tab === 'outbound' || tab === 'inbound') && (
+          <BulkActionBar tab={tab} items={items} onDone={() => q.refetch()} />
+        )}
         <div className="divide-y divide-bf-border">
           {items.length === 0 ? (
             <div className="p-6 text-center text-sm text-bf-muted">오늘 처리할 항목이 없습니다.</div>

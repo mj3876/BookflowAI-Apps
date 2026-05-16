@@ -35,6 +35,14 @@ const PLAN_VIEW_TYPES: Record<Exclude<PlanView, 'all'>, string[]> = {
 
 type ToastShow = (msg: string, type: 'success' | 'error' | 'info' | 'warning') => void;
 
+// 이슈10 2026-05-16: chained WH_TO_STORE 판별 —
+//   상위 발주(WH_TRANSFER/PUBLISHER_ORDER) 실행 후 자동 생성된 결과물(이미 APPROVED 강제).
+//   forecast_rationale.auto_approved=true 로 표식. hq 는 강제승인/발송/수령 대상 아님(read-only 관제).
+//   발송(물류센터)·수령(지점) 실행 주체만 액션. hq 액션 버튼 미노출.
+function isChained(o: PendingOrder): boolean {
+  return o.forecast_rationale?.auto_approved === true;
+}
+
 type Tab = 'inbound' | 'outbound' | 'in_transit' | 'executed';
 type Side = 'source' | 'target' | 'both' | 'none';
 type Placement = { tab: Tab; side: Side };
@@ -114,6 +122,12 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
   };
 
   const st = order.status;
+  // 이슈10: chained WH_TO_STORE 는 hq read-only (관제) — 강제승인/발송/수령 버튼 미노출.
+  //   실행 주체는 물류센터(발송)·지점(수령)뿐. hq 는 진행 상태만 표시.
+  const chainedReadOnly = isChained(order) && role === 'hq-admin';
+  if (chainedReadOnly) {
+    return <span className="text-xs text-bf-muted">{ORDER_STATUS_KO[st] ?? st} · 자동 (관제)</span>;
+  }
   // 액션 매트릭스
   if (st === 'PENDING') {
     return (
