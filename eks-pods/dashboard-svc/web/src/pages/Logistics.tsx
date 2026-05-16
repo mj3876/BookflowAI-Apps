@@ -18,18 +18,60 @@ import { getRole, getScope } from '../auth';
 import { ORDER_STATUS_KO, ORDER_TYPE_KO, REJECTION_STAGE_KO } from '../labels';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
+import UsageGuide, { type GuideEntry } from '../components/UsageGuide';
 
 type ToastShow = (msg: string, type: 'success' | 'error' | 'info' | 'warning') => void;
 type Tab = 'inbound' | 'outbound' | 'in_transit' | 'executed';
+
+// 이슈5 2026-05-16 — 입출고 페이지 role별 사용법 안내.
+const LOGISTICS_GUIDE: GuideEntry[] = [
+  {
+    role: 'hq-admin',
+    label: '🏢 본사 관리자',
+    lines: [
+      '오늘 처리할 입고·출고·운송·완료를 4개 탭으로 봅니다.',
+      '📤 출고 — 발송(🚚) · 📥 입고 — 수령(📦) 처리.',
+      '매장 보충(WH_TO_STORE)은 물류센터(출고)·지점(입고) 양쪽 탭에 함께 나타납니다.',
+      '외부 발주는 출판사가 발송하므로 운송 탭에 바로 나타나고, 수령만 처리합니다.',
+    ],
+  },
+  {
+    role: 'wh-manager',
+    label: '📦 물류센터 담당자',
+    lines: [
+      '📤 출고 탭 — 내 권역에서 보내는 건을 발송(🚚)합니다.',
+      '📥 입고 탭 — 내 권역으로 들어오는 건을 수령(📦)합니다.',
+      '매장 보충은 출고(물류센터)·입고(지점) 양면 업무 — 출고 탭에서 발송하면 지점이 입고 탭에서 수령합니다.',
+      '🚚 운송 탭 — 발송 후 도착 대기 중인 건을 확인합니다.',
+    ],
+  },
+  {
+    role: 'branch-clerk',
+    label: '🏬 지점 담당자',
+    lines: [
+      '📥 입고 탭 — 내 지점으로 도착하는 건을 수령(📦)합니다.',
+      '📤 출고 탭 — 내 지점에서 다른 매장으로 보내는 재분배 건을 발송(🚚)합니다.',
+      '✅ 완료 탭 — 오늘 처리가 끝난 건을 도서별로 확인합니다.',
+    ],
+  },
+];
 
 function todayIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+type Side = 'source' | 'target' | 'both' | 'none';
+type Placement = { tab: Tab; side: Side };
+
+// 이슈3 2026-05-16: WH_TO_STORE (물류센터→지점) 는 양면 업무 —
+//   source(물류센터)=출고 탭 · target(지점)=입고 탭 양쪽에 분류.
+//   양쪽 측을 다 가진 사용자(hq · source==target 권역 wh-manager)는 두 탭 모두 출현,
+//   각 탭 row 의 액션은 그 탭 관점의 side 로 결정 (출고 탭=발송 / 입고 탭=수령 대기).
+// 그 외 order_type 은 기존대로 한 탭에만 분류.
 function classify(o: PendingOrder, role: string, scope: { scope_wh_id: number | null; scope_store_id: number | null }): {
-  side: 'source' | 'target' | 'both' | 'none';
-  tab: Tab | null;
+  side: Side;
+  placements: Placement[];
 } {
   const isHq = role === 'hq-admin';
   const srcWh = (o as PendingOrder & { source_wh_id?: number | null }).source_wh_id;
@@ -41,20 +83,30 @@ function classify(o: PendingOrder, role: string, scope: { scope_wh_id: number | 
     || (scope.scope_store_id != null && o.target_location_id === scope.scope_store_id)
     || (scope.scope_wh_id != null && tgtWh === scope.scope_wh_id);
 
+  const side: Side = isSrc && isTgt ? 'both' : isSrc ? 'source' : isTgt ? 'target' : 'none';
   const status = o.status;
-  let tab: Tab | null = null;
-  // v5 2026-05-15 피드백 #8: PENDING 은 /approval 전용 · /logistics 는 APPROVED+ 만
-  if (status === 'IN_TRANSIT') tab = 'in_transit';
-  else if (status === 'EXECUTED' || status === 'AUTO_EXECUTED') tab = 'executed';
-  else if (status === 'APPROVED') {
-    if (isTgt && !isSrc) tab = 'inbound';
-    else if (isSrc && !isTgt) tab = 'outbound';
-    else tab = 'inbound';  // BOTH (hq) default → inbound
-  }
+  const placements: Placement[] = [];
 
-  const side: 'source' | 'target' | 'both' | 'none' =
-    isSrc && isTgt ? 'both' : isSrc ? 'source' : isTgt ? 'target' : 'none';
-  return { side, tab };
+  // v5 2026-05-15 피드백 #8: PENDING 은 /approval 전용 · /logistics 는 APPROVED+ 만
+  if (status === 'IN_TRANSIT') {
+    placements.push({ tab: 'in_transit', side });
+  } else if (status === 'EXECUTED' || status === 'AUTO_EXECUTED') {
+    placements.push({ tab: 'executed', side });
+  } else if (status === 'APPROVED') {
+    if (o.order_type === 'WH_TO_STORE') {
+      // 양면 분류 — source 측이면 출고, target 측이면 입고 (둘 다면 양쪽)
+      if (isSrc) placements.push({ tab: 'outbound', side: 'source' });
+      if (isTgt) placements.push({ tab: 'inbound', side: 'target' });
+      if (!isSrc && !isTgt) placements.push({ tab: 'inbound', side });
+    } else if (isTgt && !isSrc) {
+      placements.push({ tab: 'inbound', side });
+    } else if (isSrc && !isTgt) {
+      placements.push({ tab: 'outbound', side });
+    } else {
+      placements.push({ tab: 'inbound', side });  // BOTH (hq) default → inbound
+    }
+  }
+  return { side, placements };
 }
 
 function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'source' | 'target' | 'both' | 'none'; onDone: () => void }) {
@@ -131,20 +183,18 @@ function ActionButtons({ order, side, onDone }: { order: PendingOrder; side: 'so
   return <span className="text-xs text-bf-muted">{ORDER_STATUS_KO[st] ?? st}</span>;
 }
 
-function ExecutedGroup({ label, rows, nameOf, role, scope, onDone }: {
+function ExecutedGroup({ label, rows, nameOf, onDone }: {
   label: string;
-  rows: PendingOrder[];
+  rows: { order: PendingOrder; side: Side }[];
   nameOf: (id: number | undefined) => string | undefined;
-  role: string;
-  scope: { scope_wh_id: number | null; scope_store_id: number | null };
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(true);
   // 책별 sub-그룹 (같은 ISBN 묶기 — 과거 기록 가시성 ↑)
-  const byBook: Record<string, PendingOrder[]> = {};
-  for (const o of rows) {
-    const key = `${o.isbn13}|${o.title ?? ''}`;
-    (byBook[key] = byBook[key] || []).push(o);
+  const byBook: Record<string, { order: PendingOrder; side: Side }[]> = {};
+  for (const e of rows) {
+    const key = `${e.order.isbn13}|${e.order.title ?? ''}`;
+    (byBook[key] = byBook[key] || []).push(e);
   }
   const books = Object.entries(byBook).sort((a, b) => b[1].length - a[1].length);
   return (
@@ -161,25 +211,22 @@ function ExecutedGroup({ label, rows, nameOf, role, scope, onDone }: {
         <div className="divide-y divide-bf-border">
           {books.map(([key, list]) => {
             const [isbn, title] = key.split('|');
-            const totalQty = list.reduce((s, o) => s + o.qty, 0);
+            const totalQty = list.reduce((s, e) => s + e.order.qty, 0);
             return (
               <div key={key} className="px-3 py-2">
                 <div className="text-sm font-medium truncate">
                   {title || `ISBN ${isbn}`} <span className="text-xs text-bf-muted">· ISBN {isbn} · 총 {totalQty}권 · {list.length}건</span>
                 </div>
                 <div className="mt-1 space-y-0.5">
-                  {list.map((o) => {
-                    const { side } = classify(o, role, scope);
-                    return (
-                      <div key={o.order_id} className="text-xs text-bf-muted flex items-center gap-2">
-                        <span>{nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id ?? undefined) ?? '?'} · {o.qty}권</span>
-                        <span className="px-1.5 py-0.5 rounded bg-bf-surface border border-bf-border">
-                          {ORDER_STATUS_KO[o.status] ?? o.status}
-                        </span>
-                        <span className="ml-auto"><ActionButtons order={o} side={side} onDone={onDone} /></span>
-                      </div>
-                    );
-                  })}
+                  {list.map(({ order: o, side }) => (
+                    <div key={o.order_id} className="text-xs text-bf-muted flex items-center gap-2">
+                      <span>{nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id ?? undefined) ?? '?'} · {o.qty}권</span>
+                      <span className="px-1.5 py-0.5 rounded bg-bf-surface border border-bf-border">
+                        {ORDER_STATUS_KO[o.status] ?? o.status}
+                      </span>
+                      <span className="ml-auto"><ActionButtons order={o} side={side} onDone={onDone} /></span>
+                    </div>
+                  ))}
                 </div>
               </div>
             );
@@ -205,12 +252,16 @@ export default function Logistics() {
     refetchInterval: 10000,
   });
 
+  // 이슈3: WH_TO_STORE 는 두 탭(출고+입고)에 출현 가능 → row 별 placement 별 entry 보관.
   const grouped = useMemo(() => {
-    if (!q.data || !role) return { inbound: [], outbound: [], in_transit: [], executed: [] };
-    const result: Record<Tab, PendingOrder[]> = { inbound: [], outbound: [], in_transit: [], executed: [] };
+    const empty: Record<Tab, { order: PendingOrder; side: Side }[]> =
+      { inbound: [], outbound: [], in_transit: [], executed: [] };
+    if (!q.data || !role) return empty;
+    const result: Record<Tab, { order: PendingOrder; side: Side }[]> =
+      { inbound: [], outbound: [], in_transit: [], executed: [] };
     for (const o of q.data.items as PendingOrder[]) {
-      const { tab: t } = classify(o, role, scope);
-      if (t) result[t].push(o);
+      const { placements } = classify(o, role, scope);
+      for (const p of placements) result[p.tab].push({ order: o, side: p.side });
     }
     return result;
   }, [q.data, role, scope]);
@@ -235,6 +286,8 @@ export default function Logistics() {
         </div>
         {q.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
       </div>
+
+      <UsageGuide title="입출고 페이지 사용법" role={role} entries={LOGISTICS_GUIDE} />
 
       <div className="bf-card">
         <div className="grid grid-cols-4">
@@ -261,10 +314,10 @@ export default function Logistics() {
           ) : tab === 'executed' ? (
             /* 완료 탭 — order_type 별 그룹핑 (사용자 요청: 리스트만이라 보기 어려움) */
             (() => {
-              const groups: Record<string, PendingOrder[]> = {};
-              for (const o of items) {
-                const key = o.order_type;
-                (groups[key] = groups[key] || []).push(o);
+              const groups: Record<string, { order: PendingOrder; side: Side }[]> = {};
+              for (const e of items) {
+                const key = e.order.order_type;
+                (groups[key] = groups[key] || []).push(e);
               }
               const order: string[] = ['REBALANCE', 'WH_TO_STORE', 'WH_TRANSFER', 'PUBLISHER_ORDER'];
               return order.filter((k) => groups[k]?.length).map((k) => (
@@ -273,17 +326,14 @@ export default function Logistics() {
                   label={`${ORDER_TYPE_KO[k] ?? k} (${groups[k].length})`}
                   rows={groups[k]}
                   nameOf={nameOf}
-                  role={role}
-                  scope={scope}
                   onDone={() => q.refetch()}
                 />
               ));
             })()
           ) : (
-            items.map((o) => {
-              const { side } = classify(o, role, scope);
+            items.map(({ order: o, side }) => {
               return (
-                <div key={o.order_id} className="p-3 flex items-center justify-between gap-3">
+                <div key={`${o.order_id}-${side}`} className="p-3 flex items-center justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
                       {ORDER_TYPE_KO[o.order_type] ?? o.order_type} · ISBN {o.isbn13} · 수량 {o.qty}

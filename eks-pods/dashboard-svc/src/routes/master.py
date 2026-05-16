@@ -637,7 +637,7 @@ def inventory_by_store(store_id: int, ctx: AuthContext = Depends(require_auth)):
         _check_location_scope(ctx, store_id, cur)
         sql = """
             SELECT i.isbn13, i.on_hand, i.reserved_qty, COALESCE(i.safety_stock, 0) AS safety_stock,
-                   i.updated_at, b.title, b.author, b.category_name, b.price_sales
+                   i.updated_at, b.title, b.author, b.category_name, b.price_sales, b.cover_url
               FROM inventory i
               LEFT JOIN books b ON b.isbn13 = i.isbn13
              WHERE i.location_id = %s
@@ -660,6 +660,7 @@ def inventory_by_store(store_id: int, ctx: AuthContext = Depends(require_auth)):
                 "author":       r[6],
                 "category":     r[7],
                 "price_sales":  r[8],
+                "cover_url":    r[9],
             }
             for r in rows
         ],
