@@ -4,9 +4,9 @@ event_type → Logic Apps payload 의 recipients 배열을 결정한다.
 연락처는 settings (K8s ConfigMap NOTIFICATION_CONTACT_*) 에서 읽는다.
 
 학습환경 3개 통합 매핑:
-  contact_hq_emails     = 본사+경영진  (ms8405493@gmail.com)
-  contact_wh_emails     = 물류센터 전체 (rladudgjs0427@gmail.com)
-  contact_branch_emails = 지점 전체    (woohek00@gmail.com)
+  contact_hq_emails     = 본사+경영진  (redfox@yonsei.ac.kr)
+  contact_wh_emails     = 물류센터 전체 (ms8405493@gmail.com)
+  contact_branch_emails = 지점 전체    (redfox@yonsei.ac.kr)
 """
 from .settings import settings
 
