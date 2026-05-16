@@ -18,6 +18,7 @@ from __future__ import annotations
 import enum
 import logging
 import time
+from datetime import date, timedelta
 
 import httpx
 from fastapi import HTTPException
@@ -96,15 +97,27 @@ def _to_approved(cur, order_id: str, ctx: AuthContext, approval_side: str | None
                     AND decision = 'APPROVED'
                     AND approval_side IN ('SOURCE','TARGET')) >= 2
            )
-        RETURNING order_id, order_type, source_location_id, target_location_id
+        RETURNING order_id, order_type, source_location_id, target_location_id,
+                  isbn13, qty, expected_arrival_at
         """,
         (order_id,),
     )
     row = cur.fetchone()
     transitioned = row is not None
 
+    # WH_TRANSFER/PUBLISHER_ORDER 는 승인 시점에 chained WH_TO_STORE 를 미리 생성.
+    # 승인 = 계획 잠김 = 전 경로(물류센터 도착 + 매장 분배) 확정 → 다른 order 와 동일하게
+    # 승인 즉시 캘린더에 출현. chained 매장 도착 = 상위 물류센터 도착 + 1일.
+    chained_ids: list[str] = []
+    if transitioned:
+        order_type, tgt_loc, isbn, qty, exp_arrival = row[1], row[3], row[4], row[5], row[6]
+        if order_type in ("PUBLISHER_ORDER", "WH_TRANSFER"):
+            chained_ids = _trigger_chained_wh_to_store(
+                cur, order_id, tgt_loc, isbn, qty, exp_arrival, ctx)
+
     _audit(cur, ctx, f"order.approve.side={side}" + (".final" if transitioned else ""), order_id)
-    return {"order_id": order_id, "side": side, "transitioned": transitioned}
+    return {"order_id": order_id, "side": side, "transitioned": transitioned,
+            "chained_order_ids": chained_ids}
 
 
 # ─── APPROVED → IN_TRANSIT (source -qty · single-writer) ─────────────────────
@@ -145,35 +158,35 @@ def _to_executed(cur, order_id: str, ctx: AuthContext) -> dict:
         UPDATE pending_orders
            SET status = 'EXECUTED', executed_at = NOW(), executed_by = %s
          WHERE order_id = %s AND status = 'IN_TRANSIT'
-        RETURNING target_location_id, isbn13, qty, order_type
+        RETURNING target_location_id, isbn13, qty
         """,
         (ctx.user_id, order_id),
     )
     row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=409, detail="order not in IN_TRANSIT state")
-    tgt, isbn, qty, order_type = row
+    tgt, isbn, qty = row
 
     _call_inventory_adjust(ctx, location_id=tgt, isbn13=isbn, delta=+qty,
                            reason=f"receive:{order_id[:8]}")
     _audit(cur, ctx, "order.receive", order_id)
-
-    # v5 2026-05-15: chained order automation — 권역 모든 부족 매장에 자동 분배 + APPROVED 강제
-    # PUBLISHER (D+3 wh 도착) / WH_TRANSFER (D+1 wh 도착) 후 chained 는 +1 day → 매장 도착 D+4 / D+2
-    chained_ids: list[str] = []
-    if order_type in ("PUBLISHER_ORDER", "WH_TRANSFER"):
-        chained_ids = _trigger_chained_wh_to_store(cur, order_id, tgt, isbn, qty, ctx)
-    return {"order_id": order_id, "status": "EXECUTED", "chained_order_ids": chained_ids}
+    # chained WH_TO_STORE 는 _to_approved (승인 시점) 에서 이미 생성됨 — 수령 시점엔 X.
+    return {"order_id": order_id, "status": "EXECUTED"}
 
 
-def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qty: int, ctx: AuthContext) -> list[str]:
-    """PUBLISHER_ORDER / WH_TRANSFER 도착 후 매장 분배 (chained WH_TO_STORE).
+def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qty: int,
+                                 parent_expected_arrival, ctx: AuthContext) -> list[str]:
+    """PUBLISHER_ORDER / WH_TRANSFER 승인 시 매장 분배 chained WH_TO_STORE 생성.
 
-    v5 2026-05-15 사용자 결정:
-      - 권역 내 모든 부족 매장에 자동 분배 (qty 비율 split, 부족 클수록 더 많이)
-      - status='APPROVED' 강제 (별도 협의 X · 본사 신간 정책과 동일)
-      - expected_arrival_at = NOW + 1 day (다음 날 도착)
+    2026-05-16 사용자 결정:
+      - 상위 order 승인(_to_approved) 시점에 생성 — 승인=계획 잠김=전 경로 확정.
+      - 권역 내 모든 부족 매장에 자동 분배 (qty 비율 split, 부족 클수록 더 많이).
+      - status='APPROVED' 강제 (chained 는 협의 대상 X · 자동 분배).
+      - expected_arrival_at = 상위 물류센터 도착(parent_expected_arrival) + 1일.
+        도착일 새벽 계획은 도착 전 잠겨 그 다음날 편입 → WH_TRANSFER chained D+1 · PUBLISHER chained D+4.
     """
+    base_arrival = parent_expected_arrival if isinstance(parent_expected_arrival, date) else date.today()
+    chained_arrival = base_arrival + timedelta(days=1)
     cur.execute("SELECT wh_id FROM locations WHERE location_id = %s AND location_type='WH'", (wh_loc,))
     row = cur.fetchone()
     if not row:
@@ -231,13 +244,14 @@ def _trigger_chained_wh_to_store(cur, parent_id: str, wh_loc: int, isbn: str, qt
                  forecast_rationale)
             VALUES (gen_random_uuid(), 'WH_TO_STORE', %s::varchar, %s::int, %s::int, %s::int,
                     6, %s::int * 500, 'NORMAL', false,
-                    'APPROVED', NOW(), NOW(), (NOW() + INTERVAL '1 day')::date,
+                    'APPROVED', NOW(), NOW(), %s::date,
                     jsonb_build_object('reason', 'chained_from_wh_arrival', 'parent_order_id', %s::text,
-                                       'expected_arrival_date', (NOW() + INTERVAL '1 day')::date::text,
+                                       'expected_arrival_date', %s::text,
                                        'auto_approved', true))
             RETURNING order_id
             """,
-            (isbn, wh_loc, target_store, allocate_qty, allocate_qty, parent_id),
+            (isbn, wh_loc, target_store, allocate_qty, allocate_qty,
+             chained_arrival, parent_id, chained_arrival.isoformat()),
             prepare=False,
         )
         chained = cur.fetchone()
@@ -277,8 +291,49 @@ def _to_rejected(cur, order_id: str, ctx: AuthContext, reject_reason: str) -> di
         _call_inventory_adjust(ctx, location_id=src, isbn13=isbn, delta=+qty,
                                reason=f"reject-restore:{order_id[:8]}")
 
+    # WH_TRANSFER/PUBLISHER_ORDER 거부 → 승인 시점에 생성된 chained WH_TO_STORE 도 cascade 취소.
+    cascaded_ids: list[str] = []
+    if order_type in ("PUBLISHER_ORDER", "WH_TRANSFER"):
+        cascaded_ids = _cancel_chained(cur, order_id, reject_reason, ctx)
+
     _audit(cur, ctx, f"order.reject.stage={stage}", order_id)
-    return {"order_id": order_id, "status": "REJECTED", "rejection_stage": stage}
+    return {"order_id": order_id, "status": "REJECTED", "rejection_stage": stage,
+            "cascaded_chained_ids": cascaded_ids}
+
+
+def _cancel_chained(cur, parent_id: str, reject_reason: str, ctx: AuthContext) -> list[str]:
+    """상위 WH_TRANSFER/PUBLISHER 거부 시 그 chained WH_TO_STORE 를 cascade REJECTED.
+
+    chained 가 IN_TRANSIT 였으면 source(wh) 재고 복원 · EXECUTED 면 이미 완료 — 안 건드림.
+    chained 는 forecast_rationale->>'parent_order_id' 로 상위와 연결됨.
+    """
+    cur.execute(
+        """
+        UPDATE pending_orders
+           SET status = 'REJECTED',
+               rejection_stage = CASE status
+                 WHEN 'PENDING'    THEN 'PENDING'
+                 WHEN 'APPROVED'   THEN 'APPROVED'
+                 WHEN 'IN_TRANSIT' THEN 'IN_TRANSIT'
+               END,
+               reject_reason = %s,
+               reject_count = reject_count + 1
+         WHERE forecast_rationale->>'parent_order_id' = %s
+           AND status IN ('PENDING','APPROVED','IN_TRANSIT')
+        RETURNING order_id, rejection_stage, source_location_id, isbn13, qty
+        """,
+        (f"상위 거부 cascade: {reject_reason}", parent_id),
+        prepare=False,
+    )
+    chained_ids: list[str] = []
+    for c_oid, c_stage, c_src, c_isbn, c_qty in cur.fetchall():
+        chained_ids.append(str(c_oid))
+        if c_stage == "IN_TRANSIT" and c_src is not None:
+            _call_inventory_adjust(ctx, location_id=c_src, isbn13=c_isbn, delta=+c_qty,
+                                   reason=f"chained-reject-restore:{c_oid[:8]}")
+    if chained_ids:
+        _audit(cur, ctx, f"order.reject.chained_cascade.n={len(chained_ids)}", parent_id)
+    return chained_ids
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

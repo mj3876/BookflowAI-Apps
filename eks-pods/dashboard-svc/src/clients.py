@@ -400,8 +400,11 @@ async def post_orders_batch_receive(body: dict, token: str) -> tuple[int, Any]:
     )
 
 
-async def get_orders_calendar(from_date: str, to_date: str, token: str) -> dict | None:
+async def get_orders_calendar(
+    from_date: str, to_date: str, token: str, plan_view: str = "all",
+) -> dict | None:
     return await _safe_get(
-        f"{settings.intervention_svc_url}/intervention/orders/calendar?from_date={from_date}&to_date={to_date}",
+        f"{settings.intervention_svc_url}/intervention/orders/calendar"
+        f"?from_date={from_date}&to_date={to_date}&plan_view={plan_view}",
         token,
     )

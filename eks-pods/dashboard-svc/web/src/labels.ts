@@ -8,6 +8,13 @@ export const ORDER_TYPE_KO: Record<string, string> = {
   PUBLISHER_ORDER: '📦 외부 발주',
 };
 
+// order_type 별 컬러 일관 적용 (캘린더 cell · 승인 row).
+//   REBALANCE=초록 · WH_TO_STORE=파랑 · WH_TRANSFER=보라 · PUBLISHER_ORDER=주황
+// 클래스명 ot-{order_type} 가 styles.css 에서 --ot CSS 변수 정의.
+export function orderTypeClass(order_type: string): string {
+  return `ot-${order_type}`;
+}
+
 export const ORDER_STATUS_KO: Record<string, string> = {
   PENDING:       '⏳ 협의 중',
   APPROVED:      '📋 계획 확정',

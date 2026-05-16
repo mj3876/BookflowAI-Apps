@@ -14,17 +14,24 @@
 //   EXECUTED       → (완료)
 //   REJECTED       → (거부 사유)
 import { useMemo, useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
   fetchPending, postOrderApprove, postOrderDispatch, postOrderReceive, postOrderReject,
-  type PendingOrder,
+  type PendingOrder, type PlanView,
 } from '../api';
 import { getRole, getScope } from '../auth';
-import { ORDER_STATUS_KO, ORDER_TYPE_KO, REJECTION_STAGE_KO } from '../labels';
+import { ORDER_STATUS_KO, ORDER_TYPE_KO, REJECTION_STAGE_KO, orderTypeClass } from '../labels';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
+import { PlanViewToggle, planViewOptions } from '../components/PlanViewToggle';
+
+// plan_view (order_type 기반) — 캘린더 분리 토글과 동일 매핑.
+const PLAN_VIEW_TYPES: Record<Exclude<PlanView, 'all'>, string[]> = {
+  mine: ['WH_TO_STORE', 'WH_TRANSFER', 'PUBLISHER_ORDER'],
+  observe: ['REBALANCE'],
+};
 
 type ToastShow = (msg: string, type: 'success' | 'error' | 'info' | 'warning') => void;
 
@@ -138,6 +145,17 @@ export default function CalendarDetail() {
   const scope = getScope();
   const { nameOf } = useLocations(role ?? 'hq-admin');
   const [tab, setTab] = useState<Tab>('inbound');
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const planView: PlanView = (() => {
+    const v = searchParams.get('view');
+    return v === 'mine' || v === 'observe' ? v : 'all';
+  })();
+  const setPlanView = (v: PlanView) => {
+    const next = new URLSearchParams(searchParams);
+    if (v === 'all') next.delete('view'); else next.set('view', v);
+    setSearchParams(next, { replace: true });
+  };
 
   // fetchPending(expected_date=YYYY-MM-DD) — backend `/intervention/queue?expected_date=`
   // 가 expected_arrival_at OR executed_at::date 기반으로 모든 status row 응답.
@@ -152,14 +170,16 @@ export default function CalendarDetail() {
 
   const grouped = useMemo(() => {
     if (!q.data || !role) return { inbound: [], outbound: [], in_transit: [], executed: [] };
-    // backend 가 이미 date filter — frontend 는 4 탭 분류만 수행.
+    // backend 가 이미 date filter — frontend 는 4 탭 분류 + plan_view(order_type) 필터.
     const result: Record<Tab, PendingOrder[]> = { inbound: [], outbound: [], in_transit: [], executed: [] };
+    const allowTypes = planView !== 'all' ? PLAN_VIEW_TYPES[planView] : null;
     for (const o of q.data.items as PendingOrder[]) {
+      if (allowTypes && !allowTypes.includes(o.order_type)) continue;
       const { tab: t } = classify(o, role, scope);
       if (t) result[t].push(o);
     }
     return result;
-  }, [q.data, role, scope]);
+  }, [q.data, role, scope, planView]);
 
   if (!role || !date) return null;
   const counts = {
@@ -170,15 +190,33 @@ export default function CalendarDetail() {
   };
   const items = grouped[tab];
 
+  const hasToggle = planViewOptions(role) !== null;
+  const viewBadge =
+    planView === 'mine' ? { text: role === 'hq-admin' ? '🏢 물류센터 계획' : '📦 내 입출고', cls: 'bg-blue-100 text-blue-700 border-blue-200' }
+    : planView === 'observe' ? { text: role === 'hq-admin' ? '🏬 지점 계획' : '🔄 권역 매장 재분배', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' }
+    : null;
+  const backHref = `/calendar${planView !== 'all' ? `?view=${planView}` : ''}`;
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-xl font-semibold">📅 {date}</h1>
-          <Link to="/calendar" className="text-xs text-bf-primary hover:underline">← 캘린더로</Link>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">📅 {date}</h1>
+            {viewBadge && (
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${viewBadge.cls}`}>
+                {viewBadge.text}
+              </span>
+            )}
+          </div>
+          <Link to={backHref} className="text-xs text-bf-primary hover:underline">← 캘린더로</Link>
         </div>
         {q.isFetching && <span className="text-xs text-bf-muted">갱신 중…</span>}
       </div>
+
+      {hasToggle && (
+        <PlanViewToggle role={role} value={planView} onChange={setPlanView} />
+      )}
 
       <div className="bf-card">
         <div className="grid grid-cols-4">
@@ -217,7 +255,8 @@ export default function CalendarDetail() {
                 const books = Object.entries(byBook).sort((a, b) => b[1].length - a[1].length);
                 return (
                   <div key={k}>
-                    <div className="px-3 py-2 text-sm font-medium bg-bf-surface/50">
+                    <div className={`${orderTypeClass(k)} px-3 py-2 text-sm font-medium bg-bf-panel2/60 flex items-center gap-2`}>
+                      <span className="ot-dot" />
                       {ORDER_TYPE_KO[k] ?? k} ({groups[k].length}) · {books.length} 도서
                     </div>
                     <div className="divide-y divide-bf-border">
@@ -249,14 +288,19 @@ export default function CalendarDetail() {
             items.map((o) => {
               const { side } = classify(o, role, scope);
               return (
-                <div key={o.order_id} className="p-3 flex items-center justify-between gap-3">
+                <div
+                  key={o.order_id}
+                  className={`${orderTypeClass(o.order_type)} ot-row-hover p-3 flex items-center gap-3 transition`}
+                >
+                  <span className="ot-bar self-stretch" />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">
+                    <div className="flex items-center gap-1.5 text-sm font-medium truncate">
+                      <span className="ot-dot" />
                       {ORDER_TYPE_KO[o.order_type] ?? o.order_type} · ISBN {o.isbn13} · 수량 {o.qty}
                     </div>
                     <div className="text-xs text-bf-muted mt-0.5">
                       {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id) ?? '?'}
-                      <span className="ml-2 px-1.5 py-0.5 rounded bg-bf-surface border border-bf-border">
+                      <span className="ml-2 px-1.5 py-0.5 rounded bg-bf-panel2 border border-bf-border">
                         {ORDER_STATUS_KO[o.status] ?? o.status}
                       </span>
                     </div>

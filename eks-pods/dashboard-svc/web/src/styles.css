@@ -46,7 +46,34 @@ body {
   .data-table th { @apply text-left text-[10px] uppercase tracking-wider text-bf-muted font-semibold py-2 px-2 border-b border-bf-border2; }
   .data-table td { @apply py-2 px-2 border-b border-bf-border2; }
   .data-table tbody tr:hover { @apply bg-bf-panel2; }
+
+  /* 캘린더·승인 분리 view 디자인 (2026-05-16) — 기존 마크업이 참조하던 bf-* 유틸 정의 */
+  .bf-card    { @apply bg-bf-panel border border-bf-border rounded-lg shadow-sm; }
+  .bf-input   { @apply bg-bf-panel text-bf-text border border-bf-border rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:border-bf-primary focus:ring-2 focus:ring-bf-ring; }
+  .bf-btn-secondary { @apply inline-flex items-center justify-center px-3 py-1.5 rounded-md font-medium bg-bf-panel2 text-bf-text2 border border-bf-border hover:bg-bf-border2 transition cursor-pointer; }
+  .bf-btn-primary   { @apply inline-flex items-center justify-center px-3 py-1.5 rounded-md font-medium bg-bf-primary text-white hover:bg-bf-primary2 transition cursor-pointer; }
+  .bf-btn-danger-secondary { @apply inline-flex items-center justify-center px-3 py-1.5 rounded-md font-medium bg-bf-dangerbg text-bf-danger border border-bf-danger/30 hover:bg-bf-dangerbg/70 transition cursor-pointer; }
+
+  /* 세그먼트 토글 (scope/plan_view 분리) */
+  .bf-seg      { @apply inline-flex bg-bf-panel2 border border-bf-border rounded-lg p-0.5 gap-0.5; }
+  .bf-seg-btn  { @apply px-3.5 py-1.5 rounded-md text-sm font-medium text-bf-muted hover:text-bf-text transition cursor-pointer; }
+  .bf-seg-btn-on { @apply bg-bf-panel text-bf-text shadow-sm; }
+
+  /* order_type 컬러 dot — 캘린더 cell · 승인 row 계획 단위 직관 구분 */
+  .ot-dot { @apply inline-block w-2 h-2 rounded-full shrink-0; }
 }
+
+/* order_type 컬러 토큰 — REBALANCE 초록 · WH_TO_STORE 파랑 · WH_TRANSFER 보라 · PUBLISHER_ORDER 주황 */
+.ot-REBALANCE       { --ot: #16A34A; }
+.ot-WH_TO_STORE     { --ot: #2563EB; }
+.ot-WH_TRANSFER     { --ot: #7C3AED; }
+.ot-PUBLISHER_ORDER { --ot: #EA580C; }
+.ot-dot       { background: var(--ot, #ADB5BD); }
+.ot-bar       { width: 3px; border-radius: 2px; background: var(--ot, #ADB5BD); align-self: stretch; }
+.ot-soft      { background: color-mix(in srgb, var(--ot, #ADB5BD) 12%, transparent);
+                color: var(--ot, #495057);
+                border: 1px solid color-mix(in srgb, var(--ot, #ADB5BD) 35%, transparent); }
+.ot-row-hover:hover { box-shadow: inset 3px 0 0 var(--ot, transparent); }
 
 /* Redis stock.changed 실시간 cell flash (BranchInventory · WhDashboard · Home) */
 @keyframes stock-flash {

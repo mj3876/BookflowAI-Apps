@@ -890,9 +890,15 @@ export type CalendarDay = {
   executed: number;
 };
 
-export const fetchCalendar = (role: Role, from_date: string, to_date: string) =>
+// plan_view — 캘린더/승인 계획 단위 분리 (order_type 기반):
+//   all=전체 · mine=물류센터 계획 (WH_TO_STORE·WH_TRANSFER·PUBLISHER_ORDER) · observe=지점 계획 (REBALANCE)
+export type PlanView = 'all' | 'mine' | 'observe';
+
+export const fetchCalendar = (
+  role: Role, from_date: string, to_date: string, plan_view: PlanView = 'all',
+) =>
   getJson<{ items: CalendarDay[] }>(
-    `/dashboard/orders/calendar?from_date=${from_date}&to_date=${to_date}`, role,
+    `/dashboard/orders/calendar?from_date=${from_date}&to_date=${to_date}&plan_view=${plan_view}`, role,
   );
 
 export const postOrderApprove = (

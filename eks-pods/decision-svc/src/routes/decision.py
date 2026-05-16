@@ -46,13 +46,16 @@ PLAN_MIN_ROW_QTY = 5      # 너무 작은 발의는 묶거나 스킵 (운송 효
 
 # Stage 별 lead time — 사용자 도메인 (2026-05-15 v4):
 #   "수요예측 D+0 새벽 → 9시 이내 승인 끝 → 그 날 안에 모든 계획 실행".
-# REBALANCE/WH_TO_STORE: 발의 당일 매장↔매장 / wh→매장 차량 routing 으로 D+0 도착.
-# WH_TRANSFER: 권역 간 (수도권↔영남) → D+1 도착.
-# PUBLISHER_ORDER: 외부 출판사 발주 → D+3 도착.
+# REBALANCE/WH_TO_STORE/WH_TRANSFER: 발의 당일 D+0 도착.
+#   REBALANCE 매장↔매장 · WH_TO_STORE wh→매장 · WH_TRANSFER 물류센터끼리 당일 분배.
+# PUBLISHER_ORDER: 외부 출판사 발주 → D+3 물류센터 도착.
+# chained WH_TO_STORE (WH_TRANSFER/PUBLISHER 물류센터 도착 후 매장 분배) 는 상위 도착 +1일:
+#   도착일 새벽 계획은 도착 전 이미 잠겨서 그 다음날 계획에 편입됨
+#   → WH_TRANSFER chained D+1 · PUBLISHER chained D+4 (state_machine._trigger_chained_wh_to_store).
 LEAD_DAYS: dict[str, int] = {
     "REBALANCE": 0,
     "WH_TO_STORE": 0,
-    "WH_TRANSFER": 1,
+    "WH_TRANSFER": 0,
     "PUBLISHER_ORDER": 3,
 }
 

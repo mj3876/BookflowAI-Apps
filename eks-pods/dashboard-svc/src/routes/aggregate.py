@@ -483,9 +483,13 @@ async def orders_batch_receive(body: dict = Body(...), ctx: AuthContext = Depend
 
 
 @router.get("/orders/calendar")
-async def orders_calendar(from_date: str, to_date: str, ctx: AuthContext = Depends(require_auth)):
-    """캘린더 cell count · role/scope 자동 필터 (date × {inbound,outbound,in_transit,executed})."""
-    data = await get_orders_calendar(from_date, to_date, ctx.token)
+async def orders_calendar(
+    from_date: str, to_date: str, plan_view: str = "all",
+    ctx: AuthContext = Depends(require_auth),
+):
+    """캘린더 cell count · role/scope 자동 필터 (date × {inbound,outbound,in_transit,executed}).
+    plan_view: all(전체) · mine(물류센터 계획) · observe(지점 계획)."""
+    data = await get_orders_calendar(from_date, to_date, ctx.token, plan_view)
     return data or {"items": [], "_source": "intervention-svc unavailable"}
 
 

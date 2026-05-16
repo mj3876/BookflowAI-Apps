@@ -21,14 +21,23 @@ import { useSearchParams } from 'react-router-dom';
 
 import {
   fetchPending, postOrderApprove, postOrderReject, patchOrder, postOrdersBatchApprove,
-  type PendingOrder,
+  type PendingOrder, type PlanView,
 } from '../api';
 import { getRole, getScope } from '../auth';
-import { ORDER_TYPE_KO, URGENCY_KO } from '../labels';
+import { ORDER_TYPE_KO, URGENCY_KO, orderTypeClass } from '../labels';
 import { useLocations } from '../useLocations';
 import { useToast } from '../components/Toast';
+import { planViewOptions } from '../components/PlanViewToggle';
 
 type StageFilter = 'all' | 'REBALANCE' | 'WH_TO_STORE' | 'WH_TRANSFER' | 'PUBLISHER_ORDER';
+
+// 주체/관찰 분리 (order_type 기반) — 캘린더 plan_view 와 동일 매핑.
+//   mine    — 물류센터 경유 계획 (WH_TO_STORE·WH_TRANSFER·PUBLISHER_ORDER)
+//   observe — 지점 간 재분배 (REBALANCE)
+const PLAN_VIEW_TYPES: Record<Exclude<PlanView, 'all'>, string[]> = {
+  mine: ['WH_TO_STORE', 'WH_TRANSFER', 'PUBLISHER_ORDER'],
+  observe: ['REBALANCE'],
+};
 
 function whichSide(o: PendingOrder, scope: { scope_wh_id: number | null; scope_store_id: number | null }): 'SOURCE' | 'TARGET' | 'BOTH' | null {
   const srcWh = (o as PendingOrder & { source_wh_id?: number | null }).source_wh_id;
@@ -59,6 +68,12 @@ export default function Approval() {
     return 'all';
   })() as StageFilter;
   const [stage, setStage] = useState<StageFilter>(initialStage);
+  // 주체/관찰 분리 view (URL ?view=mine|observe|all) — branch-clerk 는 미노출
+  const initialView = (() => {
+    const v = searchParams.get('view');
+    return v === 'mine' || v === 'observe' ? v : 'all';
+  })() as PlanView;
+  const [planView, setPlanView] = useState<PlanView>(initialView);
   const [q, setQ] = useState<string>(searchParams.get('q') ?? '');
   // 검색박스 3 분리 (ISBN · 제목 · 매장) — client-side filter (mySideRes 500건 대상)
   const [qIsbn, setQIsbn] = useState('');
@@ -73,14 +88,15 @@ export default function Approval() {
   } | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  // stage 변경 시 URL searchParam 동기화 + 페이지 리셋
+  // stage / planView 변경 시 URL searchParam 동기화 + 페이지 리셋
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
     if (stage === 'all') next.delete('stage'); else next.set('stage', stage);
+    if (planView === 'all') next.delete('view'); else next.set('view', planView);
     if (q) next.set('q', q); else next.delete('q');
     setSearchParams(next, { replace: true });
     setPage(0);
-  }, [stage, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stage, planView, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const offset = page * PAGE_SIZE;
   const queryKey = ['approval', role, stage, q, page] as const;
@@ -113,8 +129,10 @@ export default function Approval() {
     const trimmedIsbn = qIsbn.trim().toLowerCase();
     const trimmedTitle = qTitle.trim().toLowerCase();
     const trimmedStore = qStore.trim().toLowerCase();
+    const allowTypes = planView !== 'all' ? PLAN_VIEW_TYPES[planView] : null;
     return list.filter((o) => {
       if (o.status !== 'PENDING') return false;
+      if (allowTypes && !allowTypes.includes(o.order_type)) return false;
       if (trimmedIsbn && !o.isbn13.toLowerCase().includes(trimmedIsbn)) return false;
       if (trimmedTitle && !(o.title ?? '').toLowerCase().includes(trimmedTitle)) return false;
       if (trimmedStore) {
@@ -130,7 +148,7 @@ export default function Approval() {
       }
       return true;
     });
-  }, [queryRes.data, qIsbn, qTitle, qStore, nameOf, stage, rebalanceSide, scope]);
+  }, [queryRes.data, qIsbn, qTitle, qStore, nameOf, stage, rebalanceSide, scope, planView]);
   const totalPending = queryRes.data?.total ?? 0;
   const totalAll = fullStats?.total ?? 0;  // 전체 (stage filter 무시)
 
@@ -198,8 +216,10 @@ export default function Approval() {
         limit: 5000,
         ...(stage !== 'all' ? { order_type: stage } : {}),
       });
+      const allowTypes = planView !== 'all' ? PLAN_VIEW_TYPES[planView] : null;
       const allIds = ((allRes.items as PendingOrder[] | undefined) ?? [])
         .filter((o) => o.status === 'PENDING')
+        .filter((o) => !allowTypes || allowTypes.includes(o.order_type))
         .map((o) => o.order_id);
       if (allIds.length === 0) { showToast({ type: 'info', message: '승인할 PENDING 이 없습니다.' }); setBulkBusy(false); return; }
       if (!window.confirm(`전체 PENDING ${allIds.length}건 ${label} 합니다.\n(${stage === 'all' ? '모든 stage' : stage} · pagination 무관 전체)`)) {
@@ -245,11 +265,39 @@ export default function Approval() {
     else if (role === 'hq-admin') mySide.escalation++;
   }
 
+  // 주체/관찰 분리 탭 — role 별 라벨 (branch-clerk 는 미노출)
+  const viewTabs: { key: PlanView; label: string }[] | null = (() => {
+    if (!planViewOptions(role)) return null;  // branch-clerk
+    if (role === 'hq-admin') {
+      return [
+        { key: 'all', label: '전체' },
+        { key: 'mine', label: '🏢 물류센터 계획' },
+        { key: 'observe', label: '🏬 지점 계획' },
+      ];
+    }
+    return [
+      { key: 'all', label: '전체' },
+      { key: 'mine', label: '🏢 내 주체' },
+      { key: 'observe', label: '👀 관찰' },
+    ];
+  })();
+  const viewBadge =
+    planView === 'mine' ? { text: role === 'hq-admin' ? '🏢 물류센터 계획' : '🏢 내 주체 (정상 양측 동의)', cls: 'bg-blue-100 text-blue-700 border-blue-200' }
+    : planView === 'observe' ? { text: role === 'hq-admin' ? '🏬 지점 계획' : '👀 관찰 (강제 승인 가능)', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' }
+    : null;
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-xl font-semibold">📋 협의 중</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">📋 협의 중</h1>
+            {viewBadge && (
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${viewBadge.cls}`}>
+                {viewBadge.text}
+              </span>
+            )}
+          </div>
           <div className="text-sm text-bf-muted mt-0.5">
             양측 협의가 모두 완료되면 자동으로 <a href="/logistics" className="text-bf-primary hover:underline">입출고 섹션</a>으로 이동.
           </div>
@@ -285,6 +333,20 @@ export default function Approval() {
           <div className="text-2xl font-semibold mt-0.5 text-bf-muted">{role === 'hq-admin' ? mySide.escalation.toLocaleString() : Math.max(0, totalAll - mySide.source - mySide.target).toLocaleString()}</div>
         </div>
       </div>
+
+      {/* 주체/관찰 분리 세그먼트 토글 */}
+      {viewTabs && (
+        <div className="bf-seg">
+          {viewTabs.map((v) => (
+            <button
+              key={v.key}
+              type="button"
+              onClick={() => setPlanView(v.key)}
+              className={`bf-seg-btn ${planView === v.key ? 'bf-seg-btn-on' : ''}`}
+            >{v.label}</button>
+          ))}
+        </div>
+      )}
 
       <div className="bf-card p-2 space-y-2">
         <div className="flex gap-1 flex-wrap">
@@ -367,10 +429,17 @@ export default function Approval() {
             const done = selfDone.has(o.order_id) || !!mySideApproved;
             const canEdit = isHq || side === 'SOURCE' || side === 'BOTH';  // qty/target 수정 권한
             return (
-              <div key={o.order_id} className="p-3 flex items-center justify-between gap-3">
+              <div
+                key={o.order_id}
+                className={`${orderTypeClass(o.order_type)} ot-row-hover p-3 flex items-center gap-3 transition`}
+              >
+                <span className="ot-bar self-stretch" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{ORDER_TYPE_KO[o.order_type] ?? o.order_type}</span>
+                    <span className="ot-soft text-sm font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <span className="ot-dot" />
+                      {ORDER_TYPE_KO[o.order_type] ?? o.order_type}
+                    </span>
                     {o.urgency_level && o.urgency_level !== 'NORMAL' && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-bf-warn/10 text-bf-warn border border-bf-warn/30">
                         {URGENCY_KO[o.urgency_level] ?? o.urgency_level}

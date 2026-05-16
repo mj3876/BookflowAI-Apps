@@ -293,17 +293,29 @@ def patch_order(
 
 
 # ─── GET /orders/calendar — date × count matrix ──────────────────────────────
+# plan_view — order_type 기반 계획 단위 분리 (scope 자동 필터와 독립 layer):
+#   mine    — 물류센터 경유 계획 (WH_TO_STORE · WH_TRANSFER · PUBLISHER_ORDER)
+#   observe — 지점 간 재분배 계획 (REBALANCE)
+#   all     — 전체 (default)
+_PLAN_VIEW_TYPES: dict[str, tuple[str, ...]] = {
+    "mine": ("WH_TO_STORE", "WH_TRANSFER", "PUBLISHER_ORDER"),
+    "observe": ("REBALANCE",),
+}
+
+
 @router.get("/calendar", response_model=CalendarResp)
 def calendar(
     from_date: date_type,
     to_date: date_type,
+    plan_view: Literal["all", "mine", "observe"] = "all",
     ctx: AuthContext = Depends(require_auth),
 ):
-    """캘린더 cell count — role/scope 자동 필터.
+    """캘린더 cell count — role/scope 자동 필터 + plan_view (order_type) 분리 집계.
       inbound:    target = ctx scope · status IN (PENDING, APPROVED, IN_TRANSIT)
       outbound:   source = ctx scope · status IN (PENDING, APPROVED)
       in_transit: 자기 측 (source or target) · status = IN_TRANSIT
       executed:   자기 측 · status IN (EXECUTED, AUTO_EXECUTED) · executed_at::date = day
+      plan_view:  mine=물류센터 계획 · observe=지점 계획 · all=전체
     """
     # scope filter SQL fragment
     if ctx.role == "hq-admin":
@@ -316,6 +328,15 @@ def calendar(
         params = [ctx.scope_store_id, ctx.scope_store_id]
     else:
         raise HTTPException(status_code=403, detail=f"unknown role: {ctx.role}")
+
+    # plan_view → order_type IN (...) fragment (scope 필터와 독립)
+    pv_types = _PLAN_VIEW_TYPES.get(plan_view)
+    if pv_types:
+        pv_frag = "AND po.order_type IN (" + ",".join(["%s"] * len(pv_types)) + ")"
+        pv_params: list = list(pv_types)
+    else:
+        pv_frag = ""
+        pv_params = []
 
     # v5 2026-05-15 피드백 #10: frontend classify 와 일치 — 같은 row 가 inbound + outbound 둘 다 카운트 X.
     # BOTH (is_src AND is_tgt · hq scope) → inbound 만 (frontend classify 와 동일).
@@ -330,6 +351,7 @@ def calendar(
               LEFT JOIN locations s ON s.location_id = po.source_location_id
               LEFT JOIN locations t ON t.location_id = po.target_location_id
              WHERE po.status IN ('APPROVED','IN_TRANSIT','EXECUTED','AUTO_EXECUTED')
+               {pv_frag}
                AND (po.expected_arrival_at BETWEEN %s AND %s
                     OR (po.executed_at IS NOT NULL AND po.executed_at::date BETWEEN %s AND %s))
         )
@@ -348,8 +370,9 @@ def calendar(
          WHERE COALESCE(expected_arrival_at, exec_date) BETWEEN %s AND %s
          GROUP BY 1 ORDER BY 1
     """
-    # params 는 scope_src + scope_tgt %s 매칭용 (hq-admin=[]·wh-manager=[wh,wh]·branch=[store,store])
-    qparams = (*params, from_date, to_date, from_date, to_date, from_date, to_date)
+    # params 순서: scope_src/scope_tgt(SELECT 절) → plan_view(WHERE) → date×3.
+    # base CTE 안에서 scope %s 가 SELECT 절, pv_frag %s 가 WHERE 절에 위치하므로 이 순서 고정.
+    qparams = (*params, *pv_params, from_date, to_date, from_date, to_date, from_date, to_date)
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, qparams)
