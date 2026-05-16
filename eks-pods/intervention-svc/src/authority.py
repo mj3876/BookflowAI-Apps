@@ -8,7 +8,8 @@
   hq-admin       — 모든 order × 모든 action 허용 (FINAL)
   wh-manager-X   — order 의 source/target 이 wh_id=X 인 경우만
   branch-clerk-S — order 의 source/target 이 store_id=S 인 경우만
-  PUBLISHER_ORDER — hq-admin 단독 (외부 발주)
+  PUBLISHER_ORDER — hq-admin 또는 수령 물류센터(target wh-manager) (외부 발주)
+                    단 NEWBOOK(신간 편입)은 hq-admin 단독
 
 특이 케이스 (반품):
   IN_TRANSIT 상태 reject 는 target 측만 가능 (반품 = 수령 거부)

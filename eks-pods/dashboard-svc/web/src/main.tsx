@@ -26,9 +26,9 @@ import BranchSales from './pages/BranchSales';
 import Notifications from './pages/Notifications';
 import LiveEvents from './pages/LiveEvents';
 // PR-C (2026-05-15) 4-step state machine v2 — 캘린더 + 사이드바 분리 페이지
+// 이슈15 2026-05-16: Logistics.tsx 폐기 → /logistics 는 CalendarDetail 을 date 없이(오늘) 렌더.
 import Calendar from './pages/Calendar';
 import CalendarDetail from './pages/CalendarDetail';
-import Logistics from './pages/Logistics';
 import { getRole, roleGroup } from './auth';
 import { ToastProvider } from './components/Toast';
 import './styles.css';
@@ -106,7 +106,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             {/* PR-C 4-step state machine v2 — 사이드바 진입점 (모든 role 자동 필터) */}
             <Route path="/calendar"      element={<Calendar />} />
             <Route path="/cal/:date"     element={<CalendarDetail />} />
-            <Route path="/logistics"     element={<Logistics />} />
+            {/* 이슈15: /logistics = date 없는 CalendarDetail (오늘) — 코드 단일화 */}
+            <Route path="/logistics"     element={<CalendarDetail />} />
             {/* /approval 은 위 HQ section 의 기존 path 그대로 활용 (legacy Approval.tsx 가 새 협의 페이지로 교체됨) */}
 
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -120,15 +120,14 @@ phases:
           done
         done
 
-      # ── 4. Rollout restart + status (Deployment 만 · CronJob 은 skip) ──
-      # apply 가 spec 무변경(:latest 동일 tag · manifest 미변경 등)이면 rollout 미트리거.
-      # rollout restart 로 변경 pod 의 새 이미지(:latest) pull 을 강제한 뒤 status 검증.
+      # ── 4. Rollout status (Deployment 만 · CronJob 은 skip) ──
+      # manifest 가 image: .../:${IMAGE_TAG} (= git SHA) 라 커밋마다 tag 변경 →
+      # kubectl apply 가 image 필드 변경으로 rollout 을 자동 트리거. restart 불필요.
       # dashboard-svc 는 multi-stage (node build → python serve · web bundle 큼) 라
       # 시작 시간 더 길어서 timeout 300s. 다른 pod 도 graceful term + readiness 여유 고려해 동일.
       - |
         for pod in $PODS; do
           if kubectl get deployment "$pod" -n "$NAMESPACE" >/dev/null 2>&1; then
-            kubectl rollout restart deployment/"$pod" -n "$NAMESPACE"
             kubectl rollout status deployment/"$pod" -n "$NAMESPACE" --timeout=300s || exit 1
           fi
         done

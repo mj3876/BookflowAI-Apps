@@ -9,13 +9,14 @@ const ROLES: { id: Role; label: string; group: string; desc: string }[] = [
 ];
 
 // 2026-05-15 v3 시연 편의 — 12 매장 별도 mock (실제 운영은 Entra ID OIDC)
+// id·이름은 DB seed-data/locations.csv (STORE_OFFLINE) 와 1:1 정확히 일치해야 함 (이슈14 · 2026-05-16).
 const STORES: { id: number; name: string; wh: number }[] = [
   { id: 1, name: '강남점',    wh: 1 }, { id: 2, name: '광화문점',  wh: 1 },
   { id: 3, name: '잠실점',    wh: 1 }, { id: 4, name: '홍대점',    wh: 1 },
   { id: 5, name: '신촌점',    wh: 1 }, { id: 6, name: '용산점',    wh: 1 },
-  { id: 7, name: '부산 센텀점', wh: 2 }, { id: 8, name: '부산 서면점', wh: 2 },
+  { id: 7, name: '부산 서면점', wh: 2 }, { id: 8, name: '대구 동성점', wh: 2 },
   { id: 9, name: '울산 삼산점', wh: 2 }, { id: 10, name: '대구 교대점', wh: 2 },
-  { id: 11, name: '대구 서구점', wh: 2 }, { id: 12, name: '포항 양덕점', wh: 2 },
+  { id: 11, name: '부산 센텀점', wh: 2 }, { id: 12, name: '포항 양덕점', wh: 2 },
 ];
 
 export default function Login() {
