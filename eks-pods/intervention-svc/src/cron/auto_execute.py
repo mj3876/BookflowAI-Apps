@@ -1,19 +1,19 @@
-"""07:00 KST 자동 승인 / 누적 거절 일괄 처리 CronJob entrypoint.
+"""08:00 KST 발의일 일괄 batch — 자동 승인 + 미처리 자동 거절 CronJob entrypoint.
 
-V6.2 시트04 ④AutoExecutedUrgent · ⑤AutoRejectedBatch 정합:
+발의된 cascade 계획은 발의 당일 08:00 batch 로 전부 종결된다 (이후 PENDING 잔존 없음):
 
 자동 승인 (auto_execute_eligible=True · status=PENDING):
-  - decision-svc 가 Stage 1 + URGENT/CRITICAL 주문에 auto_execute_eligible=True 마킹
-  - 07:00 KST 시점에 일괄 APPROVED 전환 + AutoExecutedUrgent 알림
+  - decision-svc 가 URGENT/CRITICAL 주문에 auto_execute_eligible=True 마킹
+  - 08:00 batch 에서 일괄 APPROVED 전환 + AutoExecutedUrgent 알림
 
-누적 거절 (reject_count >= 2 · status=PENDING):
-  - WH 매니저가 두 번 이상 거절 (SOURCE/TARGET 양쪽 또는 재발의)
+미처리 자동 거절 (위 자동 승인 후에도 status=PENDING 인 잔존분):
+  - 08:00 까지 사람이 승인하지 않은 NORMAL 주문 = 기본값 거절
   - 일괄 REJECTED 종결 + AutoRejectedBatch 알림
 
 실행 방법:
   python -m src.cron.auto_execute
 
-EKS CronJob schedule: '0 22 * * *' (UTC) == 07:00 KST
+EKS CronJob schedule: '0 23 * * *' (UTC) == 08:00 KST
 """
 import json
 import logging
@@ -134,29 +134,33 @@ def _approve_auto_eligible(conn) -> list[dict]:
     return approved
 
 
-def _reject_overaccumulated(conn) -> list[dict]:
-    """reject_count >= 2 · status=PENDING → REJECTED (배치 종결)."""
+def _reject_remaining_pending(conn) -> list[dict]:
+    """자동 승인 후에도 status=PENDING 인 잔존분 → REJECTED 일괄 종결.
+
+    발의 당일 08:00 batch: URGENT/CRITICAL 자동 승인 후 남은 PENDING =
+    08:00 까지 사람이 승인하지 않은 NORMAL 주문 → 기본값(미승인=거절)으로 종결.
+    이 함수는 반드시 _approve_auto_eligible 다음에 호출 (그래야 URGENT 가 제외됨).
+    """
     rejected: list[dict] = []
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT order_id, order_type, isbn13, qty, reject_count
+            SELECT order_id, order_type, isbn13, qty
               FROM pending_orders
              WHERE status = 'PENDING'
-               AND reject_count >= 2
-             ORDER BY reject_count DESC, created_at ASC
+             ORDER BY created_at ASC
             """
         )
         rows = cur.fetchall()
         for r in rows:
-            order_id, order_type, isbn13, qty, rc = r
+            order_id, order_type, isbn13, qty = r
             # PR-B 4-step state machine v2: rejection_stage='PENDING' (자동 reject 는 PENDING 상태에서만 작동)
             cur.execute(
                 """
                 UPDATE pending_orders
                    SET status = 'REJECTED',
                        rejection_stage = 'PENDING',
-                       reject_reason = COALESCE(reject_reason, '누적 거절 자동 종결')
+                       reject_reason = COALESCE(reject_reason, '발의일 08:00 batch 미승인 자동 거절')
                  WHERE order_id = %s
                 """,
                 (str(order_id),),
@@ -167,10 +171,10 @@ def _reject_overaccumulated(conn) -> list[dict]:
                 VALUES ('system', %s, 'intervention.auto_reject_batch', 'pending_orders', %s, %s::jsonb)
                 """,
                 (SYSTEM_USER_ID, str(order_id),
-                 json.dumps({"reject_count": rc, "order_type": order_type, "auto": True})),
+                 json.dumps({"order_type": order_type, "auto": True, "reason": "08:00_batch_unhandled"})),
             )
-            rejected.append({"order_id": str(order_id), "order_type": order_type, "isbn13": isbn13,
-                             "qty": qty, "reject_count": rc})
+            rejected.append({"order_id": str(order_id), "order_type": order_type,
+                             "isbn13": isbn13, "qty": qty})
     conn.commit()
     return rejected
 
@@ -180,7 +184,7 @@ def main() -> int:
     try:
         with _conn() as conn:
             approved = _approve_auto_eligible(conn)
-            rejected = _reject_overaccumulated(conn)
+            rejected = _reject_remaining_pending(conn)
     except Exception as e:
         log.exception("cron failed: %s", e)
         return 1
