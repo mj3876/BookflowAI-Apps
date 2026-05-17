@@ -109,7 +109,9 @@ def _fetch_stock_details(order_id: str) -> dict:
                            tl.location_type   AS target_type,
                            po.dispatched_at,
                            po.executed_at,
-                           po.expected_arrival_at
+                           po.expected_arrival_at,
+                           po.source_location_id,
+                           po.target_location_id
                       FROM pending_orders po
                       LEFT JOIN locations sl ON sl.location_id = po.source_location_id
                       LEFT JOIN locations tl ON tl.location_id = po.target_location_id
@@ -135,6 +137,8 @@ def _fetch_stock_details(order_id: str) -> dict:
         "dispatched_at":        row[7].isoformat() if row[7] else None,
         "executed_at":          row[8].isoformat() if row[8] else None,
         "expected_arrival":     str(row[9])   if row[9] else None,
+        "source_location_id":   row[10],
+        "target_location_id":   row[11],
     }
 
 

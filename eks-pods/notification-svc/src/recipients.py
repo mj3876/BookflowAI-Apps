@@ -3,11 +3,18 @@
 event_type → Logic Apps payload 의 recipients 배열을 결정한다.
 연락처는 settings (K8s ConfigMap NOTIFICATION_CONTACT_*) 에서 읽는다.
 
-학습환경 3개 통합 매핑:
+학습환경 3개 통합 매핑 (그룹 이벤트용):
   contact_hq_emails     = 본사+경영진  (redfox@yonsei.ac.kr)
   contact_wh_emails     = 물류센터 전체 (ms8405493@gmail.com)
   contact_branch_emails = 지점 전체    (2023240672@yonsei.ac.kr)
+
+지점·물류센터 개별 담당자 매핑 (StockDepart/Arrival 전용):
+  contact_location_contacts_json = JSON {"location_id": "email", ...}
+  → locations 테이블 PK 기반 (1~16)
+  → 해당 location_id 담당자에게만 발송 (브로드캐스트 X)
 """
+import json
+
 from .settings import settings
 
 
@@ -29,6 +36,28 @@ def _branches() -> list[dict]:
     return _parse(settings.contact_branch_emails, "지점")
 
 
+def _location_contacts() -> dict[int, str]:
+    """NOTIFICATION_LOCATION_CONTACTS_JSON → {location_id: email}."""
+    raw = settings.contact_location_contacts_json.strip()
+    if not raw:
+        return {}
+    try:
+        return {int(k): v for k, v in json.loads(raw).items()}
+    except Exception:
+        return {}
+
+
+def _location_recipient(location_id, display_name: str | None = None) -> list[dict]:
+    """location_id 담당자 1명만 반환. 미등록이면 빈 리스트."""
+    if location_id is None:
+        return []
+    contacts = _location_contacts()
+    email = contacts.get(int(location_id))
+    if not email or not email.strip():
+        return []
+    return [{"address": email.strip(), "displayName": display_name or f"담당자({location_id})"}]
+
+
 def _dedup(recipients: list[dict]) -> list[dict]:
     """동일 address 중복 제거 (같은 이메일로 여러 역할 매핑 시 방어)."""
     seen: set[str] = set()
@@ -40,72 +69,24 @@ def _dedup(recipients: list[dict]) -> list[dict]:
     return result
 
 
-def _is_wh(loc_type: str | None) -> bool:
-    return bool(loc_type and loc_type.upper() == "WH")
-
-
-def _is_branch(loc_type: str | None) -> bool:
-    return bool(loc_type and "STORE" in loc_type.upper())
-
-
 def _stock_depart_recipients(payload: dict | None) -> list[dict]:
-    """StockDepartPending: 도착지(target) 담당자에게 운송 시작 메일 발송.
+    """StockDepartPending: 도착지(target) 담당자 1명에게만 운송 시작 메일 발송.
 
-    수신 규칙 (출발지 → 도착지 조합별):
-      도착지 = WH     : 출발지가 HQ(None) 또는 다른 WH 인 경우만 물류센터 수신
-      도착지 = BRANCH : 출발지가 WH 또는 다른 BRANCH 인 경우만 지점 수신
-      도착지 = HQ     : 본사는 도착지가 될 수 없으므로 발송 안 함
+    target_location_id 로 개별 담당자를 조회.
+    미등록(PUBLISHER_ORDER 등) → 빈 리스트.
     """
     p = payload or {}
-    tgt = p.get("target_location_type") or ""
-    src = p.get("source_location_type")  # None = HQ/출판사 (source_location_id IS NULL)
-
-    if _is_wh(tgt):
-        # 출발지가 HQ(None) 또는 다른 WH 일 때만 물류센터 수신
-        if src is None or _is_wh(src):
-            return _wh()
-        return []
-
-    if _is_branch(tgt):
-        # 출발지가 WH 또는 다른 BRANCH 일 때만 지점 수신
-        if _is_wh(src) or _is_branch(src):
-            return _branches()
-        return []
-
-    return []  # 도착지가 HQ 또는 미분류 → 발송 안 함
+    return _location_recipient(p.get("target_location_id"), p.get("target_location"))
 
 
 def _stock_arrival_recipients(payload: dict | None) -> list[dict]:
-    """StockArrivalPending: 출발지(source) 담당자에게 운송 완료 확인 메일 발송.
+    """StockArrivalPending: 출발지(source) 담당자 1명에게만 운송 완료 확인 메일 발송.
 
-    수신 규칙 (출발지 → 도착지 조합별):
-      출발지 = HQ(None) : 도착지가 WH 인 경우 본사 수신
-      출발지 = WH       : 도착지가 다른 WH 또는 BRANCH 인 경우 물류센터 수신
-      출발지 = BRANCH   : 도착지가 다른 BRANCH 인 경우 지점 수신
+    source_location_id 로 개별 담당자를 조회.
+    출발지가 출판사(source_location_id IS NULL) → 빈 리스트.
     """
     p = payload or {}
-    src = p.get("source_location_type")  # None = HQ/출판사
-    tgt = p.get("target_location_type") or ""
-
-    if src is None:
-        # 출발지 = HQ: 도착지가 WH 인 경우 본사가 확인메일 받음
-        if _is_wh(tgt):
-            return _hq()
-        return []
-
-    if _is_wh(src):
-        # 출발지 = WH: 도착지가 다른 WH 또는 BRANCH 이면 물류센터 수신
-        if _is_wh(tgt) or _is_branch(tgt):
-            return _wh()
-        return []
-
-    if _is_branch(src):
-        # 출발지 = BRANCH: 도착지가 다른 BRANCH 이면 지점 수신
-        if _is_branch(tgt):
-            return _branches()
-        return []
-
-    return []
+    return _location_recipient(p.get("source_location_id"), p.get("source_location"))
 
 
 def get_recipients(event_type: str, payload: dict | None = None) -> list[dict]:
