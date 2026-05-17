@@ -3,7 +3,7 @@
  *
  * 표시:
  *  - 결품 위치 수 (zero_count > 0 인 location 카운트) — 빨강
- *  - 부족 위치 수 (low_count > 0 인 location 카운트) — 주황
+ *  - 부족 위치 수 (운송중 차감 후 real_low_count > 0 인 location 카운트) — 주황
  *  - 24h SNS 급등 도서 수 — 보라 (z_score 임계 초과)
  *
  * 모두 0 이면 "정상" 상태 표시.
@@ -57,7 +57,7 @@ export default function AnomalyBanner({
     {
       count: lowLocations,
       label: '부족 위치',
-      hint: '가용 ≤ 10 SKU 보유 위치',
+      hint: '운송중 차감 후 가용 ≤ 안전재고 SKU 보유 위치',
       bg: 'bg-orange-50',
       fg: 'text-orange-900',
       border: 'border-orange-300',

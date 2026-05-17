@@ -595,6 +595,7 @@ def inventory_heatmap(ctx: AuthContext = Depends(require_auth)):
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     # incoming = 운송중/승인된 발주의 도착예정 수량 (target_location × isbn 별).
     #   real_short_qty = raw 부족 − incoming → 운송중 차감 후 "실제 추가 발주 필요한" 양.
+    #   real_low_count = 운송중 차감 후에도 안전재고 미달인 SKU 수 (low_count 의 실질판).
     sql = f"""
         WITH incoming AS (
             SELECT target_location_id AS loc, isbn13, SUM(qty) AS inc_qty
@@ -611,7 +612,9 @@ def inventory_heatmap(ctx: AuthContext = Depends(require_auth)):
                count(*) FILTER (WHERE i.on_hand = 0) AS zero_count,
                COALESCE(sum(GREATEST(0, COALESCE(i.safety_stock, 0) - (i.on_hand - i.reserved_qty))), 0) AS short_qty,
                COALESCE(sum(GREATEST(0, COALESCE(i.safety_stock, 0) - (i.on_hand - i.reserved_qty)
-                                          - COALESCE(inc.inc_qty, 0))), 0) AS real_short_qty
+                                          - COALESCE(inc.inc_qty, 0))), 0) AS real_short_qty,
+               count(*) FILTER (WHERE COALESCE(i.safety_stock, 0) - (i.on_hand - i.reserved_qty)
+                                        - COALESCE(inc.inc_qty, 0) > 0) AS real_low_count
           FROM inventory i
           LEFT JOIN locations l ON l.location_id = i.location_id
           LEFT JOIN incoming inc ON inc.loc = i.location_id AND inc.isbn13 = i.isbn13
@@ -638,6 +641,7 @@ def inventory_heatmap(ctx: AuthContext = Depends(require_auth)):
                 "zero_count":    r[9],
                 "short_qty":     int(r[10] or 0),
                 "real_short_qty": int(r[11] or 0),
+                "real_low_count": int(r[12] or 0),
             }
             for r in rows
         ],
