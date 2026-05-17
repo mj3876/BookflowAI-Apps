@@ -84,6 +84,21 @@ ENVEOF
   chmod 640 "$ENV_FILE"
 fi
 
+# ── 3-b. RDS_HOST 라이브 보정 ─────────────────────────────────────────────────
+# RDS 는 매일 destroy/recreate 되어 엔드포인트 hash 가 바뀐다. secret 의 정적
+# RDS_HOST 값 대신 CFN 스택(bookflow-20-rds) 출력에서 현재 엔드포인트를 조회해 덮어쓴다.
+# → 매 배포 / 인스턴스 기동 시 항상 현재 RDS 를 가리킴 (daily 재생성에도 안 깨짐).
+RDS_HOST_LIVE=$(aws cloudformation describe-stacks \
+  --stack-name bookflow-20-rds \
+  --query "Stacks[0].Outputs[?OutputKey=='DbEndpointAddress'].OutputValue | [0]" \
+  --output text 2>/dev/null || true)
+if [ -n "$RDS_HOST_LIVE" ] && [ "$RDS_HOST_LIVE" != "None" ]; then
+  sed -i "s|^RDS_HOST=.*|RDS_HOST=${RDS_HOST_LIVE}|" "$ENV_FILE"
+  echo "RDS_HOST resolved live from CFN bookflow-20-rds: $RDS_HOST_LIVE"
+else
+  echo "WARNING: RDS_HOST 를 CFN 에서 조회 못함 — secret/기본값 그대로 사용"
+fi
+
 # ── 4. DB 마이그레이션 (migration.sql — ADD COLUMN IF NOT EXISTS) ──────────────
 # EC2 (Egress VPC) → Transit Gateway → RDS (Data VPC) 경로로 연결
 # 연결 실패 시 경고만 출력하고 계속 진행 (앱은 기동하되 DB 요청 시 오류)
