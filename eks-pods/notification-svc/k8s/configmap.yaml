@@ -16,7 +16,7 @@ data:
   NOTIFICATION_LOG_LEVEL: "INFO"
   NOTIFICATION_CONTACT_HQ_EMAILS: "redfox@yonsei.ac.kr"
   NOTIFICATION_CONTACT_WH_EMAILS: "ms8405493@gmail.com"
-  NOTIFICATION_CONTACT_BRANCH_EMAILS: "redfox@yonsei.ac.kr"
+  NOTIFICATION_CONTACT_BRANCH_EMAILS: "2023240672@yonsei.ac.kr"
   AUTH_MODE: "jwt"
   AUTH_JWT_ISSUER: "bookflow-auth-pod"
   AUTH_JWT_AUDIENCE: "bookflow-services"

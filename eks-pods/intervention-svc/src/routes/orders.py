@@ -91,6 +91,53 @@ def _publish_order_event(ctx: AuthContext, event_type: str, order_id: str,
     notify_publish(ctx.token, event_type, severity, payload)
 
 
+def _fetch_stock_details(order_id: str) -> dict:
+    """StockDepartPending / StockArrivalPending 이메일용 상세 정보 조회.
+
+    commit 완료 후 호출 (별도 DB 연결). best-effort — 실패 시 빈 dict 반환.
+    출발지 source_location_id 가 NULL 인 PUBLISHER_ORDER 는 source_* 필드가 None.
+    """
+    try:
+        with db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT po.isbn13, po.qty, b.title,
+                           sl.name            AS source_name,
+                           sl.location_type   AS source_type,
+                           tl.name            AS target_name,
+                           tl.location_type   AS target_type,
+                           po.dispatched_at,
+                           po.executed_at,
+                           po.expected_arrival_at
+                      FROM pending_orders po
+                      LEFT JOIN locations sl ON sl.location_id = po.source_location_id
+                      LEFT JOIN locations tl ON tl.location_id = po.target_location_id
+                      LEFT JOIN books     b  ON b.isbn13       = po.isbn13
+                     WHERE po.order_id = %s
+                    """,
+                    (order_id,),
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        log.warning("_fetch_stock_details order=%s error: %s", order_id, e)
+        return {}
+    if not row:
+        return {}
+    return {
+        "isbn13":               row[0],
+        "qty":                  row[1],
+        "title":                row[2],
+        "source_location":      row[3],       # None for PUBLISHER_ORDER
+        "source_location_type": row[4],       # None for PUBLISHER_ORDER
+        "target_location":      row[5],
+        "target_location_type": row[6],
+        "dispatched_at":        row[7].isoformat() if row[7] else None,
+        "executed_at":          row[8].isoformat() if row[8] else None,
+        "expected_arrival":     str(row[9])   if row[9] else None,
+    }
+
+
 # ─── POST /orders/{order_id}/approve ────────────────────────────────────────
 @router.post("/{order_id}/approve", status_code=200)
 def approve_order(
@@ -165,6 +212,10 @@ def dispatch_order(
             result = transition(cur, order_id, State.IN_TRANSIT, ctx)
         conn.commit()
     _publish_order_event(ctx, "OrderDispatched", order_id, meta or {})
+    # 도착지 담당자에게 운송 시작 메일 (Logic Apps stock-depart)
+    details = _fetch_stock_details(order_id)
+    if details:
+        notify_publish(ctx.token, "StockDepartPending", "INFO", {"order_id": order_id, **details})
     return result
 
 
@@ -193,6 +244,9 @@ def batch_dispatch_orders(
     for r in ok:
         meta = r.pop("_meta")
         _publish_order_event(ctx, "OrderDispatched", r["order_id"], meta)
+        details = _fetch_stock_details(r["order_id"])
+        if details:
+            notify_publish(ctx.token, "StockDepartPending", "INFO", {"order_id": r["order_id"], **details})
     return {"ok": ok, "failed": failed, "total": len(req.order_ids)}
 
 
@@ -209,6 +263,10 @@ def receive_order(
             result = transition(cur, order_id, State.EXECUTED, ctx)
         conn.commit()
     _publish_order_event(ctx, "OrderExecuted", order_id, meta or {})
+    # 출발지 담당자에게 운송 완료 확인 메일 (Logic Apps stock-arrival)
+    details = _fetch_stock_details(order_id)
+    if details:
+        notify_publish(ctx.token, "StockArrivalPending", "INFO", {"order_id": order_id, **details})
     return result
 
 
@@ -237,6 +295,9 @@ def batch_receive_orders(
     for r in ok:
         meta = r.pop("_meta")
         _publish_order_event(ctx, "OrderExecuted", r["order_id"], meta)
+        details = _fetch_stock_details(r["order_id"])
+        if details:
+            notify_publish(ctx.token, "StockArrivalPending", "INFO", {"order_id": r["order_id"], **details})
     return {"ok": ok, "failed": failed, "total": len(req.order_ids)}
 
 
@@ -293,134 +354,63 @@ def patch_order(
 
 
 # ─── GET /orders/calendar — date × count matrix ──────────────────────────────
-# plan_view — order_type 기반 계획 단위 분리 (scope 자동 필터와 독립 layer):
-#   mine    — 물류센터 계획 (WH-kind face 가 있는 order_type)
-#   observe — 지점 계획 (STORE-kind face 가 있는 order_type)
-#   all     — 전체 (default)
-# 2026-05-16 walkthrough-10 이슈18: observe 에 WH_TO_STORE 추가 —
-#   WH_TO_STORE 의 target 은 STORE 라 지점 계획에 매장 입고면이 떠야 함.
-#   (tgt_vis 는 이미 WH_TO_STORE 를 STORE-kind 로 잡지만 pv_frag 가 row 자체를 떨궈 cell 0 이었음)
-_PLAN_VIEW_TYPES: dict[str, tuple[str, ...]] = {
-    "mine": ("WH_TO_STORE", "WH_TRANSFER", "PUBLISHER_ORDER"),
-    "observe": ("REBALANCE", "WH_TO_STORE"),
-}
-
-
-# order_type 별 source/target face 의 종류 — frontend lib/orderClassify.ts faceKinds 와 동일.
-#   WH_TO_STORE  src=WH tgt=STORE · WH_TRANSFER src=WH tgt=WH
-#   REBALANCE    src=STORE tgt=STORE · PUBLISHER_ORDER src=EXT tgt=WH
-_FACE_SRC_WH = ("WH_TO_STORE", "WH_TRANSFER")
-_FACE_TGT_WH = ("WH_TRANSFER", "PUBLISHER_ORDER")
-_FACE_SRC_STORE = ("REBALANCE",)
-_FACE_TGT_STORE = ("WH_TO_STORE", "REBALANCE")
-
-
 @router.get("/calendar", response_model=CalendarResp)
 def calendar(
     from_date: date_type,
     to_date: date_type,
-    plan_view: Literal["all", "mine", "observe"] = "all",
     ctx: AuthContext = Depends(require_auth),
 ):
-    """캘린더 cell count — frontend lib/orderClassify.ts classify 와 동일 face 기반 규칙.
-
-    각 order 를 source face / target face 2면으로 분해, 노출 face 만 카운트:
-      outbound   : source face 노출 · status = APPROVED
-      in_transit : source face 노출 · status = IN_TRANSIT
-      inbound    : target face 노출 · status IN (APPROVED, IN_TRANSIT)
-      executed   : 노출 face 1개 이상 · status IN (EXECUTED, AUTO_EXECUTED) · exec_date = day
-
-    face 가시성:
-      wh-manager / branch-clerk — 내 scope 가 닿는 face 만.
-      hq-admin — all: 양면 · mine: WH face 만 · observe: STORE face 만.
-    4 탭 합계 = CalendarDetail 4 탭 placement 합계 (정합 보장).
+    """캘린더 cell count — role/scope 자동 필터.
+      inbound:    target = ctx scope · status IN (PENDING, APPROVED, IN_TRANSIT)
+      outbound:   source = ctx scope · status IN (PENDING, APPROVED)
+      in_transit: 자기 측 (source or target) · status = IN_TRANSIT
+      executed:   자기 측 · status IN (EXECUTED, AUTO_EXECUTED) · executed_at::date = day
     """
-    # face 가시성 SQL — src_vis / tgt_vis. 각 face 가 cell 에 카운트되는지.
+    # scope filter SQL fragment
     if ctx.role == "hq-admin":
-        if plan_view == "mine":
-            # WH face 만 — order_type 으로 판정.
-            src_in = ",".join(["%s"] * len(_FACE_SRC_WH))
-            tgt_in = ",".join(["%s"] * len(_FACE_TGT_WH))
-            src_vis = f"(po.order_type IN ({src_in}))"
-            tgt_vis = f"(po.order_type IN ({tgt_in}))"
-            params: list = [*_FACE_SRC_WH, *_FACE_TGT_WH]
-        elif plan_view == "observe":
-            # STORE face 만.
-            src_in = ",".join(["%s"] * len(_FACE_SRC_STORE))
-            tgt_in = ",".join(["%s"] * len(_FACE_TGT_STORE))
-            src_vis = f"(po.order_type IN ({src_in}))"
-            tgt_vis = f"(po.order_type IN ({tgt_in}))"
-            params = [*_FACE_SRC_STORE, *_FACE_TGT_STORE]
-        else:  # all — 양면 다 (단 PUBLISHER source 는 EXT — 출고/운송 면 없음 · B1).
-            src_vis = "(po.order_type <> 'PUBLISHER_ORDER')"; tgt_vis = "TRUE"; params = []
+        scope_src = "TRUE"; scope_tgt = "TRUE"; params: list = []
     elif ctx.role == "wh-manager":
-        # 2026-05-17 walkthrough: wh-manager 가시성 = 내 창고 WH-face + 내 권역 매장 REBALANCE-face.
-        #   mine    — WH-kind face 가 내 창고 (WH_TO_STORE 출고 · WH_TRANSFER · PUBLISHER 입고)
-        #   observe — REBALANCE 의 STORE-kind face 가 내 권역 (권역 매장 재분배)
-        #   all     — 둘 다.
-        #   WH_TO_STORE 의 STORE target 면은 wh-manager 에 계속 숨김 (이슈19 의도 — branch 몫).
-        _src_mine = "(s.location_type = 'WH' AND s.wh_id = %s)"
-        _tgt_mine = "(t.location_type = 'WH' AND t.wh_id = %s)"
-        _src_reg = "(po.order_type = 'REBALANCE' AND s.location_type <> 'WH' AND s.wh_id = %s)"
-        _tgt_reg = "(po.order_type = 'REBALANCE' AND t.location_type <> 'WH' AND t.wh_id = %s)"
-        my = ctx.scope_wh_id
-        if plan_view == "mine":
-            src_vis = _src_mine; tgt_vis = _tgt_mine; params = [my, my]
-        elif plan_view == "observe":
-            src_vis = _src_reg; tgt_vis = _tgt_reg; params = [my, my]
-        else:  # all
-            src_vis = f"({_src_mine} OR {_src_reg})"
-            tgt_vis = f"({_tgt_mine} OR {_tgt_reg})"
-            params = [my, my, my, my]
+        scope_src = "s.wh_id = %s"; scope_tgt = "t.wh_id = %s"
+        params = [ctx.scope_wh_id, ctx.scope_wh_id]
     elif ctx.role == "branch-clerk":
-        # STORE-kind face 만 — location_id 가 유일하므로 source/target_location_id 일치로 충분.
-        src_vis = "(po.source_location_id = %s)"; tgt_vis = "(po.target_location_id = %s)"
+        scope_src = "po.source_location_id = %s"; scope_tgt = "po.target_location_id = %s"
         params = [ctx.scope_store_id, ctx.scope_store_id]
     else:
         raise HTTPException(status_code=403, detail=f"unknown role: {ctx.role}")
 
-    # plan_view → order_type IN (...) fragment (scope 필터와 독립).
-    #   hq-admin mine/observe 는 src_vis/tgt_vis 가 이미 order_type 으로 면을 거르지만
-    #   row 자체도 plan_view 집합으로 제한해야 다른 order_type 의 노출 0-면 row 가 안 섞임.
-    pv_types = _PLAN_VIEW_TYPES.get(plan_view)
-    if pv_types:
-        pv_frag = "AND po.order_type IN (" + ",".join(["%s"] * len(pv_types)) + ")"
-        pv_params: list = list(pv_types)
-    else:
-        pv_frag = ""
-        pv_params = []
-
+    # v5 2026-05-15 피드백 #10: frontend classify 와 일치 — 같은 row 가 inbound + outbound 둘 다 카운트 X.
+    # BOTH (is_src AND is_tgt · hq scope) → inbound 만 (frontend classify 와 동일).
+    # row 단일 분류 보장 → 합계 = row 수.
     sql = f"""
         WITH base AS (
-            SELECT po.order_id, po.status, po.order_type, po.expected_arrival_at,
+            SELECT po.order_id, po.status, po.expected_arrival_at,
                    po.executed_at::date AS exec_date,
-                   ({src_vis}) AS src_vis,
-                   ({tgt_vis}) AS tgt_vis
+                   ({scope_src}) AS is_src,
+                   ({scope_tgt}) AS is_tgt
               FROM pending_orders po
               LEFT JOIN locations s ON s.location_id = po.source_location_id
               LEFT JOIN locations t ON t.location_id = po.target_location_id
              WHERE po.status IN ('APPROVED','IN_TRANSIT','EXECUTED','AUTO_EXECUTED')
-               {pv_frag}
                AND (po.expected_arrival_at BETWEEN %s AND %s
                     OR (po.executed_at IS NOT NULL AND po.executed_at::date BETWEEN %s AND %s))
         )
         SELECT
             COALESCE(expected_arrival_at, exec_date) AS day,
-            -- inbound: APPROVED/IN_TRANSIT + target face 노출
-            COUNT(*) FILTER (WHERE status IN ('APPROVED','IN_TRANSIT') AND tgt_vis) AS inbound,
-            -- outbound: APPROVED + source face 노출
-            COUNT(*) FILTER (WHERE status = 'APPROVED' AND src_vis) AS outbound,
-            -- in_transit: IN_TRANSIT + source face 노출
-            COUNT(*) FILTER (WHERE status = 'IN_TRANSIT' AND src_vis) AS in_transit,
-            -- executed: EXECUTED/AUTO_EXECUTED + 노출 face 1개 이상 + executed_at = day
-            COUNT(*) FILTER (WHERE status IN ('EXECUTED','AUTO_EXECUTED') AND (src_vis OR tgt_vis)
+            -- inbound: APPROVED + target=내 측 (BOTH 포함 — hq 면 모두 이쪽)
+            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_tgt) AS inbound,
+            -- outbound: APPROVED + source=내 측 + NOT target=내 측 (BOTH 제외 → inbound 와 중복 카운트 방지)
+            COUNT(*) FILTER (WHERE status = 'APPROVED' AND is_src AND NOT is_tgt) AS outbound,
+            -- in_transit: IN_TRANSIT + 자기 측
+            COUNT(*) FILTER (WHERE status = 'IN_TRANSIT' AND (is_src OR is_tgt)) AS in_transit,
+            -- executed: EXECUTED/AUTO_EXECUTED + 자기 측 + executed_at = day
+            COUNT(*) FILTER (WHERE status IN ('EXECUTED','AUTO_EXECUTED') AND (is_src OR is_tgt)
                                    AND exec_date = COALESCE(expected_arrival_at, exec_date)) AS executed
           FROM base
          WHERE COALESCE(expected_arrival_at, exec_date) BETWEEN %s AND %s
          GROUP BY 1 ORDER BY 1
     """
-    # params 순서: src_vis/tgt_vis(SELECT 절) → plan_view(WHERE) → date×3.
-    qparams = (*params, *pv_params, from_date, to_date, from_date, to_date, from_date, to_date)
+    # params 는 scope_src + scope_tgt %s 매칭용 (hq-admin=[]·wh-manager=[wh,wh]·branch=[store,store])
+    qparams = (*params, from_date, to_date, from_date, to_date, from_date, to_date)
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, qparams)

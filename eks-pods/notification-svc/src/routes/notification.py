@@ -20,9 +20,6 @@ from fastapi import HTTPException, status
 from ..models import (
     BranchFeedbackRequest,
     BranchFeedbackResponse,
-    NewBookDisplayNoticeRequest,
-    NewBookPublisherNoticeRequest,
-    NewBookSubmittedNoticeRequest,
     NotificationRow,
     RecentResponse,
     SendRequest,
@@ -68,13 +65,7 @@ EVENT_CHANNEL = {
     "StockDepartPending":       "order.dispatched",
     "StockArrivalPending":      "order.dispatched",
     "NewBookRequest":           "newbook.request",
-    "NewBookSubmittedToHq":      None,
-    "NewBookAcceptedToPublisher": None,
-    "NewBookRejectedToPublisher": None,
-    "NewBookDisplayRequest":     None,
     "ReturnPending":            "order.pending",
-    "LambdaAlarm":              None,
-    "DeploymentRollback":       None,
 }
 
 
@@ -87,10 +78,6 @@ EVENT_CHANNEL = {
 _EVENT_LOGIC_APPS: dict[str, str] = {
     "ForecastCompleted":  "approval_request",  # 수요예측 완료 → approval-request Logic App 트리거
     "DailyPlanFinalized": "notification",
-    "NewBookSubmittedToHq":       "approval_request",
-    "NewBookAcceptedToPublisher": "approval_request",
-    "NewBookRejectedToPublisher": "approval_request",
-    "NewBookDisplayRequest":      "approval_request",
     "SpikeUrgent":        "notification",
     "NegotiationDelay":   "notification",
     "DeliveryCompleted":  "delivery_completed",
@@ -134,67 +121,19 @@ async def _post_logic_apps(
         "payload": payload,
         "recipients": recipients,
     }
+    # ensure_ascii=False: 한글을 \uXXXX 이스케이프가 아닌 UTF-8 리터럴로 전송.
+    # Logic Apps 가 \uXXXX 시퀀스를 디코딩하지 않으면 메일에 '????' 로 표시되는 문제 방지.
+    body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
     try:
         async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
-            r = await c.post(url, json=body)
+            r = await c.post(
+                url,
+                content=body_bytes,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
             return (200 <= r.status_code < 300), None if r.is_success else f"{r.status_code} {r.text[:80]}"
     except Exception as e:
         return False, str(e)[:120]
-
-
-async def _send_new_book_notice(
-    ctx: AuthContext,
-    event_type: str,
-    payload: dict,
-    recipients: list[dict],
-    severity: str = "INFO",
-) -> SendResponse:
-    if not recipients:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="recipient email is required")
-
-    notification_id = uuid4()
-    ok, err = await _post_logic_apps(event_type, severity, payload, None, recipients)
-    new_status = "SENT" if ok else "FAILED"
-
-    with db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO notifications_log
-                    (notification_id, event_type, correlation_id, severity,
-                     recipients, channels, payload_summary, status)
-                VALUES (%s, %s, NULL, %s, %s, 'email,logic-apps', %s, %s)
-                RETURNING sent_at
-                """,
-                (
-                    str(notification_id),
-                    event_type,
-                    severity,
-                    json.dumps(recipients),
-                    json.dumps(payload),
-                    new_status,
-                ),
-            )
-            sent_at = cur.fetchone()[0]
-            cur.execute(
-                """
-                INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
-                VALUES ('user', %s, 'notification.new_book_notice', 'notifications_log', %s, %s)
-                """,
-                (
-                    ctx.user_id,
-                    str(notification_id),
-                    json.dumps({"event_type": event_type, "status": new_status, "error": err}),
-                ),
-            )
-        conn.commit()
-
-    return SendResponse(
-        notification_id=notification_id,
-        event_type=event_type,
-        status=new_status,
-        sent_at=sent_at,
-    )
 
 
 @router.post("/send", response_model=SendResponse)
@@ -270,75 +209,6 @@ async def send(req: SendRequest, ctx: AuthContext = Depends(require_auth)) -> Se
         event_type=req.event_type,
         status=new_status,
         sent_at=sent_at,
-    )
-
-
-@router.post("/new-book/submitted", response_model=SendResponse)
-async def new_book_submitted_notice(
-    req: NewBookSubmittedNoticeRequest,
-    ctx: AuthContext = Depends(require_auth),
-) -> SendResponse:
-    """Publisher -> HQ notice: new-book information was submitted for review."""
-    payload = req.model_dump(exclude_none=True)
-    return await _send_new_book_notice(
-        ctx,
-        "NewBookSubmittedToHq",
-        payload,
-        get_recipients("NewBookSubmittedToHq", payload),
-    )
-
-
-@router.post("/new-book/accepted", response_model=SendResponse)
-async def new_book_accepted_notice(
-    req: NewBookPublisherNoticeRequest,
-    ctx: AuthContext = Depends(require_auth),
-) -> SendResponse:
-    """HQ -> publisher notice: the new book was accepted for sale."""
-    email = req.publisher_email.strip()
-    if "@" not in email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="publisher_email is invalid")
-    payload = req.model_dump(exclude_none=True)
-    recipients = [{"address": email, "displayName": req.publisher_name or "Publisher"}]
-    return await _send_new_book_notice(
-        ctx,
-        "NewBookAcceptedToPublisher",
-        payload,
-        recipients,
-    )
-
-
-@router.post("/new-book/rejected", response_model=SendResponse)
-async def new_book_rejected_notice(
-    req: NewBookPublisherNoticeRequest,
-    ctx: AuthContext = Depends(require_auth),
-) -> SendResponse:
-    """HQ -> publisher notice: the new book was rejected after review."""
-    email = req.publisher_email.strip()
-    if "@" not in email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="publisher_email is invalid")
-    payload = req.model_dump(exclude_none=True)
-    recipients = [{"address": email, "displayName": req.publisher_name or "Publisher"}]
-    return await _send_new_book_notice(
-        ctx,
-        "NewBookRejectedToPublisher",
-        payload,
-        recipients,
-        severity="WARNING",
-    )
-
-
-@router.post("/new-book/display-request", response_model=SendResponse)
-async def new_book_display_request_notice(
-    req: NewBookDisplayNoticeRequest,
-    ctx: AuthContext = Depends(require_auth),
-) -> SendResponse:
-    """HQ -> logistics/branches notice: prepare display for the accepted new book."""
-    payload = req.model_dump(exclude_none=True)
-    return await _send_new_book_notice(
-        ctx,
-        "NewBookDisplayRequest",
-        payload,
-        get_recipients("NewBookDisplayRequest", payload),
     )
 
 

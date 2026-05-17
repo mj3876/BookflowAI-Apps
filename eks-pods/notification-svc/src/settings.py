@@ -34,9 +34,9 @@ class Settings(BaseSettings):
 
     # ── 수신자 연락처 ─────────────────────────────────────────────────
     # K8s ConfigMap NOTIFICATION_CONTACT_* 으로 주입 (학습환경: 3개 주소로 통합)
-    contact_hq_emails: str = ""      # 본사+경영진 → ms8405493@gmail.com
-    contact_wh_emails: str = ""      # 물류센터(수도권+영남) → rladudgjs0427@gmail.com
-    contact_branch_emails: str = ""  # 지점 전체 → admin@bleach10905gmail.onmicrosoft.com
+    contact_hq_emails: str = ""      # 본사+경영진 → redfox@yonsei.ac.kr
+    contact_wh_emails: str = ""      # 물류센터(수도권+영남) → ms8405493@gmail.com
+    contact_branch_emails: str = ""  # 지점 전체 → 2023240672@yonsei.ac.kr
 
 
 settings = Settings()

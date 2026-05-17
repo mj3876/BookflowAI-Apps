@@ -53,8 +53,13 @@ async def _flush_inbound_rejected() -> None:
                 }
                 la_url = _get_logic_apps_url("InboundRejected")
                 if la_url:
+                    body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
                     async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
-                        await c.post(la_url, json=body)
+                        await c.post(
+                            la_url,
+                            content=body_bytes,
+                            headers={"Content-Type": "application/json; charset=utf-8"},
+                        )
                 log.info("inbound_rejected flushed wh=%s n=%d", wh_id, len(items))
         except Exception as e:
             log.warning("inbound_rejected flush error: %s", e)
