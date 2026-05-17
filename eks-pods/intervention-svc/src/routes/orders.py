@@ -351,16 +351,27 @@ def calendar(
             src_vis = f"(po.order_type IN ({src_in}))"
             tgt_vis = f"(po.order_type IN ({tgt_in}))"
             params = [*_FACE_SRC_STORE, *_FACE_TGT_STORE]
-        else:  # all — 양면 다.
-            src_vis = "TRUE"; tgt_vis = "TRUE"; params = []
+        else:  # all — 양면 다 (단 PUBLISHER source 는 EXT — 출고/운송 면 없음 · B1).
+            src_vis = "(po.order_type <> 'PUBLISHER_ORDER')"; tgt_vis = "TRUE"; params = []
     elif ctx.role == "wh-manager":
-        # 2026-05-16 walkthrough-10 이슈19: WH-kind face 만 — 그 face 가 WH 이고 내 창고일 때.
-        #   기존 (s.wh_id=%s) 는 WH_TO_STORE 의 target(STORE) 도 그 STORE 의 권역이 내 권역이면
-        #   tgt_vis=true 로 잡아 wh-manager 가 매장 입고면을 잘못 보던 버그.
-        #   location_type='WH' 조건으로 WH-kind face 만 노출 (frontend visibleFaces 와 동일 규칙).
-        src_vis = "(s.location_type = 'WH' AND s.wh_id = %s)"
-        tgt_vis = "(t.location_type = 'WH' AND t.wh_id = %s)"
-        params = [ctx.scope_wh_id, ctx.scope_wh_id]
+        # 2026-05-17 walkthrough: wh-manager 가시성 = 내 창고 WH-face + 내 권역 매장 REBALANCE-face.
+        #   mine    — WH-kind face 가 내 창고 (WH_TO_STORE 출고 · WH_TRANSFER · PUBLISHER 입고)
+        #   observe — REBALANCE 의 STORE-kind face 가 내 권역 (권역 매장 재분배)
+        #   all     — 둘 다.
+        #   WH_TO_STORE 의 STORE target 면은 wh-manager 에 계속 숨김 (이슈19 의도 — branch 몫).
+        _src_mine = "(s.location_type = 'WH' AND s.wh_id = %s)"
+        _tgt_mine = "(t.location_type = 'WH' AND t.wh_id = %s)"
+        _src_reg = "(po.order_type = 'REBALANCE' AND s.location_type <> 'WH' AND s.wh_id = %s)"
+        _tgt_reg = "(po.order_type = 'REBALANCE' AND t.location_type <> 'WH' AND t.wh_id = %s)"
+        my = ctx.scope_wh_id
+        if plan_view == "mine":
+            src_vis = _src_mine; tgt_vis = _tgt_mine; params = [my, my]
+        elif plan_view == "observe":
+            src_vis = _src_reg; tgt_vis = _tgt_reg; params = [my, my]
+        else:  # all
+            src_vis = f"({_src_mine} OR {_src_reg})"
+            tgt_vis = f"({_tgt_mine} OR {_tgt_reg})"
+            params = [my, my, my, my]
     elif ctx.role == "branch-clerk":
         # STORE-kind face 만 — location_id 가 유일하므로 source/target_location_id 일치로 충분.
         src_vis = "(po.source_location_id = %s)"; tgt_vis = "(po.target_location_id = %s)"
