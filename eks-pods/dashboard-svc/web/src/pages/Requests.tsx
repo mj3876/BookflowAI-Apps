@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tansta
 import { useOutletContext } from 'react-router-dom';
 import {
   fetchNewBookRequests,
-  fetchNewBookForecastHint,
   postNewBookApprove,
   postNewBookReject,
   postNewBookPredictDemand,
@@ -179,7 +178,21 @@ export default function Requests() {
   );
 }
 
+// ─── StepBadge — ①②③ 단계 표시 ──────────────────────────────────────────────
+function StepBadge({ n, done }: { n: number; done?: boolean }) {
+  return (
+    <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold ${
+      done ? 'bg-bf-success text-white' : 'bg-bf-primary text-white'
+    }`}>
+      {done ? '✓' : n}
+    </span>
+  );
+}
+
 // ─── DetailPanel ─────────────────────────────────────────────────────────────
+// 신간 편입 흐름 (한눈에): ① Vertex 수요검증 요청 → ② 권역 분배 → ③ 편입 결정.
+//   Vertex 검증은 본사가 [요청] 버튼을 눌러야 실행 (auto-load 아님).
+//   편입 결정은 검증 완료 후에만 가능 — "Vertex 결과 기반 결정".
 function DetailPanel({
   req, role, isHQ, onSuccess,
 }: {
@@ -191,61 +204,33 @@ function DetailPanel({
   const qc = useQueryClient();
   const decided = req.status === 'APPROVED' || req.status === 'REJECTED';
 
-  // Vertex AI 수요검증 — 편입 결정의 필수 단계. HQ 가 행을 선택하면 자동 로드.
-  const predict = useQuery({
-    queryKey: ['newbook-predict', req.id, role],
-    queryFn: () => postNewBookPredictDemand(role, { isbn13: req.isbn13, publisher_id: req.publisher_id }),
-    enabled: isHQ && !decided,
-    staleTime: 60_000,
-  });
-
-  // forecast-hint — Vertex 예측 미수신 시 분배 수량 fallback (카테고리 매출 60/40).
-  const hint = useQuery({
-    queryKey: ['forecast-hint', req.id, role],
-    queryFn: () => fetchNewBookForecastHint(role, req.id, 100),
-    enabled: isHQ && !decided,
-    staleTime: 30_000,
-  });
-
   const [wh1, setWh1] = useState<number | null>(null);
   const [wh2, setWh2] = useState<number | null>(null);
-  const [prefillSource, setPrefillSource] = useState<'vertex' | 'hint' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
 
-  // Vertex 예측의 위치별 30일 수요를 wh_id(1=수도권·2=영남) 별로 합산.
-  const vertexWh = predict.data
-    ? predict.data.predictions.reduce(
-        (acc, p) => {
-          if (p.wh_id === 1) acc.wh1 += p.predicted_demand_30d;
-          else if (p.wh_id === 2) acc.wh2 += p.predicted_demand_30d;
-          return acc;
-        },
-        { wh1: 0, wh2: 0 },
-      )
-    : null;
-
-  // 분배 수량 prefill — Vertex 예측 우선, 없으면 forecast-hint fallback.
-  // (사용자가 직접 수정하기 전, 아직 prefill 안 됐을 때만 1회 적용)
-  useEffect(() => {
-    if (prefillSource !== null) return;
-    if (vertexWh && (vertexWh.wh1 > 0 || vertexWh.wh2 > 0)) {
-      setWh1(Math.round(vertexWh.wh1));
-      setWh2(Math.round(vertexWh.wh2));
-      setPrefillSource('vertex');
-    } else if (hint.data) {
-      setWh1(hint.data.wh1_qty);
-      setWh2(hint.data.wh2_qty);
-      setPrefillSource('hint');
-    }
-  }, [predict.data, hint.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  // STEP 1 — Vertex AI 수요검증: 본사가 [요청] 버튼을 눌러야 실행.
+  //   결과 수신 시 위치별 30일 수요를 권역(수도권 wh1 · 영남 wh2)별로 합산해 분배 수량 prefill.
+  const predict = useMutation({
+    mutationFn: () => postNewBookPredictDemand(role, { isbn13: req.isbn13, publisher_id: req.publisher_id }),
+    onSuccess: (d) => {
+      let v1 = 0, v2 = 0;
+      for (const p of d.predictions) {
+        if (p.wh_id === 1) v1 += p.predicted_demand_30d;
+        else if (p.wh_id === 2) v2 += p.predicted_demand_30d;
+      }
+      setWh1(Math.round(v1));
+      setWh2(Math.round(v2));
+    },
+  });
+  const verified = !!predict.data;
 
   const approve = useMutation({
     mutationFn: () =>
       postNewBookApprove(role, req.id, { wh1_qty: wh1 ?? 0, wh2_qty: wh2 ?? 0 }),
     onSuccess: (d) => {
-      setFeedback(`✓ 편입 결정 완료 · 발주 지시서 ${d.orders.length}건 생성 (수도권 ${d.wh1_qty}권 · 영남 ${d.wh2_qty}권)`);
+      setFeedback(`✓ 편입 결정 완료 · 발주 지시서 ${d.orders.length}건 생성 (수도권 ${d.wh1_qty}권 · 영남 ${d.wh2_qty}권) — 입출고 계획에 반영됨`);
       qc.invalidateQueries({ queryKey: ['requests'] });
       onSuccess();
     },
@@ -279,134 +264,136 @@ function DetailPanel({
         </dl>
       </div>
 
-      {/* VertexAI 수요검증 — 편입 결정의 필수 단계 (HQ 전용 + 미결정 상태만) */}
       {isHQ && !decided && (
-        <div className="card-tight">
-          <h2 className="h3 mb-2">📊 VertexAI 수요검증</h2>
-          {predict.isLoading && <div className="text-xs text-bf-muted">Vertex 수요예측 호출 중…</div>}
-          {predict.isError && (
-            <div className="text-xs text-bf-danger">
-              수요예측 실패: {predict.error instanceof Error ? predict.error.message : String(predict.error)}
-            </div>
-          )}
-          {predict.data && (
-            <>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="metric-card">
-                  <div className="metric-label">7일 총 수요</div>
-                  <div className="metric-value">{Math.round(predict.data.total_7d)}</div>
-                </div>
-                <div className="metric-card">
-                  <div className="metric-label">30일 총 수요</div>
-                  <div className="metric-value">{Math.round(predict.data.total_30d)}</div>
-                </div>
-                <div className="metric-card">
-                  <div className="metric-label">편입 추천</div>
-                  <div className={`metric-value ${RECO_CLASS[predict.data.recommendation]}`}>
-                    {RECO_KO[predict.data.recommendation]}
+        <>
+          {/* STEP 1 — Vertex AI 수요검증 (본사가 요청해야 실행) */}
+          <div className="card-tight">
+            <h3 className="h3 mb-2 flex items-center gap-2"><StepBadge n={1} done={verified} /> Vertex AI 수요검증</h3>
+            {!verified && !predict.isPending && !predict.isError && (
+              <>
+                <p className="text-xs text-bf-muted mb-2">
+                  편입 결정 전, Vertex AI 에 이 신간의 권역별 예상 수요를 검증 요청합니다.
+                </p>
+                <button type="button" className="btn-primary w-full" onClick={() => predict.mutate()}>
+                  📊 Vertex AI 수요검증 요청
+                </button>
+              </>
+            )}
+            {predict.isPending && (
+              <div className="text-xs text-bf-muted py-3 text-center">Vertex AI 수요예측 분석 중…</div>
+            )}
+            {predict.isError && !predict.isPending && (
+              <div className="text-xs text-bf-danger">
+                검증 실패: {predict.error instanceof Error ? predict.error.message : String(predict.error)}
+                <button type="button" className="btn-ghost ml-2 text-[11px]" onClick={() => predict.mutate()}>재시도</button>
+              </div>
+            )}
+            {predict.data && (
+              <>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="metric-card">
+                    <div className="metric-label">7일 총 수요</div>
+                    <div className="metric-value">{Math.round(predict.data.total_7d)}</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-label">30일 총 수요</div>
+                    <div className="metric-value">{Math.round(predict.data.total_30d)}</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-label">편입 추천</div>
+                    <div className={`metric-value ${RECO_CLASS[predict.data.recommendation] ?? ''}`}>
+                      {RECO_KO[predict.data.recommendation] ?? predict.data.recommendation}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="text-[11px] text-bf-muted mt-2">
-                model: {predict.data.model_version} · {predict.data.predicted_at.slice(0, 19)}
-              </div>
-              <table className="data-table text-xs mt-2">
-                <thead>
-                  <tr>
-                    <th>위치</th><th>유형</th>
-                    <th className="text-right">7일</th><th className="text-right">30일</th>
-                    <th className="text-right">신뢰도</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {predict.data.predictions.map((p) => (
-                    <tr key={p.location_id}>
-                      <td>{p.location_name}</td>
-                      <td>{p.location_type}</td>
-                      <td className="text-right">{Math.round(p.predicted_demand_7d)}</td>
-                      <td className="text-right">{Math.round(p.predicted_demand_30d)}</td>
-                      <td className="text-right">{(p.confidence * 100).toFixed(0)}%</td>
+                <table className="data-table text-xs mt-2">
+                  <thead>
+                    <tr>
+                      <th>위치</th><th>유형</th>
+                      <th className="text-right">7일</th><th className="text-right">30일</th>
+                      <th className="text-right">신뢰도</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="text-[11px] text-bf-muted mt-2">
-                ⚠ 현재 GCP 미연결 · forecast-svc mock 응답 (책 메타 기반 임시 분포). 연결 후 실측치 자동 교체.
+                  </thead>
+                  <tbody>
+                    {predict.data.predictions.map((p) => (
+                      <tr key={p.location_id}>
+                        <td>{p.location_name}</td>
+                        <td>{p.location_type}</td>
+                        <td className="text-right">{Math.round(p.predicted_demand_7d)}</td>
+                        <td className="text-right">{Math.round(p.predicted_demand_30d)}</td>
+                        <td className="text-right">{(p.confidence * 100).toFixed(0)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[11px] text-bf-muted">model: {predict.data.model_version} · GCP 미연결 mock</span>
+                  <button type="button" className="btn-ghost text-[11px]" disabled={predict.isPending} onClick={() => predict.mutate()}>재검증</button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* STEP 2 — 권역별 분배 수량 (검증 완료 후 노출) */}
+          {verified && (
+            <div className="card-tight">
+              <h3 className="h3 mb-2 flex items-center gap-2"><StepBadge n={2} /> 권역별 분배 수량</h3>
+              <p className="text-[11px] text-bf-muted mb-2">
+                Vertex 30일 수요예측을 권역별로 합산한 값 — 필요 시 수정하세요.
+              </p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <label className="flex flex-col gap-1">
+                  <span className="text-bf-muted">수도권 권역</span>
+                  <input type="number" min={0} className="ipt" value={wh1 ?? ''}
+                    onChange={(e) => setWh1(e.target.value === '' ? 0 : Number(e.target.value))} />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-bf-muted">영남 권역</span>
+                  <input type="number" min={0} className="ipt" value={wh2 ?? ''}
+                    onChange={(e) => setWh2(e.target.value === '' ? 0 : Number(e.target.value))} />
+                </label>
               </div>
-            </>
+              <div className="text-[11px] text-bf-muted mt-2">총 발주 수량 = <b className="text-bf-text">{total}</b>권</div>
+            </div>
           )}
-        </div>
+
+          {/* STEP 3 — 편입 결정 */}
+          <div className="card-tight">
+            <h3 className="h3 mb-2 flex items-center gap-2"><StepBadge n={3} /> 편입 결정</h3>
+            {!verified ? (
+              <p className="text-xs text-bf-muted mb-2">먼저 STEP 1 의 Vertex 수요검증을 완료하면 편입 결정을 할 수 있습니다.</p>
+            ) : (
+              <p className="text-[11px] text-bf-muted mb-2">
+                편입 결정 시 양쪽 권역에 출판사 발주(PUBLISHER_ORDER)가 자동 생성되어 입출고 계획에 바로 반영됩니다.
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn-primary flex-1"
+                disabled={!verified || total <= 0 || approve.isPending}
+                title={!verified ? 'Vertex 수요검증을 먼저 요청하세요' : total <= 0 ? '분배 수량 합이 1 이상이어야 합니다' : ''}
+                onClick={() => setShowApproveConfirm(true)}
+              >
+                {approve.isPending ? '처리 중…' : `✅ 신간 편입 결정${verified ? ` (총 ${total}권 발주)` : ''}`}
+              </button>
+              <button type="button" className="btn-ghost" disabled={reject.isPending} onClick={() => setShowRejectModal(true)}>
+                거절
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
-      {/* 권역별 분배 수량 폼 (HQ 전용 + 미결정 상태만) */}
-      {isHQ && !decided && (
-        <div className="card-tight">
-          <h3 className="h3 mb-2">
-            권역별 분배 수량 <span className="text-[10px] text-bf-muted ml-1">(수정 가능)</span>
-          </h3>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <label className="flex flex-col gap-1">
-              <span className="text-bf-muted">수도권 권역</span>
-              <input
-                type="number"
-                min={0}
-                className="ipt"
-                value={wh1 ?? ''}
-                onChange={(e) => { setWh1(e.target.value === '' ? 0 : Number(e.target.value)); setPrefillSource('vertex'); }}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-bf-muted">영남 권역</span>
-              <input
-                type="number"
-                min={0}
-                className="ipt"
-                value={wh2 ?? ''}
-                onChange={(e) => { setWh2(e.target.value === '' ? 0 : Number(e.target.value)); setPrefillSource('vertex'); }}
-              />
-            </label>
-          </div>
-          <div className="text-[11px] text-bf-muted mt-2">
-            {prefillSource === 'vertex'
-              ? 'Vertex 위치별 30일 수요예측을 권역(수도권 wh1 · 영남 wh2)별로 합산한 값입니다.'
-              : prefillSource === 'hint'
-                ? (hint.data?.source === 'category'
-                    ? `Vertex 예측 미수신 — 같은 카테고리 최근 14일 매출 비율 (수도권 ${hint.data.wh1_pct}% · 영남 ${hint.data.wh2_pct}%) fallback`
-                    : 'Vertex 예측 미수신 — 카테고리 매출 데이터 부족, 기본값 60/40 fallback')
-                : '수요예측 로딩 중…'}
-          </div>
-          <div className="text-[11px] text-bf-muted mt-1">총 발주 수량 = <b className="text-bf-text">{total}</b>권</div>
-        </div>
-      )}
-
-      {/* 액션 + 피드백 */}
+      {/* 피드백 */}
       {feedback && (
         <div className={`card-tight text-xs ${feedback.startsWith('✓') ? 'text-bf-success' : 'text-bf-danger'}`}>
           {feedback}
         </div>
       )}
-      {isHQ && !decided && (
-        <div className="flex gap-2">
-          <button
-            className="btn-primary flex-1"
-            disabled={total <= 0 || approve.isPending}
-            title={total <= 0 ? '수도권 + 영남 권역 분배 합이 1 이상이어야 합니다' : ''}
-            onClick={() => setShowApproveConfirm(true)}
-          >
-            {approve.isPending ? '처리 중…' : `신간 편입 결정 (총 ${total}권)`}
-          </button>
-          <button
-            className="btn-ghost"
-            disabled={reject.isPending}
-            onClick={() => setShowRejectModal(true)}
-          >
-            거절
-          </button>
-        </div>
-      )}
       {decided && (
         <div className="card-tight text-[11px] text-bf-muted">
-          {req.status === 'APPROVED' ? '편입 완료 · 양쪽 권역 발주 지시서 발송됨' : '거절된 요청'}
+          {req.status === 'APPROVED' ? '편입 완료 · 양쪽 권역 발주 지시서가 입출고 계획에 반영됨' : '거절된 요청'}
         </div>
       )}
 
@@ -421,7 +408,7 @@ function DetailPanel({
       <ConfirmModal
         open={showApproveConfirm}
         title="신간 편입 결정"
-        message={`총 ${total}권 (수도권 ${wh1 ?? 0} + 영남 ${wh2 ?? 0}) 편입 결정 시 양쪽 권역에 발주 지시서가 자동 발송됩니다.`}
+        message={`총 ${total}권 (수도권 ${wh1 ?? 0} + 영남 ${wh2 ?? 0}) 편입 결정 시 양쪽 권역에 발주 지시서가 자동 생성되어 입출고 계획에 반영됩니다.`}
         confirmText="편입 결정"
         onConfirm={() => { setShowApproveConfirm(false); approve.mutate(); }}
         onCancel={() => setShowApproveConfirm(false)}
