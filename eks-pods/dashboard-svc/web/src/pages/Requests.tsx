@@ -8,8 +8,6 @@ import {
   postNewBookReject,
   postNewBookPredictDemand,
   type NewBookRequest,
-  type NewBookForecastHint,
-  type NewBookPredictResp,
   type Role,
 } from '../api';
 import { roleGroup } from '../auth';
@@ -37,6 +35,20 @@ function bucketOf(status: string): StatusTab {
   return 'DONE';
 }
 
+// Vertex 추천 등급 → 한글 라벨 + 색상
+const RECO_KO: Record<string, string> = {
+  STRONG_BUY: '적극 편입',
+  BUY: '편입 권장',
+  NEUTRAL: '중립',
+  PASS: '편입 보류',
+};
+const RECO_CLASS: Record<string, string> = {
+  STRONG_BUY: 'text-bf-success',
+  BUY: 'text-bf-primary',
+  NEUTRAL: 'text-bf-muted',
+  PASS: 'text-bf-danger',
+};
+
 function StatusPill({ status }: { status: string }) {
   const cls =
     status === 'APPROVED' ? 'pill-approved' :
@@ -51,20 +63,6 @@ export default function Requests() {
 
   const [tab, setTab] = useState<StatusTab>('PENDING');
   const [selected, setSelected] = useState<NewBookRequest | null>(null);
-  const [predictModal, setPredictModal] = useState<{ req: NewBookRequest; data: NewBookPredictResp | null; loading: boolean; err: string | null } | null>(null);
-
-  const openPredictModal = async (req: NewBookRequest) => {
-    setPredictModal({ req, data: null, loading: true, err: null });
-    try {
-      const data = await postNewBookPredictDemand(role, {
-        isbn13: req.isbn13,
-        publisher_id: (req as NewBookRequest & { publisher_id?: number }).publisher_id,
-      });
-      setPredictModal({ req, data, loading: false, err: null });
-    } catch (e: unknown) {
-      setPredictModal({ req, data: null, loading: false, err: e instanceof Error ? e.message : String(e) });
-    }
-  };
 
   const list = useQuery({
     queryKey: ['requests', role],
@@ -163,23 +161,13 @@ export default function Requests() {
         {/* 우측: 상세 패널 */}
         <div className="flex flex-col gap-4">
           {selected ? (
-            <>
-              <DetailPanel
-                key={`${selected.id}-${selected.status}`}
-                req={selected}
-                role={role}
-                isHQ={isHQ}
-                onSuccess={() => list.refetch()}
-              />
-              {isHQ && (
-                <button
-                  type="button"
-                  className="btn btn-primary text-sm"
-                  onClick={() => openPredictModal(selected)}
-                  title="VertexAI 매장별/wh별 수요예측 (GCP 연결 시 실측 · 현재 mock)"
-                >📊 VertexAI 수요예측 보기</button>
-              )}
-            </>
+            <DetailPanel
+              key={`${selected.id}-${selected.status}`}
+              req={selected}
+              role={role}
+              isHQ={isHQ}
+              onSuccess={() => list.refetch()}
+            />
           ) : (
             <div className="card text-bf-muted text-xs text-center py-8">
               ← 좌측 표에서 행을 클릭하면 상세가 보입니다.
@@ -187,56 +175,6 @@ export default function Requests() {
           )}
         </div>
       </div>
-
-      {/* v5 2026-05-15: VertexAI 수요예측 결과 modal */}
-      {predictModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setPredictModal(null)}>
-          <div className="bg-bf-panel rounded-lg max-w-3xl w-full max-h-[90vh] overflow-auto p-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-semibold">📊 VertexAI 수요예측 · {predictModal.req.title ?? predictModal.req.isbn13}</h2>
-              <button type="button" className="text-xl text-bf-muted hover:text-bf-text" onClick={() => setPredictModal(null)}>×</button>
-            </div>
-            {predictModal.loading ? (
-              <div className="p-8 text-center text-bf-muted">예측 호출 중...</div>
-            ) : predictModal.err ? (
-              <div className="p-4 text-bf-danger">실패: {predictModal.err}</div>
-            ) : predictModal.data ? (
-              <>
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  <div className="metric-card"><div className="metric-label">7일 총 수요</div><div className="metric-value">{Math.round(predictModal.data.total_7d)}</div></div>
-                  <div className="metric-card"><div className="metric-label">30일 총 수요</div><div className="metric-value">{Math.round(predictModal.data.total_30d)}</div></div>
-                  <div className="metric-card">
-                    <div className="metric-label">추천</div>
-                    <div className={`metric-value ${predictModal.data.recommendation === 'STRONG_BUY' ? 'text-bf-success' : predictModal.data.recommendation === 'BUY' ? 'text-bf-primary' : predictModal.data.recommendation === 'PASS' ? 'text-bf-danger' : 'text-bf-muted'}`}>
-                      {predictModal.data.recommendation}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-xs text-bf-muted mb-2">model: {predictModal.data.model_version} · {predictModal.data.predicted_at.slice(0, 19)}</div>
-                <table className="data-table text-xs">
-                  <thead>
-                    <tr><th>위치</th><th>유형</th><th className="text-right">7일</th><th className="text-right">30일</th><th className="text-right">신뢰도</th></tr>
-                  </thead>
-                  <tbody>
-                    {predictModal.data.predictions.map((p) => (
-                      <tr key={p.location_id}>
-                        <td>{p.location_name}</td>
-                        <td>{p.location_type}</td>
-                        <td className="text-right">{Math.round(p.predicted_demand_7d)}</td>
-                        <td className="text-right">{Math.round(p.predicted_demand_30d)}</td>
-                        <td className="text-right">{(p.confidence * 100).toFixed(0)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="text-xs text-bf-muted mt-3">
-                  ⚠ 현재 GCP 미연결 · forecast-svc mock 응답 (책 메타 기반 임시 분포). 연결 후 실측치 자동 교체.
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -253,6 +191,15 @@ function DetailPanel({
   const qc = useQueryClient();
   const decided = req.status === 'APPROVED' || req.status === 'REJECTED';
 
+  // Vertex AI 수요검증 — 편입 결정의 필수 단계. HQ 가 행을 선택하면 자동 로드.
+  const predict = useQuery({
+    queryKey: ['newbook-predict', req.id, role],
+    queryFn: () => postNewBookPredictDemand(role, { isbn13: req.isbn13, publisher_id: req.publisher_id }),
+    enabled: isHQ && !decided,
+    staleTime: 60_000,
+  });
+
+  // forecast-hint — Vertex 예측 미수신 시 분배 수량 fallback (카테고리 매출 60/40).
   const hint = useQuery({
     queryKey: ['forecast-hint', req.id, role],
     queryFn: () => fetchNewBookForecastHint(role, req.id, 100),
@@ -262,17 +209,37 @@ function DetailPanel({
 
   const [wh1, setWh1] = useState<number | null>(null);
   const [wh2, setWh2] = useState<number | null>(null);
+  const [prefillSource, setPrefillSource] = useState<'vertex' | 'hint' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
 
-  // hint 로드되면 prefill (이미 사용자가 손대지 않았을 때만)
+  // Vertex 예측의 위치별 30일 수요를 wh_id(1=수도권·2=영남) 별로 합산.
+  const vertexWh = predict.data
+    ? predict.data.predictions.reduce(
+        (acc, p) => {
+          if (p.wh_id === 1) acc.wh1 += p.predicted_demand_30d;
+          else if (p.wh_id === 2) acc.wh2 += p.predicted_demand_30d;
+          return acc;
+        },
+        { wh1: 0, wh2: 0 },
+      )
+    : null;
+
+  // 분배 수량 prefill — Vertex 예측 우선, 없으면 forecast-hint fallback.
+  // (사용자가 직접 수정하기 전, 아직 prefill 안 됐을 때만 1회 적용)
   useEffect(() => {
-    if (hint.data && wh1 === null && wh2 === null) {
+    if (prefillSource !== null) return;
+    if (vertexWh && (vertexWh.wh1 > 0 || vertexWh.wh2 > 0)) {
+      setWh1(Math.round(vertexWh.wh1));
+      setWh2(Math.round(vertexWh.wh2));
+      setPrefillSource('vertex');
+    } else if (hint.data) {
       setWh1(hint.data.wh1_qty);
       setWh2(hint.data.wh2_qty);
+      setPrefillSource('hint');
     }
-  }, [hint.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [predict.data, hint.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const approve = useMutation({
     mutationFn: () =>
@@ -312,46 +279,103 @@ function DetailPanel({
         </dl>
       </div>
 
-      {/* AI 정책별 결과 + 분배 폼 (HQ 전용 + 미결정 상태만) */}
+      {/* VertexAI 수요검증 — 편입 결정의 필수 단계 (HQ 전용 + 미결정 상태만) */}
       {isHQ && !decided && (
         <div className="card-tight">
-          <h2 className="h3 mb-2">AI 권역별 추천</h2>
-          {hint.isLoading && <div className="text-xs text-bf-muted">분석 중…</div>}
-          {hint.data && (
+          <h2 className="h3 mb-2">📊 VertexAI 수요검증</h2>
+          {predict.isLoading && <div className="text-xs text-bf-muted">Vertex 수요예측 호출 중…</div>}
+          {predict.isError && (
+            <div className="text-xs text-bf-danger">
+              수요예측 실패: {predict.error instanceof Error ? predict.error.message : String(predict.error)}
+            </div>
+          )}
+          {predict.data && (
             <>
-              <BarChart hint={hint.data} />
+              <div className="grid grid-cols-3 gap-2">
+                <div className="metric-card">
+                  <div className="metric-label">7일 총 수요</div>
+                  <div className="metric-value">{Math.round(predict.data.total_7d)}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">30일 총 수요</div>
+                  <div className="metric-value">{Math.round(predict.data.total_30d)}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">편입 추천</div>
+                  <div className={`metric-value ${RECO_CLASS[predict.data.recommendation]}`}>
+                    {RECO_KO[predict.data.recommendation]}
+                  </div>
+                </div>
+              </div>
               <div className="text-[11px] text-bf-muted mt-2">
-                {hint.data.source === 'category'
-                  ? `같은 카테고리 최근 14일 매출 비율 (수도권 ${hint.data.wh1_pct}% · 영남 ${hint.data.wh2_pct}%)`
-                  : '카테고리 매출 데이터 부족 — 기본값 60/40 (수도권 우세) 적용'}
+                model: {predict.data.model_version} · {predict.data.predicted_at.slice(0, 19)}
               </div>
-
-              <h3 className="h3 mt-4 mb-2">권역별 분배 수량 <span className="text-[10px] text-bf-muted ml-1">(수정 가능)</span></h3>
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <label className="flex flex-col gap-1">
-                  <span className="text-bf-muted">수도권 권역</span>
-                  <input
-                    type="number"
-                    min={0}
-                    className="ipt"
-                    value={wh1 ?? ''}
-                    onChange={(e) => setWh1(e.target.value === '' ? 0 : Number(e.target.value))}
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-bf-muted">영남 권역</span>
-                  <input
-                    type="number"
-                    min={0}
-                    className="ipt"
-                    value={wh2 ?? ''}
-                    onChange={(e) => setWh2(e.target.value === '' ? 0 : Number(e.target.value))}
-                  />
-                </label>
+              <table className="data-table text-xs mt-2">
+                <thead>
+                  <tr>
+                    <th>위치</th><th>유형</th>
+                    <th className="text-right">7일</th><th className="text-right">30일</th>
+                    <th className="text-right">신뢰도</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {predict.data.predictions.map((p) => (
+                    <tr key={p.location_id}>
+                      <td>{p.location_name}</td>
+                      <td>{p.location_type}</td>
+                      <td className="text-right">{Math.round(p.predicted_demand_7d)}</td>
+                      <td className="text-right">{Math.round(p.predicted_demand_30d)}</td>
+                      <td className="text-right">{(p.confidence * 100).toFixed(0)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-[11px] text-bf-muted mt-2">
+                ⚠ 현재 GCP 미연결 · forecast-svc mock 응답 (책 메타 기반 임시 분포). 연결 후 실측치 자동 교체.
               </div>
-              <div className="text-[11px] text-bf-muted mt-2">총 발주 수량 = <b className="text-bf-text">{total}</b>권</div>
             </>
           )}
+        </div>
+      )}
+
+      {/* 권역별 분배 수량 폼 (HQ 전용 + 미결정 상태만) */}
+      {isHQ && !decided && (
+        <div className="card-tight">
+          <h3 className="h3 mb-2">
+            권역별 분배 수량 <span className="text-[10px] text-bf-muted ml-1">(수정 가능)</span>
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <label className="flex flex-col gap-1">
+              <span className="text-bf-muted">수도권 권역</span>
+              <input
+                type="number"
+                min={0}
+                className="ipt"
+                value={wh1 ?? ''}
+                onChange={(e) => { setWh1(e.target.value === '' ? 0 : Number(e.target.value)); setPrefillSource('vertex'); }}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-bf-muted">영남 권역</span>
+              <input
+                type="number"
+                min={0}
+                className="ipt"
+                value={wh2 ?? ''}
+                onChange={(e) => { setWh2(e.target.value === '' ? 0 : Number(e.target.value)); setPrefillSource('vertex'); }}
+              />
+            </label>
+          </div>
+          <div className="text-[11px] text-bf-muted mt-2">
+            {prefillSource === 'vertex'
+              ? 'Vertex 위치별 30일 수요예측을 권역(수도권 wh1 · 영남 wh2)별로 합산한 값입니다.'
+              : prefillSource === 'hint'
+                ? (hint.data?.source === 'category'
+                    ? `Vertex 예측 미수신 — 같은 카테고리 최근 14일 매출 비율 (수도권 ${hint.data.wh1_pct}% · 영남 ${hint.data.wh2_pct}%) fallback`
+                    : 'Vertex 예측 미수신 — 카테고리 매출 데이터 부족, 기본값 60/40 fallback')
+                : '수요예측 로딩 중…'}
+          </div>
+          <div className="text-[11px] text-bf-muted mt-1">총 발주 수량 = <b className="text-bf-text">{total}</b>권</div>
         </div>
       )}
 
@@ -404,29 +428,6 @@ function DetailPanel({
         isLoading={approve.isPending}
       />
     </>
-  );
-}
-
-// ─── BarChart (recharts 안 쓰고 div로 단순 표시) ─────────────────────────────
-function BarChart({ hint }: { hint: NewBookForecastHint }) {
-  const max = Math.max(hint.wh1_qty, hint.wh2_qty, 1);
-  const Row = ({ label, qty, color }: { label: string; qty: number; color: string }) => (
-    <div className="flex items-center gap-2 text-[11px]">
-      <span className="w-16 text-bf-muted">{label}</span>
-      <div className="flex-1 h-5 bg-bf-panel2 rounded overflow-hidden">
-        <div
-          className="h-full transition-[width] duration-300"
-          style={{ width: `${(qty / max) * 100}%`, background: color }}
-        />
-      </div>
-      <span className="w-12 text-right font-mono">{qty}권</span>
-    </div>
-  );
-  return (
-    <div className="flex flex-col gap-1.5 mt-1">
-      <Row label="수도권" qty={hint.wh1_qty} color="#1B3A5C" />
-      <Row label="영남" qty={hint.wh2_qty} color="#1A7A6D" />
-    </div>
   );
 }
 
