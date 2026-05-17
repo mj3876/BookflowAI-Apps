@@ -18,6 +18,8 @@ type Props<T> = {
   smooth?: boolean;
   area?: boolean;
   yLabels?: string[];
+  /** 2번째 series 를 보조(우측) Y축에 — 매출↔건수처럼 스케일 차이 큰 경우 */
+  dualAxis?: boolean;
   isLoading?: boolean;
 };
 
@@ -30,10 +32,12 @@ export default function KpiLine<T extends Record<string, unknown>>({
   smooth = true,
   area = false,
   yLabels,
+  dualAxis = false,
   isLoading,
 }: Props<T>) {
   const yKeys = Array.isArray(yKey) ? yKey : [yKey];
   const labels = yLabels ?? yKeys.map(String);
+  const useDual = dualAxis && yKeys.length >= 2;
 
   const option = useMemo(
     () => ({
@@ -50,22 +54,40 @@ export default function KpiLine<T extends Record<string, unknown>>({
         yKeys.length > 1
           ? { data: labels, textStyle: { color: TOKENS.muted, fontSize: 11 }, top: title ? 26 : 4 }
           : undefined,
-      grid: { left: 50, right: 20, top: title ? 56 : 28, bottom: 30 },
+      grid: { left: 50, right: useDual ? 56 : 20, top: title ? 56 : 28, bottom: 30 },
       xAxis: {
         type: 'category',
         data: data.map((d) => d[xKey]),
         axisLine: { lineStyle: { color: TOKENS.border } },
         axisLabel: { color: TOKENS.muted, fontSize: 10 },
       },
-      yAxis: {
-        type: 'value',
-        axisLine: { lineStyle: { color: TOKENS.border } },
-        axisLabel: { color: TOKENS.muted, fontSize: 10 },
-        splitLine: { lineStyle: { color: TOKENS.split } },
-      },
+      yAxis: useDual
+        ? [
+            {
+              type: 'value', name: labels[0], position: 'left',
+              nameTextStyle: { color: TOKENS.muted, fontSize: 10 },
+              axisLine: { lineStyle: { color: TOKENS.border } },
+              axisLabel: { color: TOKENS.muted, fontSize: 10 },
+              splitLine: { lineStyle: { color: TOKENS.split } },
+            },
+            {
+              type: 'value', name: labels[1], position: 'right',
+              nameTextStyle: { color: TOKENS.muted, fontSize: 10 },
+              axisLine: { lineStyle: { color: TOKENS.border } },
+              axisLabel: { color: TOKENS.muted, fontSize: 10 },
+              splitLine: { show: false },
+            },
+          ]
+        : {
+            type: 'value',
+            axisLine: { lineStyle: { color: TOKENS.border } },
+            axisLabel: { color: TOKENS.muted, fontSize: 10 },
+            splitLine: { lineStyle: { color: TOKENS.split } },
+          },
       series: yKeys.map((k, i) => ({
         name: labels[i],
         type: 'line',
+        yAxisIndex: useDual && i === 1 ? 1 : 0,
         smooth,
         areaStyle: area ? { color: BF_COLORS[i % BF_COLORS.length], opacity: 0.18 } : undefined,
         lineStyle: { color: BF_COLORS[i % BF_COLORS.length], width: 2 },
@@ -75,7 +97,7 @@ export default function KpiLine<T extends Record<string, unknown>>({
         data: data.map((d) => d[k]),
       })),
     }),
-    [data, xKey, yKey, title, smooth, area, yLabels],
+    [data, xKey, yKey, title, smooth, area, yLabels, useDual],
   );
 
   if (isLoading) {

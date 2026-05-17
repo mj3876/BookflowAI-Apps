@@ -115,7 +115,7 @@ export default function HqHome() {
       {/* 메인 카드: 오늘 batch monitor */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <div className="metric-card bg-bf-panel2 border-bf-border2">
-          <div className="metric-label">✅ 07:00 batch 자동 승인</div>
+          <div className="metric-label">✅ 08:00 batch 자동 승인</div>
           <div className="metric-value text-bf-success">{grouped.data?.auto_executed_at_07 ?? 0}건</div>
           <div className="text-[11px] text-bf-muted mt-1">URGENT/CRITICAL 자동 처리 완료</div>
         </div>
@@ -132,7 +132,7 @@ export default function HqHome() {
           </div>
         </Link>
         <div className="metric-card bg-bf-panel2 border-bf-border2">
-          <div className="metric-label">⏰ 18:00 batch 거절 예정</div>
+          <div className="metric-label">⏰ 08:00 batch 거절 예정</div>
           <div className="metric-value text-bf-muted">{grouped.data?.auto_reject_at_18_pending ?? 0}건</div>
           <div className="text-[11px] text-bf-muted mt-1">NORMAL · D-1 이전 미처리</div>
         </div>

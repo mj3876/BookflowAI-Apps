@@ -632,6 +632,48 @@ def inventory_heatmap(ctx: AuthContext = Depends(require_auth)):
     }
 
 
+@router.get("/sales/store-weekday")
+def sales_store_weekday(ctx: AuthContext = Depends(require_auth)):
+    """매장 × 요일 매출 heatmap — 최근 30일 sales_realtime 집계.
+
+    dow = Postgres EXTRACT(DOW) (0=일 ~ 6=토) · frontend 가 월~일 라벨로 매핑.
+    role-scope: wh-manager → 자기 권역 매장 · branch-clerk → 자기 매장.
+    """
+    where = ["s.event_ts >= NOW() - INTERVAL '30 days'"]
+    params: list = []
+    if ctx.role == "wh-manager" and ctx.scope_wh_id is not None:
+        where.append("l.wh_id = %s")
+        params.append(ctx.scope_wh_id)
+    elif ctx.role == "branch-clerk" and ctx.scope_store_id is not None:
+        where.append("s.store_id = %s")
+        params.append(ctx.scope_store_id)
+    sql = f"""
+        SELECT s.store_id, l.name AS store_name,
+               EXTRACT(DOW FROM (s.event_ts AT TIME ZONE 'Asia/Seoul'))::int AS dow,
+               COALESCE(SUM(s.revenue), 0)::bigint AS revenue
+          FROM sales_realtime s
+          LEFT JOIN locations l ON l.location_id = s.store_id
+         WHERE {" AND ".join(where)}
+         GROUP BY s.store_id, l.name, dow
+         ORDER BY s.store_id, dow
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    return {
+        "items": [
+            {
+                "store_id":   r[0],
+                "store_name": r[1] or f"매장 {r[0]}",
+                "dow":        r[2],
+                "revenue":    int(r[3] or 0),
+            }
+            for r in rows
+        ],
+    }
+
+
 @router.get("/store-inventory/{store_id}")
 def inventory_by_store(store_id: int, ctx: AuthContext = Depends(require_auth)):
     """특정 매장 재고 (Branch Inventory 페이지). branch-clerk + wh-manager 스코프 enforce."""

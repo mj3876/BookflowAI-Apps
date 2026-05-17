@@ -64,6 +64,10 @@ type AccuracyItem = { date: string; mae: number; mape: number; total_predicted: 
 const fetchForecastAccuracy = (role: Role) =>
   _kpiGet<{ days: number; items: AccuracyItem[] }>('/dashboard/forecast/accuracy?days=7', role);
 
+type StoreWeekdayItem = { store_id: number; store_name: string; dow: number; revenue: number };
+const fetchStoreWeekday = (role: Role) =>
+  _kpiGet<{ items: StoreWeekdayItem[] }>('/dashboard/sales/store-weekday', role);
+
 // ─── 컴포넌트 ────────────────────────────────────────────────────────
 export default function KPI() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -104,6 +108,7 @@ export default function KPI() {
   const catTrend = useQuery({ queryKey: ['catTrend', role], queryFn: () => fetchCategoryTrend(role), ...TREND_OPTS });
   const asp = useQuery({ queryKey: ['asp', role], queryFn: () => fetchSalesAsp(role), ...TREND_OPTS });
   const accuracy = useQuery({ queryKey: ['accuracy', role], queryFn: () => fetchForecastAccuracy(role), ...TREND_OPTS });
+  const storeWeek = useQuery({ queryKey: ['storeWeek', role], queryFn: () => fetchStoreWeekday(role), ...TREND_OPTS });
 
   // ── 변동 적음 (5 분) ──────────────────────────────────────────────
   const SLOW_OPTS = { refetchInterval: 5 * 60 * 1000, staleTime: 5 * 60 * 1000, retry: 0 };
@@ -234,8 +239,15 @@ export default function KPI() {
 
   const WEEKDAY_LABELS = ['월', '화', '수', '목', '금', '토', '일'];
 
-  /** 매장 × 요일 매출 heatmap — 미구현 endpoint (다음 PR). 빈 배열로 placeholder. */
-  const storeHeat = useMemo(() => [] as Array<{ x: string; y: string; value: number }>, []);
+  /** 매장 × 요일 매출 heatmap — /dashboard/sales/store-weekday (Postgres DOW → 월~일 라벨 매핑). */
+  const storeHeat = useMemo(
+    () => (storeWeek.data?.items ?? []).map((d) => ({
+      x: WEEKDAY_LABELS[(d.dow + 6) % 7],
+      y: d.store_name,
+      value: d.revenue,
+    })),
+    [storeWeek.data],
+  );
 
   /** forecast 정확도 (MAPE 7일 line). */
   const accuracySeries = useMemo(
@@ -458,7 +470,7 @@ export default function KPI() {
             <h3 className="h3">매장 × 요일 매출 heatmap</h3>
             <span className="label-tag">30일 평균</span>
           </div>
-          <KpiHeatmap data={storeHeat} xLabels={WEEKDAY_LABELS} height={520} isLoading={false} />
+          <KpiHeatmap data={storeHeat} xLabels={WEEKDAY_LABELS} height={520} isLoading={storeWeek.isLoading} />
         </div>
       </div>
 
@@ -548,6 +560,7 @@ export default function KPI() {
           xKey="t"
           yKey={['revenue', 'qty']}
           yLabels={['매출(₩)', '건수']}
+          dualAxis
           area
           smooth
           height={220}

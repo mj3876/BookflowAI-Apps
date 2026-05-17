@@ -131,7 +131,7 @@ export default function Layout() {
     : role === 'branch-clerk' ? nameOf(getScope().scope_store_id ?? undefined) : '';
 
   return (
-    <div className="min-h-screen bg-bf-bg flex">
+    <div className="h-screen overflow-hidden bg-bf-bg flex">
       <aside className="w-[220px] min-w-[220px] max-w-[220px] shrink-0 bg-bf-sidebar text-white flex flex-col overflow-hidden">
         <div className="px-5 py-4 border-b border-bf-sidebar2">
           <div className="text-base font-bold flex items-center gap-2">📚 BookFlow</div>
