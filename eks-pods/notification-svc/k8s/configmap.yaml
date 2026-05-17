@@ -14,12 +14,12 @@ data:
   NOTIFICATION_LOGIC_APPS_TIMEOUT_SECONDS: "5.0"
   NOTIFICATION_AUTH_MODE: "mock"
   NOTIFICATION_LOG_LEVEL: "INFO"
-  NOTIFICATION_CONTACT_HQ_EMAILS: "redfox@yonsei.ac.kr"
-  NOTIFICATION_CONTACT_WH_EMAILS: "ms8405493@gmail.com"
-  NOTIFICATION_CONTACT_BRANCH_EMAILS: "2023240672@yonsei.ac.kr"
+  NOTIFICATION_CONTACT_HQ_EMAILS: "woohek00@gmail.com"
+  NOTIFICATION_CONTACT_WH_EMAILS: "rladudgjs0427@gmail.com"
+  NOTIFICATION_CONTACT_BRANCH_EMAILS: "ms8405493@gmail.com"
   # 지점·물류센터 개별 담당자 이메일 (locations 테이블 PK 기준)
-  # 1~6: 수도권 지점, 7~12: 영남 지점, 13~14: 온라인, 15~16: 거점창고(WH)
-  NOTIFICATION_LOCATION_CONTACTS_JSON: '{"1":"2023240672@yonsei.ac.kr","2":"2023240672@yonsei.ac.kr","3":"2023240672@yonsei.ac.kr","4":"2023240672@yonsei.ac.kr","5":"2023240672@yonsei.ac.kr","6":"2023240672@yonsei.ac.kr","7":"2023240672@yonsei.ac.kr","8":"2023240672@yonsei.ac.kr","9":"2023240672@yonsei.ac.kr","10":"2023240672@yonsei.ac.kr","11":"2023240672@yonsei.ac.kr","12":"2023240672@yonsei.ac.kr","13":"2023240672@yonsei.ac.kr","14":"2023240672@yonsei.ac.kr","15":"ms8405493@gmail.com","16":"ms8405493@gmail.com"}'
+  # 1~14: 지점·온라인, 15~16: 거점창고(WH)
+  NOTIFICATION_CONTACT_LOCATION_CONTACTS_JSON: '{"1":"ms8405493@gmail.com","2":"ms8405493@gmail.com","3":"ms8405493@gmail.com","4":"ms8405493@gmail.com","5":"ms8405493@gmail.com","6":"ms8405493@gmail.com","7":"ms8405493@gmail.com","8":"ms8405493@gmail.com","9":"ms8405493@gmail.com","10":"ms8405493@gmail.com","11":"ms8405493@gmail.com","12":"ms8405493@gmail.com","13":"ms8405493@gmail.com","14":"ms8405493@gmail.com","15":"rladudgjs0427@gmail.com","16":"rladudgjs0427@gmail.com"}'
   AUTH_MODE: "jwt"
   AUTH_JWT_ISSUER: "bookflow-auth-pod"
   AUTH_JWT_AUDIENCE: "bookflow-services"
