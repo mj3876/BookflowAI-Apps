@@ -825,6 +825,14 @@ export const fetchSales30Days = (role: Role, store_id?: number) =>
     `/dashboard/sales/30days${store_id !== undefined ? `?store_id=${store_id}` : ''}`, role,
   );
 
+// ─── 매출 시계열 (분/시간/일 granularity 토글) ──────────────────────
+export type Granularity = 'minute' | 'hour' | 'day';
+export type TimeseriesPoint = { bucket: string; revenue: number; qty: number; tx_count: number };
+export const fetchSalesTimeseries = (role: Role, granularity: Granularity, store_id?: number) =>
+  getJson<{ granularity: Granularity; items: TimeseriesPoint[] }>(
+    `/dashboard/sales/timeseries?granularity=${granularity}${_storeQS(store_id)}`, role,
+  );
+
 export type TurnoverItem = { wh_id: number; turnover: number; total_sales: number; avg_inventory: number };
 export const fetchInventoryTurnover = (role: Role, days = 7) =>
   getJson<{ days: number; items: TurnoverItem[] }>(

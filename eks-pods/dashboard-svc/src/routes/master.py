@@ -1251,6 +1251,62 @@ def sales_30days(
     }
 
 
+# granularity → (date_trunc 단위, lookback INTERVAL, 출력 포맷)
+_GRAIN = {
+    "minute": ("minute", "6 hours"),
+    "hour":   ("hour",   "7 days"),
+    "day":    ("day",    "30 days"),
+}
+
+
+@router.get("/sales/timeseries")
+def sales_timeseries(
+    granularity: str = Query(default="minute", description="minute · hour · day"),
+    store_id: int | None = Query(default=None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """매출 시계열 — 분/시간/일 버킷 집계 (sales_realtime · date_trunc). role-scope 자동.
+
+    사용자 친화 granularity 토글용. minute=최근 6h · hour=최근 7d · day=최근 30d.
+    bucket 은 KST 기준 ISO 문자열.
+    """
+    grain = granularity if granularity in _GRAIN else "minute"
+    trunc, lookback = _GRAIN[grain]
+
+    where = [
+        f"s.event_ts >= NOW() - INTERVAL '{lookback}'",
+        "s.event_ts <= NOW()",
+    ]
+    params: list = []
+    _apply_sales_scope(ctx, where, params, store_id)
+
+    sql = f"""
+        SELECT date_trunc('{trunc}', s.event_ts AT TIME ZONE 'Asia/Seoul') AS bucket,
+               SUM(s.revenue)::bigint AS revenue,
+               SUM(s.qty)::int        AS qty,
+               COUNT(*)::int          AS tx_count
+          FROM sales_realtime s
+         WHERE {' AND '.join(where)}
+         GROUP BY bucket
+         ORDER BY bucket
+    """
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return {
+        "granularity": grain,
+        "items": [
+            {
+                "bucket":   r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "revenue":  int(r[1] or 0),
+                "qty":      r[2] or 0,
+                "tx_count": r[3] or 0,
+            }
+            for r in rows
+        ],
+    }
+
+
 @router.get("/inventory/turnover")
 def inventory_turnover(
     days: int = Query(default=7, ge=1, le=90),

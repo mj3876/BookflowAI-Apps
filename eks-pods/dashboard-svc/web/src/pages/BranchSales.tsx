@@ -4,14 +4,16 @@ import { useOutletContext } from 'react-router-dom';
 import {
   fetchSalesBySpecificStore, fetchKpiByCategory, fetchBestsellers,
   fetchSales30Days, fetchSalesByPayment, fetchSalesAsp,
-  fetchSalesByWeekday, fetchSalesByHourAvg,
-  type Role,
+  fetchSalesByWeekday, fetchSalesByHourAvg, fetchSalesTimeseries,
+  type Granularity, type Role,
 } from '../api';
 import { useLocations } from '../useLocations';
 import EmptyState from '../components/EmptyState';
 import KpiLine from '../components/charts/KpiLine';
 import KpiBar from '../components/charts/KpiBar';
 import KpiPie from '../components/charts/KpiPie';
+import { GranularityToggle } from '../components/GranularityToggle';
+import { formatBucket, grainCaption } from '../granularity';
 
 export default function BranchSales() {
   const { role } = useOutletContext<{ role: Role }>();
@@ -82,6 +84,16 @@ export default function BranchSales() {
     staleTime: 2 * 60 * 1000,
   });
 
+  // 매출 시계열 (분/시간/일 토글 · 선택 매장)
+  const [grain, setGrain] = useState<Granularity>('hour');
+  const timeseriesQ = useQuery({
+    queryKey: ['sales-timeseries', storeId, grain, role],
+    queryFn: () => fetchSalesTimeseries(role, grain, storeId),
+    refetchInterval: grain === 'minute' ? 30000 : 5 * 60 * 1000,
+    staleTime: grain === 'minute' ? 15000 : 2 * 60 * 1000,
+    retry: 0,
+  });
+
   const items = q.data?.items ?? [];
   const totalRev = items.reduce((s, x) => s + x.revenue, 0);
   const onlineCount = items.filter((x) => x.channel.startsWith('ONLINE')).length;
@@ -132,6 +144,13 @@ export default function BranchSales() {
     .slice(0, 20)
     .map((it) => ({ label: (it.title ?? it.isbn13).slice(0, 24), qty: it.qty }));
 
+  // 매출 시계열 (granularity 토글 반영)
+  const timeseries = (timeseriesQ.data?.items ?? []).map((d) => ({
+    t: formatBucket(d.bucket, grain),
+    revenue: d.revenue,
+    qty: d.qty,
+  }));
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -170,6 +189,27 @@ export default function BranchSales() {
           <div className="metric-label">오프라인</div>
           <div className="metric-value">{items.length - onlineCount}</div>
         </div>
+      </div>
+
+      {/* 차트 0행: 매출 추이 (분/시간/일 토글) */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="h2 text-sm">📈 매출 추이 · 건수</h2>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-bf-muted">{grainCaption(grain)}</span>
+            <GranularityToggle value={grain} onChange={setGrain} />
+          </div>
+        </div>
+        <KpiLine
+          data={timeseries}
+          xKey="t"
+          yKey={['revenue', 'qty']}
+          yLabels={['매출(₩)', '건수']}
+          dualAxis
+          area
+          height={240}
+          isLoading={timeseriesQ.isLoading}
+        />
       </div>
 
       {/* 차트 1행: 7일 vs 30일 비교 (이중 line) + 카테고리 매출 */}

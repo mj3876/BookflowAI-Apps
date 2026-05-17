@@ -9,13 +9,15 @@
  *   - sales/bestsellers · cascade/funnel · kpi/by-category (5 분 staleTime · 변동 적음)
  */
 import { useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import KpiLine from '../components/charts/KpiLine';
 import KpiBar from '../components/charts/KpiBar';
 import KpiPie from '../components/charts/KpiPie';
 import KpiFunnel from '../components/charts/KpiFunnel';
 import KpiHeatmap from '../components/charts/KpiHeatmap';
+import { GranularityToggle } from '../components/GranularityToggle';
+import { formatBucket, grainCaption } from '../granularity';
 import {
   fetchOverview,
   fetchSalesSummary,
@@ -23,6 +25,8 @@ import {
   fetchRecentSales,
   fetchBestsellers,
   fetchCascadeFunnel,
+  fetchSalesTimeseries,
+  type Granularity,
   type Role,
   type PendingOrder,
 } from '../api';
@@ -100,6 +104,16 @@ export default function KPI() {
     staleTime: 3_000,
   });
 
+  // ── 매출 시계열 (분/시간/일 토글) ──────────────────────────────────
+  const [grain, setGrain] = useState<Granularity>('minute');
+  const timeseries = useQuery({
+    queryKey: ['timeseries', grain, role],
+    queryFn: () => fetchSalesTimeseries(role, grain),
+    refetchInterval: grain === 'minute' ? 30_000 : 5 * 60 * 1000,
+    staleTime: grain === 'minute' ? 15_000 : 2 * 60 * 1000,
+    retry: 0,
+  });
+
   // ── trend (30 분) — 신규 ───────────────────────────────────────────
   const TREND_OPTS = { refetchInterval: 30 * 60 * 1000, staleTime: 5 * 60 * 1000, retry: 0 };
   const sales30 = useQuery({ queryKey: ['sales30', role], queryFn: () => fetchSales30Days(role), ...TREND_OPTS });
@@ -117,22 +131,15 @@ export default function KPI() {
 
   // ─── 차트 데이터 가공 ──────────────────────────────────────────────
 
-  /** 최근 60건 트랜잭션 분 단위 버킷 (기존). */
-  const minuteSeries = useMemo(() => {
-    const rows = recent.data?.items ?? [];
-    const buckets = new Map<string, { revenue: number; qty: number }>();
-    for (const r of rows) {
-      const d = new Date(r.event_ts);
-      const key = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-      const b = buckets.get(key) ?? { revenue: 0, qty: 0 };
-      b.revenue += r.revenue;
-      b.qty += r.qty;
-      buckets.set(key, b);
-    }
-    return Array.from(buckets.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([t, v]) => ({ t, revenue: v.revenue, qty: v.qty }));
-  }, [recent.data]);
+  /** 매출 시계열 — granularity 토글 반영 (분/시간/일 버킷). */
+  const tsSeries = useMemo(
+    () => (timeseries.data?.items ?? []).map((d) => ({
+      t: formatBucket(d.bucket, grain),
+      revenue: d.revenue,
+      qty: d.qty,
+    })),
+    [timeseries.data, grain],
+  );
 
   /** 채널 mix. */
   const channelMix = useMemo(() => {
@@ -549,14 +556,17 @@ export default function KPI() {
         </div>
       )}
 
-      {/* ── 9행: 분 단위 trend (실시간 5초) + raw table ──────────── */}
+      {/* ── 9행: 매출 시계열 (분/시간/일 토글) + raw table ────────── */}
       <div className="card">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="h3">최근 트랜잭션 분당 매출 · 건수</h3>
-          <span className="label-tag">5초 polling · 최근 60건</span>
+          <h3 className="h3">매출 추이 · 건수</h3>
+          <div className="flex items-center gap-2">
+            <span className="label-tag">{grainCaption(grain)}</span>
+            <GranularityToggle value={grain} onChange={setGrain} />
+          </div>
         </div>
         <KpiLine
-          data={minuteSeries}
+          data={tsSeries}
           xKey="t"
           yKey={['revenue', 'qty']}
           yLabels={['매출(₩)', '건수']}
@@ -564,7 +574,7 @@ export default function KPI() {
           area
           smooth
           height={220}
-          isLoading={recent.isLoading}
+          isLoading={timeseries.isLoading}
         />
       </div>
 

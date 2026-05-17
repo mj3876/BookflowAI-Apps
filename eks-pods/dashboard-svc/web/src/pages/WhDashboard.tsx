@@ -23,6 +23,9 @@ import KpiBar from '../components/charts/KpiBar';
 import KpiLine from '../components/charts/KpiLine';
 import KpiFunnel from '../components/charts/KpiFunnel';
 import KpiPie from '../components/charts/KpiPie';
+import { GranularityToggle } from '../components/GranularityToggle';
+import { formatBucket, grainCaption } from '../granularity';
+import { fetchSalesTimeseries, type Granularity } from '../api';
 
 // 부족률 (low_count / sku_count) 기반 히트맵 색상.
 // 0% green / <5% yellow / <15% orange / 15%+ red. 데이터 없으면 회색.
@@ -147,6 +150,16 @@ export default function WhDashboard() {
     queryFn: () => fetchSalesByWeekday(role, 30),
     refetchInterval: 5 * 60 * 1000,
     staleTime: 2 * 60 * 1000,
+  });
+
+  // 권역 매출 시계열 (분/시간/일 토글) — role-scope 자동 (wh-manager 자기 권역)
+  const [grain, setGrain] = useState<Granularity>('hour');
+  const timeseries = useQuery({
+    queryKey: ['wh-timeseries', grain, role],
+    queryFn: () => fetchSalesTimeseries(role, grain),
+    refetchInterval: grain === 'minute' ? 30000 : 5 * 60 * 1000,
+    staleTime: grain === 'minute' ? 15000 : 2 * 60 * 1000,
+    retry: 0,
   });
 
   // D+1 AI 수요예측 batch — 하루 1회 갱신. 30 분
@@ -335,6 +348,16 @@ export default function WhDashboard() {
       .map((w) => ({ name: w.dow_label ?? String(w.dow), value: Math.round(w.revenue ?? 0) }));
   }, [weekday.data?.items]);
 
+  // 권역 매출 시계열 series (granularity 토글 반영)
+  const timeseriesChart = useMemo(
+    () => (timeseries.data?.items ?? []).map((d) => ({
+      t: formatBucket(d.bucket, grain),
+      revenue: d.revenue,
+      qty: d.qty,
+    })),
+    [timeseries.data, grain],
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {/* 헤더 + hq-admin 모드 selector */}
@@ -489,6 +512,28 @@ export default function WhDashboard() {
           height={260}
           smooth
           isLoading={funnel.isLoading}
+        />
+      </div>
+
+      {/* row 2.5 — 권역 매출 추이 (분/시간/일 토글) */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="h3">권역 매출 추이</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-bf-muted">{grainCaption(grain)}</span>
+            <GranularityToggle value={grain} onChange={setGrain} />
+          </div>
+        </div>
+        <KpiLine
+          data={timeseriesChart}
+          xKey="t"
+          yKey={['revenue', 'qty']}
+          yLabels={['매출(₩)', '건수']}
+          dualAxis
+          area
+          smooth
+          height={260}
+          isLoading={timeseries.isLoading}
         />
       </div>
 
