@@ -38,5 +38,10 @@ class Settings(BaseSettings):
     contact_wh_emails: str = ""      # 물류센터(수도권+영남) → ms8405493@gmail.com
     contact_branch_emails: str = ""  # 지점 전체 → 2023240672@yonsei.ac.kr
 
+    # ── 지점·물류센터 개별 담당자 연락처 ─────────────────────────────
+    # JSON 문자열: {"location_id": "email", ...} (location_id = locations 테이블 PK)
+    # K8s ConfigMap NOTIFICATION_LOCATION_CONTACTS_JSON 으로 주입
+    contact_location_contacts_json: str = ""
+
 
 settings = Settings()
