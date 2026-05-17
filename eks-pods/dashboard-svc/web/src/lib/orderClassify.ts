@@ -69,22 +69,28 @@ function visibleFaces(
 
   if (role === 'hq-admin') {
     // hq 는 entity 제한 없음 — planView 로 face-kind 만 선택.
-    //   all     → 양면 · mine(물류센터 계획) → WH-kind face 만 · observe(지점 계획) → STORE-kind face 만.
-    if (planView === 'all') return { src: true, tgt: true };
+    //   all → 양면 (단 PUBLISHER source 는 EXT — 출고/운송 면 없음 · B1)
+    //   mine(물류센터 계획) → WH-kind face 만 · observe(지점 계획) → STORE-kind face 만.
+    if (planView === 'all') return { src: kind.src !== 'EXT', tgt: kind.tgt !== 'EXT' };
     const want: FaceKind = planView === 'mine' ? 'WH' : 'STORE';
     return { src: kind.src === want, tgt: kind.tgt === want };
   }
 
   if (role.startsWith('wh-manager')) {
-    // wh-manager — WH-kind face 이고 그 WH 가 내 창고일 때만.
-    //   WH_TO_STORE  : src(WH=내창고) 출고면만 · tgt(STORE) 은 안 보임.
-    //   WH_TRANSFER  : 내 창고가 src 면 출고면 / tgt 면 입고면.
-    //   PUBLISHER    : tgt(WH=내창고) 입고면 · src(EXT) 안 보임.
+    // wh-manager — 내 창고 WH-face(mine) + 내 권역 매장 REBALANCE-face(observe).
+    //   mine    : WH-kind face 가 내 창고 (WH_TO_STORE 출고 · WH_TRANSFER · PUBLISHER 입고)
+    //   observe : REBALANCE 의 STORE-kind face 가 내 권역 (권역 매장 재분배)
+    //   all     : 둘 다. WH_TO_STORE 의 STORE target 면은 계속 숨김 (이슈19 의도 — branch 몫).
     const my = scope.scope_wh_id;
-    return {
-      src: kind.src === 'WH' && my != null && srcWh === my,
-      tgt: kind.tgt === 'WH' && my != null && tgtWh === my,
-    };
+    if (my == null) return { src: false, tgt: false };
+    const srcMine = kind.src === 'WH' && srcWh === my;
+    const tgtMine = kind.tgt === 'WH' && tgtWh === my;
+    const isReb = o.order_type === 'REBALANCE';
+    const srcReg = isReb && kind.src === 'STORE' && srcWh === my;
+    const tgtReg = isReb && kind.tgt === 'STORE' && tgtWh === my;
+    if (planView === 'mine')    return { src: srcMine, tgt: tgtMine };
+    if (planView === 'observe') return { src: srcReg,  tgt: tgtReg  };
+    return { src: srcMine || srcReg, tgt: tgtMine || tgtReg };
   }
 
   // branch-clerk — STORE-kind face 이고 그 STORE 가 내 매장일 때만.
