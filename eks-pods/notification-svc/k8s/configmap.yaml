@@ -4,20 +4,19 @@ metadata:
   name: notification-svc-env
   namespace: bookflow
 data:
-  NOTIFICATION_RDS_HOST: "bookflow-postgres.c5hcctg31h30.ap-northeast-1.rds.amazonaws.com"
+  NOTIFICATION_RDS_HOST: "${RDS_HOST}"
   NOTIFICATION_RDS_PORT: "5432"
   NOTIFICATION_RDS_DB: "bookflow"
   NOTIFICATION_RDS_USER: "notification_svc"
-  NOTIFICATION_REDIS_HOST: "bookflow-redis.xxpw8f.0001.apne1.cache.amazonaws.com"
+  NOTIFICATION_REDIS_HOST: "${REDIS_HOST}"
   NOTIFICATION_REDIS_PORT: "6379"
-  # Phase 2-3: azure-logic-apps-mock (in-cluster). Phase 4 swap: real Azure Logic Apps URL via Egress NAT.
-  NOTIFICATION_LOGIC_APPS_URL: "http://azure-logic-apps-mock.stubs.svc.cluster.local"
+  # Logic Apps SAS URL은 Secret(notification-svc-secret)에서 관리
   NOTIFICATION_LOGIC_APPS_TIMEOUT_SECONDS: "5.0"
   NOTIFICATION_AUTH_MODE: "mock"
   NOTIFICATION_LOG_LEVEL: "INFO"
-  NOTIFICATION_CONTACT_HQ_EMAILS: "ms8405493@gmail.com"
-  NOTIFICATION_CONTACT_WH_EMAILS: "rladudgjs0427@gmail.com"
-  NOTIFICATION_CONTACT_BRANCH_EMAILS: "admin@bleach10905gmail.onmicrosoft.com"
+  NOTIFICATION_CONTACT_HQ_EMAILS: "redfox@yonsei.ac.kr"
+  NOTIFICATION_CONTACT_WH_EMAILS: "ms8405493@gmail.com"
+  NOTIFICATION_CONTACT_BRANCH_EMAILS: "2023240672@yonsei.ac.kr"
   AUTH_MODE: "jwt"
   AUTH_JWT_ISSUER: "bookflow-auth-pod"
   AUTH_JWT_AUDIENCE: "bookflow-services"

@@ -14,12 +14,29 @@ class Settings(BaseSettings):
     redis_host: str
     redis_port: int = 6379
 
-    # Azure Logic Apps webhook (mock or real). Phase 2-3 = azure-logic-apps-mock cluster service.
-    logic_apps_url: str = "http://azure-logic-apps-mock.stubs.svc.cluster.local"
+    # Azure Logic Apps SAS URL (워크플로 별 분리).
+    # notification/        → SpikeUrgent, NegotiationDelay, DailyPlanFinalized
+    # forecast-completed/  → ForecastCompleted
+    # delivery-completed/  → DeliveryCompleted
+    # approval-request/    → OrderPending (승인요청)
+    # stock-depart/        → StockDepartPending (운송시작)
+    # stock-arrival/       → StockArrivalPending (운송완료)
+    logic_apps_url: str = ""                        # la-bookflowmj-notification SAS URL
+    logic_apps_forecast_completed_url: str = ""     # la-bookflowmj-forecast-completed SAS URL
+    logic_apps_delivery_completed_url: str = ""     # la-bookflowmj-delivery-completed SAS URL
+    logic_apps_approval_request_url: str = ""       # la-bookflowmj-approval-request SAS URL
+    logic_apps_stock_depart_url: str = ""           # la-bookflowmj-stock-depart SAS URL
+    logic_apps_stock_arrival_url: str = ""          # la-bookflowmj-stock-arrival SAS URL
     logic_apps_timeout_seconds: float = 5.0
 
     auth_mode: str = "mock"
     log_level: str = "INFO"
+
+    # ── 수신자 연락처 ─────────────────────────────────────────────────
+    # K8s ConfigMap NOTIFICATION_CONTACT_* 으로 주입 (학습환경: 3개 주소로 통합)
+    contact_hq_emails: str = ""      # 본사+경영진 → redfox@yonsei.ac.kr
+    contact_wh_emails: str = ""      # 물류센터(수도권+영남) → ms8405493@gmail.com
+    contact_branch_emails: str = ""  # 지점 전체 → 2023240672@yonsei.ac.kr
 
 
 settings = Settings()
