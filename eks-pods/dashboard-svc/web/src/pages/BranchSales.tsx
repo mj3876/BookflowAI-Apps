@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
+import { useScope } from '../auth';
 import {
   fetchSalesBySpecificStore, fetchKpiByCategory, fetchBestsellers,
   fetchSales30Days, fetchSalesByPayment, fetchSalesAsp,
@@ -17,7 +18,9 @@ import { formatBucket, grainCaption } from '../granularity';
 
 export default function BranchSales() {
   const { role } = useOutletContext<{ role: Role }>();
-  const [storeId, setStoreId] = useState(1);
+  const { scope_store_id } = useScope();
+  // branch-clerk 는 자기 매장으로 초기화 · hq-admin / wh-manager 는 강남점(1) fallback.
+  const [storeId, setStoreId] = useState(scope_store_id ?? 1);
   const { items: locItems, nameOf } = useLocations(role);
 
   // 최근 트랜잭션 list (POS 실시간 흐름) — 5 초 (이전 3 초는 과함)
@@ -98,6 +101,15 @@ export default function BranchSales() {
   const totalRev = items.reduce((s, x) => s + x.revenue, 0);
   const onlineCount = items.filter((x) => x.channel.startsWith('ONLINE')).length;
   const storeOptions = locItems.filter((l) => l.location_type !== 'WH' && l.active !== false);
+
+  // location 마스터 로드 후 현재 storeId 가 scope 밖이면 in-scope 첫 매장으로 보정.
+  // (wh-manager 권역 / branch-clerk 매장 전환 시 기본값 1 이 옵션에 없어 매출이 고정되던 버그)
+  useEffect(() => {
+    if (storeOptions.length === 0) return;
+    if (storeOptions.some((l) => l.location_id === storeId)) return;
+    const fallback = storeOptions.find((l) => l.location_id === scope_store_id) ?? storeOptions[0];
+    setStoreId(fallback.location_id);
+  }, [storeOptions, storeId, scope_store_id]);
 
   // 30일 일별 매출 — 실 데이터 (date YYYY-MM-DD → M/D 라벨)
   const daily30 = (sales30.data?.items ?? []).map((it) => {

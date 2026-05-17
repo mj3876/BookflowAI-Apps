@@ -86,15 +86,18 @@ export default function Inventory() {
   const totalSku = items.reduce((s, c) => s + c.sku_count, 0);
   const totalQty = items.reduce((s, c) => s + c.total_qty, 0);
   const totalLow = items.reduce((s, c) => s + c.low_count, 0);
+  // 실질 부족 SKU — 운송중(APPROVED/IN_TRANSIT) 차감 후에도 안전재고 미달인 SKU 수.
+  const totalRealLow = items.reduce((s, c) => s + (c.real_low_count ?? c.low_count), 0);
   const totalZero = items.reduce((s, c) => s + c.zero_count, 0);
-  // 부족 수량 — 안전재고 미달분 합 (Σ max(0, 안전재고 − 가용)). heatmap short_qty 합.
+  // 부족 수량 — 안전재고 미달분 합 (Σ max(0, 안전재고 − 가용)). heatmap short_qty 합 (운송중 차감 전 raw).
   const totalShort = items.reduce((s, c) => s + (c.short_qty ?? 0), 0);
   // 실질 부족 — raw 부족에서 운송중(APPROVED/IN_TRANSIT) 도착예정분을 차감한 값.
   const totalRealShort = items.reduce((s, c) => s + (c.real_short_qty ?? 0), 0);
 
   // AnomalyBanner 입력: 위치 단위 카운트 (location 1개라도 zero/low 면 카운트)
+  // 부족 위치는 운송중 차감 후에도 부족인 SKU(real_low_count) 기준 — 도착예정 물량으로 메워질 위치는 제외.
   const zeroLocations = items.filter((c) => c.zero_count > 0).length;
-  const lowLocations = items.filter((c) => c.low_count > 0).length;
+  const lowLocations = items.filter((c) => (c.real_low_count ?? c.low_count) > 0).length;
 
   // 최근 24h spike 만 (서버 응답은 최신순 20개) — 여기서 클라이언트 필터
   const cutoff = Date.now() - 24 * 3600 * 1000;
@@ -168,18 +171,18 @@ export default function Inventory() {
           <div className="metric-value">{totalQty.toLocaleString()}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label flex items-center">재고 부족<HelpHint text="가용 (on_hand - reserved) ≤ 안전재고 인 SKU 수." /></div>
-          <div className="metric-value text-bf-warn">{totalLow.toLocaleString()}</div>
-          <div className="text-[10px] text-bf-muted mt-1">안전재고 미달 SKU</div>
+          <div className="metric-label flex items-center">재고 부족<HelpHint text="가용 (on_hand - reserved) ≤ 안전재고 인 SKU 수. 운송중(승인·이송중 발주) 도착예정분을 차감한 실질 부족 SKU 기준." /></div>
+          <div className="metric-value text-bf-warn">{totalRealLow.toLocaleString()}</div>
+          <div className="text-[10px] text-bf-muted mt-1">운송중 반영 실질 부족 SKU{totalRealLow !== totalLow && <span> · raw {totalLow.toLocaleString()}</span>}</div>
         </div>
         <div className="metric-card">
           <div className="metric-label flex items-center">완전 소진<HelpHint text="on_hand = 0 인 SKU 의 위치별 합. 즉시 발주 필요." /></div>
           <div className="metric-value text-bf-danger">{totalZero.toLocaleString()}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label flex items-center">부족 수량<HelpHint text="안전재고 미달분 합 — Σ max(0, 안전재고 − 가용). 운송중 도착예정분 차감 전 raw 값." /></div>
-          <div className="metric-value text-bf-warn">{totalShort.toLocaleString()}</div>
-          <div className="text-[10px] text-bf-muted mt-1">운송중 반영 실질 부족 <span className="text-bf-text font-semibold">{totalRealShort.toLocaleString()}</span></div>
+          <div className="metric-label flex items-center">부족 수량<HelpHint text="운송중(승인·이송중 발주) 도착예정분을 차감한 실질 부족 수량 — Σ max(0, 안전재고 − 가용 − 운송중). 실제 추가 발주가 필요한 양." /></div>
+          <div className="metric-value text-bf-warn">{totalRealShort.toLocaleString()}</div>
+          <div className="text-[10px] text-bf-muted mt-1">운송중 반영 실질 부족{totalRealShort !== totalShort && <span> · raw <span className="text-bf-text font-semibold">{totalShort.toLocaleString()}</span></span>}</div>
         </div>
       </div>
 
@@ -263,11 +266,13 @@ function WarehouseSection({
   predByLoc: Map<number, number>;
 }) {
   if (cells.length === 0) return null;
+  // 운송중(APPROVED/IN_TRANSIT) 도착예정분 차감 후 실질 부족 SKU 수 — backend real_low_count.
+  const realLow = (c: LocationCell): number => c.real_low_count ?? c.low_count;
   // 필터 모드: 해당 항목 위치만 dim 해제 (전체 표시는 유지하되 강조만 변경)
   const matchesFilter = (c: LocationCell): boolean => {
     if (!highlightFilter) return true;
     if (highlightFilter === 'zero') return c.zero_count > 0;
-    return c.low_count > 0;
+    return realLow(c) > 0;
   };
   const maxQty = Math.max(1, ...cells.map((c) => c.total_qty));
   return (
@@ -277,9 +282,10 @@ function WarehouseSection({
         {cells.map((c) => {
           const intensity = c.total_qty / maxQty;
           const dimmed = highlightFilter !== null && !matchesFilter(c);
+          const lowCnt = realLow(c);
           const rowsClass =
             c.zero_count > 0 ? 'border-bf-danger' :
-            c.low_count > 5  ? 'border-bf-warn'   : 'border-bf-border';
+            lowCnt > 5       ? 'border-bf-warn'   : 'border-bf-border';
           return (
             <div
               key={c.location_id}
@@ -292,9 +298,9 @@ function WarehouseSection({
                 </div>
                 <span className={
                   c.zero_count > 0 ? 'pill-rejected' :
-                  c.low_count > 5  ? 'pill-pending'  : 'pill-approved'
+                  lowCnt > 5       ? 'pill-pending'  : 'pill-approved'
                 }>
-                  {c.zero_count > 0 ? '주의' : c.low_count > 5 ? '경고' : '정상'}
+                  {c.zero_count > 0 ? '주의' : lowCnt > 5 ? '경고' : '정상'}
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-2 text-center">
@@ -306,9 +312,9 @@ function WarehouseSection({
                   <div className="text-[10px] text-bf-muted">보유</div>
                   <div className="text-sm font-semibold">{c.total_qty.toLocaleString()}</div>
                 </div>
-                <div>
+                <div title="운송중(승인·이송중 발주) 도착예정분 차감 후 실질 부족 SKU 수">
                   <div className="text-[10px] text-bf-muted">부족</div>
-                  <div className={`text-sm font-semibold ${c.low_count > 0 ? 'text-bf-warn' : ''}`}>{c.low_count}</div>
+                  <div className={`text-sm font-semibold ${lowCnt > 0 ? 'text-bf-warn' : ''}`}>{lowCnt}</div>
                 </div>
                 <div title="forecast-svc D+1 예측 수요 합 (권/일)">
                   <div className="text-[10px] text-bf-muted">AI 예측</div>
