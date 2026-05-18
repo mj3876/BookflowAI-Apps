@@ -26,15 +26,17 @@ class ForecastResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    snapshot_date: date
-    store_id: int
-    items: list[ForecastRow]
+    snapshot_date: date | None = None
+    store_id: int | None = None
+    items: list[ForecastRow] = Field(default_factory=list)
+    days: int | None = None
 
 
 class RefreshResponse(BaseModel):
-    snapshot_date: date
-    store_id: int
+    snapshot_date: date | None = None
+    store_id: int | None = None
     inserted: int
+    source: str = "request"
 
 
 # P1-4b 시연 trigger: 예측 수요 × 5 (안전재고 5일치) > 가용 재고 인 도서 list (cascade 자동 발의용)

@@ -1,20 +1,26 @@
 # forecast-svc
 
-V6.3 MSA Pod #3 · AI 수요예측 D+1 캐시 + Vertex AI 후크.
+V6.3 MSA Pod #3: AI demand forecast cache + GCP inference bridge.
 
-## 책임
-- `forecast_cache` 테이블 read/write (D+1만 RDS 보관 · D+2~5 BigQuery)
-- Vertex AI Endpoint 호출 (Phase 4 — 현재는 stub)
-- BQ → RDS 동기화 (Phase 4 — `kpi-sync` CronJob 가 분담 가능)
+## Responsibilities
+
+- Read/write `forecast_cache` for dashboard and decision-svc.
+- `POST /forecast/refresh`: pull latest BigQuery `forecast_results` rows and UPSERT them into RDS, or accept explicit rows for manual/backfill refresh.
+- `POST /forecast/newbook/predict-demand`: call the configured GCP `vertex-invoke` Cloud Function backed by Vertex model `3223031419848622080`, then return dashboard-compatible store/WH predictions.
 
 ## API
-- `GET /forecast/{store_id}/{snapshot_date}` — 매장별 D+1 예측 조회
-- `POST /forecast/refresh` — bulk UPSERT (hq-admin only)
+
+- `GET /forecast/{store_id}/{snapshot_date}`: store forecast lookup.
+- `GET /forecast/insufficient-stock`: D+1 shortage candidates based on forecast safety stock.
+- `POST /forecast/refresh`: hq-admin only BigQuery/RDS refresh.
+- `POST /forecast/newbook/predict-demand`: hq-admin only new-book forecast request.
 - `GET /health`
 
-## V3 schema
-- `forecast_cache(snapshot_date, isbn13, store_id, predicted_demand, confidence_low, confidence_high, model_version, synced_at)` PK (snapshot_date, isbn13, store_id)
+## Required Runtime Config
 
-## 환경변수 (`FORECAST_` prefix)
-- `RDS_HOST` `RDS_PORT` `RDS_DB` `RDS_USER` `RDS_PASSWORD`
-- `REDIS_HOST` `REDIS_PORT` `AUTH_MODE` `LOG_LEVEL`
+All values use the `FORECAST_` prefix.
+
+- RDS/Redis: `RDS_HOST`, `RDS_PORT`, `RDS_DB`, `RDS_USER`, `RDS_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`
+- BigQuery refresh: `BQ_PROJECT_ID`, `BQ_DATASET_ID`, `BQ_FORECAST_TABLE`, `BQ_LOCATION`, `BQ_REFRESH_DAYS`
+- New-book inference: `GCP_VERTEX_INVOKE_URL`, optional legacy `GCP_NEW_BOOK_INFERENCE_URL`, optional `GCP_FUNCTION_BEARER_TOKEN`
+- Safety: `ALLOW_MOCK_FALLBACK=false` in production

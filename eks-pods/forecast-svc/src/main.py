@@ -1,4 +1,4 @@
-"""forecast-svc · D+1 forecast cache + Vertex AI hook (Phase 2 stub)."""
+"""forecast-svc: D+1 BigQuery sync + Vertex/new-book inference hook."""
 import logging
 from contextlib import asynccontextmanager
 

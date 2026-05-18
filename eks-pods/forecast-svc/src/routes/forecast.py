@@ -5,6 +5,7 @@ D+1 forecast cache only (D+2~5 lives in BigQuery, accessed by dashboard-bff via 
 import logging
 from datetime import date, datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import AuthContext, require_auth
@@ -13,10 +14,83 @@ from ..models import (
     ForecastResponse, ForecastRow, RefreshRequest, RefreshResponse,
     InsufficientStockItem, InsufficientStockResponse,
 )
+from ..settings import settings
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
+
+
+def _fetch_bigquery_forecast_rows(days: int) -> list[dict]:
+    """Read latest Vertex/BigQuery forecast_results rows for RDS cache sync."""
+    if not settings.bq_project_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FORECAST_BQ_PROJECT_ID is required for GCP BigQuery refresh",
+        )
+
+    try:
+        from google.cloud import bigquery
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="google-cloud-bigquery dependency is not installed",
+        ) from exc
+
+    project = settings.bq_project_id
+    dataset = settings.bq_dataset_id
+    table = settings.bq_forecast_table
+    query = f"""
+        WITH latest AS (
+          SELECT MAX(prediction_date) AS pred_date,
+                 MAX(target_date) AS max_tgt
+          FROM `{project}.{dataset}.{table}`
+        )
+        SELECT
+          f.target_date AS snapshot_date,
+          f.isbn13,
+          f.store_id,
+          f.predicted_demand,
+          f.confidence_low,
+          f.confidence_high,
+          f.model_version
+        FROM `{project}.{dataset}.{table}` f
+        JOIN latest ON f.prediction_date = latest.pred_date
+        WHERE f.target_date >= DATE_SUB(latest.max_tgt, INTERVAL @days DAY)
+        ORDER BY f.target_date, f.store_id, f.isbn13
+    """
+    client = bigquery.Client(project=project, location=settings.bq_location)
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("days", "INT64", days)]
+    )
+    rows = list(client.query(query, job_config=job_config, location=settings.bq_location).result())
+    log.info("BigQuery forecast refresh fetched %d rows", len(rows))
+    return [dict(row) for row in rows]
+
+
+def _upsert_forecast_rows(cur, rows: list[dict], synced_at: datetime) -> int:
+    sql = """
+        INSERT INTO forecast_cache
+            (snapshot_date, isbn13, store_id, predicted_demand,
+             confidence_low, confidence_high, model_version, synced_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (snapshot_date, isbn13, store_id) DO UPDATE
+        SET predicted_demand = EXCLUDED.predicted_demand,
+            confidence_low   = EXCLUDED.confidence_low,
+            confidence_high  = EXCLUDED.confidence_high,
+            model_version    = EXCLUDED.model_version,
+            synced_at        = EXCLUDED.synced_at
+    """
+    for row in rows:
+        cur.execute(sql, (
+            row["snapshot_date"], row["isbn13"], int(row["store_id"]),
+            float(row["predicted_demand"]),
+            float(row["confidence_low"]) if row.get("confidence_low") is not None else None,
+            float(row["confidence_high"]) if row.get("confidence_high") is not None else None,
+            str(row.get("model_version"))[:30] if row.get("model_version") is not None else None,
+            synced_at,
+        ))
+    return len(rows)
 
 
 def _check_forecast_store_scope(cur, ctx: AuthContext, store_id: int) -> None:
@@ -174,36 +248,29 @@ def insufficient_stock(
 
 @router.post("/refresh", response_model=RefreshResponse)
 def refresh(req: RefreshRequest, ctx: AuthContext = Depends(require_auth)):
-    """Bulk UPSERT (idempotent). Phase 2 stub - real BQ -> RDS sync wired later."""
+    """Bulk UPSERT (idempotent), or pull latest forecasts from BigQuery."""
     if ctx.role != "hq-admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hq-admin only")
 
-    sql = """
-        INSERT INTO forecast_cache
-            (snapshot_date, isbn13, store_id, predicted_demand,
-             confidence_low, confidence_high, model_version, synced_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (snapshot_date, isbn13, store_id) DO UPDATE
-        SET predicted_demand = EXCLUDED.predicted_demand,
-            confidence_low   = EXCLUDED.confidence_low,
-            confidence_high  = EXCLUDED.confidence_high,
-            model_version    = EXCLUDED.model_version,
-            synced_at        = EXCLUDED.synced_at
-    """
+    source = "request"
+    rows: list[dict]
+    if req.items:
+        rows = [it.model_dump() for it in req.items]
+    else:
+        source = "bigquery"
+        rows = _fetch_bigquery_forecast_rows(req.days or settings.bq_refresh_days)
+
     now = datetime.now(timezone.utc)
     with db_conn() as conn:
         with conn.cursor() as cur:
-            for it in req.items:
-                cur.execute(sql, (
-                    it.snapshot_date, it.isbn13, it.store_id, it.predicted_demand,
-                    it.confidence_low, it.confidence_high, it.model_version, now,
-                ))
+            inserted = _upsert_forecast_rows(cur, rows, now)
         conn.commit()
 
     return RefreshResponse(
         snapshot_date=req.snapshot_date,
         store_id=req.store_id,
-        inserted=len(req.items),
+        inserted=inserted,
+        source=source,
     )
 
 
@@ -215,11 +282,10 @@ def refresh(req: RefreshRequest, ctx: AuthContext = Depends(require_auth)):
 #   2) 본사가 이 endpoint 호출 → VertexAI Pipeline 으로 매장별/wh별 수요예측 받음 →
 #   3) 결과를 보고 본사가 가치 판단 후 편입 결정 (/intervention/new-book-requests/{id}/approve)
 #
-# TODO(GCP 연결 후): vertex AI Endpoint POST 호출로 교체.
-#   - GCP_VERTEX_ENDPOINT env var
-#   - 입력 instance: {isbn13, publisher_id, category, price, dimensions...}
-#   - 출력 predictions: per (location_id) → {predicted_demand_7d, predicted_demand_30d, confidence}
-# 현재는 책 메타데이터 기반 mock — 매장 12 + wh 2 (총 14 location).
+# GCP integration:
+#   - Existing-book D+1: BigQuery forecast_results -> RDS forecast_cache.
+#   - New-book inference: forecast-svc -> GCP new-book-inference Cloud Function.
+#   - Mock output is available only when FORECAST_ALLOW_MOCK_FALLBACK=true.
 # ──────────────────────────────────────────────────────────────────────────────
 import random as _rnd
 from pydantic import BaseModel
@@ -249,6 +315,267 @@ class NewBookPredictResp(BaseModel):
     recommendation: str  # 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'PASS'
 
 
+def _recommendation(total_7d: float) -> str:
+    if total_7d >= 800:
+        return "STRONG_BUY"
+    if total_7d >= 400:
+        return "BUY"
+    if total_7d >= 200:
+        return "NEUTRAL"
+    return "PASS"
+
+
+def _load_active_locations() -> list[tuple[int, str, str, int | None]]:
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT location_id, name, location_type, wh_id "
+            "FROM locations WHERE active = TRUE AND COALESCE(is_virtual, FALSE) = FALSE "
+            "ORDER BY location_type, location_id"
+        )
+        return cur.fetchall()
+
+
+def _call_gcp_new_book_inference(req: NewBookPredictReq) -> dict:
+    if not settings.gcp_new_book_inference_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FORECAST_GCP_NEW_BOOK_INFERENCE_URL is required for Vertex/new-book inference",
+        )
+
+    headers = {}
+    if settings.gcp_function_bearer_token:
+        headers["Authorization"] = f"Bearer {settings.gcp_function_bearer_token}"
+
+    try:
+        with httpx.Client(timeout=settings.gcp_http_timeout_seconds) as client:
+            resp = client.post(
+                settings.gcp_new_book_inference_url,
+                json=req.model_dump(exclude_none=True),
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"GCP new-book inference failed: {detail}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"GCP new-book inference failed: {exc}",
+        ) from exc
+
+    if "error" in data:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"GCP new-book inference error: {data['error']}",
+        )
+    return data
+
+
+def _build_vertex_instances(req: NewBookPredictReq) -> list[dict]:
+    today = datetime.now(timezone.utc).date()
+    category_id = 101
+    if req.category:
+        category_id = 100 + (abs(hash(req.category)) % 50)
+    price = req.expected_price or 15000
+    if price < 12000:
+        price_tier = "LOW"
+    elif price < 25000:
+        price_tier = "MID"
+    else:
+        price_tier = "HIGH"
+
+    instances = []
+    for lid, name, ltype, wh_id in _load_active_locations():
+        if ltype == "WH":
+            continue
+        channel = "online" if ltype == "STORE_ONLINE" else "offline"
+        instances.append({
+            "store_id": int(lid),
+            "wh_id": int(wh_id or 1),
+            "channel": channel,
+            "location_type": ltype,
+            "store_size": "M",
+            "region": "WH1" if int(wh_id or 1) == 1 else "WH2",
+            "on_hand": 0,
+            "reserved_qty": 0,
+            "safety_stock": 0,
+            "holiday_flag": 0,
+            "day_of_week": int(today.isoweekday() % 7 + 1),
+            "month": int(today.month),
+            "weekend_flag": 1 if today.weekday() >= 5 else 0,
+            "event_nearby_days": 0,
+            "sns_mentions_1d": 0,
+            "sns_mentions_7d": 0,
+            "book_age_days": 0,
+            "days_since_last_stockout": 30,
+            "category_id": category_id,
+            "price_tier": price_tier,
+            "sales_point": 0,
+            "bestseller_flag": 0,
+            "author_experience_years": 0,
+            "qty_lag_1": 1,
+            "qty_lag_7": 1,
+            "qty_rolling_7d": 1,
+            "qty_rolling_28d": 1,
+            "demand_segment": "high",
+        })
+    return instances
+
+
+def _call_gcp_vertex_new_book(req: NewBookPredictReq) -> NewBookPredictResp:
+    if not settings.gcp_vertex_invoke_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FORECAST_GCP_VERTEX_INVOKE_URL is required for Vertex endpoint inference",
+        )
+
+    headers = {}
+    if settings.gcp_function_bearer_token:
+        headers["Authorization"] = f"Bearer {settings.gcp_function_bearer_token}"
+
+    loc_rows = [row for row in _load_active_locations() if row[2] != "WH"]
+    instances = _build_vertex_instances(req)
+    payload = {"instances": instances, "mode": "real"}
+    try:
+        with httpx.Client(timeout=settings.gcp_http_timeout_seconds) as client:
+            resp = client.post(settings.gcp_vertex_invoke_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"GCP Vertex endpoint inference failed: {detail}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"GCP Vertex endpoint inference failed: {exc}",
+        ) from exc
+
+    raw_predictions = data.get("predictions")
+    if not isinstance(raw_predictions, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GCP Vertex endpoint response missing predictions",
+        )
+
+    predictions: list[NewBookLocationPred] = []
+    for row, pred in zip(loc_rows, raw_predictions):
+        lid, name, ltype, wh_id = row
+        daily = float((pred or {}).get("predicted_demand") or 0)
+        low = float((pred or {}).get("confidence_low") or 0)
+        high = float((pred or {}).get("confidence_high") or 0)
+        confidence = 0.8
+        if high > 0:
+            confidence = max(0.5, min(0.95, 1 - ((high - low) / max(high, 1))))
+        predictions.append(NewBookLocationPred(
+            location_id=int(lid),
+            location_name=name,
+            location_type=ltype,
+            wh_id=wh_id,
+            predicted_demand_7d=round(daily * 7, 1),
+            predicted_demand_30d=round(daily * 30, 1),
+            confidence=round(confidence, 2),
+        ))
+
+    total_7d = sum(p.predicted_demand_7d for p in predictions)
+    total_30d = sum(p.predicted_demand_30d for p in predictions)
+    model_version = "vertex-endpoint-3223031419848622080"
+    if raw_predictions and isinstance(raw_predictions[0], dict):
+        model_version = raw_predictions[0].get("model_version") or model_version
+
+    return NewBookPredictResp(
+        isbn13=req.isbn13,
+        model_version=model_version,
+        predicted_at=datetime.now(timezone.utc).isoformat(),
+        predictions=predictions,
+        total_7d=round(total_7d, 1),
+        total_30d=round(total_30d, 1),
+        recommendation=_recommendation(total_7d),
+    )
+
+
+def _response_from_gcp_new_book(req: NewBookPredictReq, data: dict) -> NewBookPredictResp:
+    lead_days = int(data.get("lead_days") or 30)
+    model_version = str(data.get("model_version") or data.get("source") or "gcp-new-book-inference")
+    wh_qty = {
+        1: float(data.get("wh1_qty") or 0),
+        2: float(data.get("wh2_qty") or 0),
+    }
+    wh_locations = {
+        int(wh_id): (int(lid), name, ltype)
+        for lid, name, ltype, wh_id in _load_active_locations()
+        if ltype == "WH" and wh_id is not None
+    }
+
+    predictions: list[NewBookLocationPred] = []
+    for wh_id, qty_30d in wh_qty.items():
+        lid, name, ltype = wh_locations.get(wh_id, (wh_id, f"WH{wh_id}", "WH"))
+        predictions.append(NewBookLocationPred(
+            location_id=lid,
+            location_name=name,
+            location_type=ltype,
+            wh_id=wh_id,
+            predicted_demand_7d=round(qty_30d * 7 / lead_days, 1) if lead_days else 0,
+            predicted_demand_30d=round(qty_30d, 1),
+            confidence=float(data.get("confidence") or 0.8),
+        ))
+
+    total_7d = sum(p.predicted_demand_7d for p in predictions)
+    total_30d = sum(p.predicted_demand_30d for p in predictions)
+    return NewBookPredictResp(
+        isbn13=req.isbn13,
+        model_version=model_version,
+        predicted_at=datetime.now(timezone.utc).isoformat(),
+        predictions=predictions,
+        total_7d=round(total_7d, 1),
+        total_30d=round(total_30d, 1),
+        recommendation=_recommendation(total_7d),
+    )
+
+
+def _mock_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
+    import random as _rnd
+
+    base_demand = 30 + (req.publisher_id or 1) % 50
+    rng = _rnd.Random(hash(req.isbn13) & 0xFFFFFFFF)
+    predictions: list[NewBookLocationPred] = []
+    for lid, name, ltype, wh_id in _load_active_locations():
+        if ltype == "WH":
+            d7 = base_demand * 6 * rng.uniform(0.7, 1.3)
+        elif ltype == "STORE_ONLINE":
+            d7 = base_demand * rng.uniform(1.5, 2.5)
+        else:
+            d7 = base_demand * rng.uniform(0.6, 1.4)
+        d30 = d7 * 4.2
+        predictions.append(NewBookLocationPred(
+            location_id=lid,
+            location_name=name,
+            location_type=ltype,
+            wh_id=wh_id,
+            predicted_demand_7d=round(d7, 1),
+            predicted_demand_30d=round(d30, 1),
+            confidence=round(rng.uniform(0.65, 0.92), 2),
+        ))
+
+    total_7d = sum(p.predicted_demand_7d for p in predictions if p.location_type != "WH")
+    total_30d = sum(p.predicted_demand_30d for p in predictions if p.location_type != "WH")
+    return NewBookPredictResp(
+        isbn13=req.isbn13,
+        model_version="mock-pending-gcp-vertexai-v0.1",
+        predicted_at=datetime.now(timezone.utc).isoformat(),
+        predictions=predictions,
+        total_7d=round(total_7d, 1),
+        total_30d=round(total_30d, 1),
+        recommendation=_recommendation(total_7d),
+    )
+
+
 @router.post("/newbook/predict-demand", response_model=NewBookPredictResp)
 def newbook_predict_demand(req: NewBookPredictReq, ctx: AuthContext = Depends(require_auth)):
     """신간 편입 결정용 매장별/wh별 7d/30d 수요예측. hq-admin only.
@@ -267,6 +594,19 @@ def newbook_predict_demand(req: NewBookPredictReq, ctx: AuthContext = Depends(re
             "ORDER BY location_type, location_id"
         )
         loc_rows = cur.fetchall()
+
+    if settings.gcp_vertex_invoke_url:
+        return _call_gcp_vertex_new_book(req)
+
+    if settings.gcp_new_book_inference_url:
+        return _response_from_gcp_new_book(req, _call_gcp_new_book_inference(req))
+
+    if not settings.allow_mock_fallback:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GCP new-book inference is not configured and mock fallback is disabled",
+        )
+    return _mock_new_book_response(req)
 
     # Mock 분포 — 출판사 id 기반 base demand (실제 GCP 응답 모방)
     base_demand = 30 + (req.publisher_id or 1) % 50  # 30~80 per store / 7d
