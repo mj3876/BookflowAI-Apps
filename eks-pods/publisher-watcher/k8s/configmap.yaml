@@ -8,8 +8,8 @@ data:
   PUBWATCH_RDS_PORT: "5432"
   PUBWATCH_RDS_DB: "bookflow"
   PUBWATCH_RDS_USER: "publish_watcher"  # V3 grants role name (under_score 형 · pod 명은 publisher-watcher)
-  PUBWATCH_REDIS_HOST: "${REDIS_HOST}"
-  PUBWATCH_REDIS_PORT: "6379"
+  # notification-svc /send (NewBookRequest) — notifications_log 적재 + Redis pub `newbook.request`
+  PUBWATCH_NOTIFICATION_SVC_URL: "http://notification-svc.bookflow.svc.cluster.local"
   # Empty default = no-op cron. Phase 4: real publisher API URL via Egress NAT.
   PUBWATCH_PUBLISHER_API_URL: ""
   PUBWATCH_PUBLISHER_API_TIMEOUT_SECONDS: "10.0"

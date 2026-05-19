@@ -4,7 +4,8 @@ Schedule: */1 * * * * (every 1 minute · k8s CronJob).
 1. GET publisher API stub → list of NewBookRequest objects (FR-A1.4 풀 필드)
 2. UPSERT books master (FR-A11.1 · ISBN13 PK · source='PUBLISHER_REQUEST')
 3. INSERT new_book_requests (ON CONFLICT DO NOTHING — idempotent on isbn13)
-4. Redis pub `newbook.request` for each new row → notification-svc subscriber
+4. notification-svc /send `NewBookRequest` for each new row
+   → notifications_log 적재 + Redis pub `newbook.request` (notification-svc 가 EVENT_CHANNEL 분기)
 
 Real publisher API: 출판사 신간 신청 endpoint (Phase 4 + ALB external entry).
 Phase 2-3: synthesized stub via env (or no-op if URL unset).
@@ -17,11 +18,17 @@ from datetime import date
 
 import httpx
 import psycopg
-import redis
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logging.basicConfig(level=os.environ.get("PUBWATCH_LOG_LEVEL", "INFO"))
 log = logging.getLogger("publisher-watcher")
+
+# notification-svc /send 호출 — cron 은 system mock token 사용 (auto_execute.py 와 동일 규약).
+NOTIFICATION_SVC_URL = os.environ.get(
+    "PUBWATCH_NOTIFICATION_SVC_URL",
+    "http://notification-svc.bookflow.svc.cluster.local",
+)
+SYSTEM_TOKEN = "Bearer mock-token-system"
 
 
 class Settings(BaseSettings):
@@ -33,13 +40,39 @@ class Settings(BaseSettings):
     rds_user: str
     rds_password: str
 
-    redis_host: str
-    redis_port: int = 6379
-
     publisher_api_url: str = ""  # empty = skip polling (no-op cron)
     publisher_api_timeout_seconds: float = 10.0
 
     log_level: str = "INFO"
+
+
+def _notify_new_book_request(request_id: int, publisher_id, isbn13: str, title: str | None) -> None:
+    """notification-svc /send `NewBookRequest` 호출 (실패 비치명 · log only).
+
+    notification-svc 가 notifications_log INSERT + Redis pub `newbook.request` (EVENT_CHANNEL) 담당.
+    """
+    body = {
+        "event_type": "NewBookRequest",
+        "severity": "INFO",
+        "recipients": [],
+        "channels": "redis,websocket",
+        "payload_summary": {
+            "request_id": request_id,
+            "publisher_id": publisher_id,
+            "isbn13": isbn13,
+            "title": title,
+            "stage": "DISCOVERED",
+        },
+    }
+    try:
+        with httpx.Client(timeout=2.0) as c:
+            c.post(
+                f"{NOTIFICATION_SVC_URL}/notification/send",
+                headers={"Authorization": SYSTEM_TOKEN},
+                json=body,
+            )
+    except Exception as e:
+        log.warning("notification-svc /send (NewBookRequest) failed (non-fatal): %s", e)
 
 
 def _parse_date(s: str | None) -> date | None:
@@ -122,8 +155,8 @@ def main() -> int:
         f"host={s.rds_host} port={s.rds_port} dbname={s.rds_db} "
         f"user={s.rds_user} password={s.rds_password}"
     )
-    rds = redis.Redis(host=s.redis_host, port=s.redis_port, decode_responses=True)
     inserted = 0
+    notify_jobs: list[tuple[int, object, str, str | None]] = []
     with psycopg.connect(conninfo) as conn:
         for it in items:
             n = _normalize_request(it)
@@ -158,15 +191,14 @@ def main() -> int:
                     })),
                 )
                 inserted += 1
-                try:
-                    rds.publish("newbook.request", json.dumps({
-                        "request_id": request_id,
-                        "publisher_id": n["publisher_id"],
-                        "isbn13": n["isbn13"],
-                    }))
-                except Exception as e:
-                    log.warning("redis publish failed: %s", e)
+                notify_jobs.append(
+                    (request_id, n["publisher_id"], n["isbn13"], n["title"])
+                )
         conn.commit()
+
+    # commit 후 알림 발송 (row 가 durably 적재된 뒤 NewBookRequest 발의)
+    for request_id, publisher_id, isbn13, title in notify_jobs:
+        _notify_new_book_request(request_id, publisher_id, isbn13, title)
 
     log.info("inserted %d new_book_requests", inserted)
     return 0

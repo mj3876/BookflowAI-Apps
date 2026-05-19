@@ -1,6 +1,9 @@
 ### Stage 1: Vite build (React + Tailwind + Router) ###
 FROM public.ecr.aws/docker/library/node:20-alpine AS web
 WORKDIR /web
+# bun: 일부 의존성(size-sensor 등)의 install 스크립트가 `bun run` 을 호출 →
+#   build 이미지에 bun 이 없어 `bun: not found` (exit 127) 으로 npm install 실패하던 것 정정.
+RUN npm install -g bun
 COPY web/package.json ./
 RUN npm install --no-audit --no-fund
 COPY web/tsconfig.json web/vite.config.ts web/tailwind.config.js web/postcss.config.js web/index.html ./
