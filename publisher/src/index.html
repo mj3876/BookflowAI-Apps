@@ -335,7 +335,7 @@
       <div id="auth-alert" class="alert"></div>
       <div class="auth-row">
         <div class="field">
-          <label for="apiKey">발급받은 API 키 <span class="req">*</span></label>
+          <label for="apiKey">발급받은 API 키 <span class="opt">(선택 · 미입력 시 인증 생략)</span></label>
           <!-- 키는 sessionStorage 에만 저장 (탭/창 닫으면 소멸) -->
           <input type="password" id="apiKey" placeholder="발급받은 키를 입력하세요" autocomplete="off">
         </div>
@@ -763,11 +763,7 @@ document.getElementById("requestForm").addEventListener("submit", async (e) => {
     return;
   }
 
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    showAlert("submit-alert", "먼저 API 키를 입력하고 저장해 주세요.", "error");
-    return;
-  }
+  const apiKey = getApiKey();   // 선택 — API_KEY_HASH 미설정 시 백엔드가 인증 우회
 
   // 파일 크기 사전 검사 (백엔드 도달 전 차단)
   const fileInput = document.getElementById("attachFile");
@@ -795,10 +791,8 @@ document.getElementById("requestForm").addEventListener("submit", async (e) => {
   try {
     const res = await fetch(`${API_BASE}/new-book-requests`, {
       method: "POST",
-      headers: {
-        // X-Api-Key 로 인증 (auth.py verify_api_key 가 SHA-256 비교)
-        "X-Api-Key": apiKey,
-      },
+      // X-Api-Key 는 입력한 경우에만 전송 (auth.py verify_api_key 가 SHA-256 비교)
+      headers: apiKey ? { "X-Api-Key": apiKey } : {},
       body: fd,   // multipart/form-data (Content-Type 은 fetch 가 자동 설정)
     });
 
@@ -839,18 +833,14 @@ async function queryStatus() {
     return;
   }
 
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    showAlert("status-alert", "먼저 '신간 요청서 제출' 탭에서 API 키를 저장해 주세요.", "error");
-    return;
-  }
+  const apiKey = getApiKey();   // 선택
 
   hideAlert("status-alert");
   document.getElementById("statusResult").style.display = "none";
 
   try {
     const res = await fetch(`${API_BASE}/new-book-requests/${isbn}/status`, {
-      headers: { "X-Api-Key": apiKey },
+      headers: apiKey ? { "X-Api-Key": apiKey } : {},
     });
     const data = await res.json();
 
