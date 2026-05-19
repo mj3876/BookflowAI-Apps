@@ -392,7 +392,16 @@ def _call_gcp_new_book_inference(req: NewBookPredictReq) -> dict:
     return data
 
 
-def _build_vertex_instances(req: NewBookPredictReq) -> list[dict]:
+def _build_vertex_instances(
+    req: NewBookPredictReq,
+    sns_mentions_1d: int = 0,
+    sns_mentions_7d: int = 0,
+) -> list[dict]:
+    """매장별 Vertex instance 생성.
+
+    sns_mentions_1d/7d: SNS 급등 예측용 — 급등 감지 시점의 언급량을 feature 로 주입
+    (신간 예측 경로는 0 default 로 호출 → 기존 동작 그대로).
+    """
     today = datetime.now(timezone.utc).date()
     category_id = 101
     if req.category:
@@ -425,8 +434,8 @@ def _build_vertex_instances(req: NewBookPredictReq) -> list[dict]:
             "month": int(today.month),
             "weekend_flag": 1 if today.weekday() >= 5 else 0,
             "event_nearby_days": 0,
-            "sns_mentions_1d": 0,
-            "sns_mentions_7d": 0,
+            "sns_mentions_1d": int(sns_mentions_1d),
+            "sns_mentions_7d": int(sns_mentions_7d),
             "book_age_days": 0,
             "days_since_last_stockout": 30,
             "category_id": category_id,
@@ -443,7 +452,14 @@ def _build_vertex_instances(req: NewBookPredictReq) -> list[dict]:
     return instances
 
 
-def _call_gcp_vertex_new_book(req: NewBookPredictReq) -> NewBookPredictResp:
+def _call_gcp_vertex_new_book(
+    req: NewBookPredictReq, instances: list[dict] | None = None
+) -> NewBookPredictResp:
+    """Vertex endpoint(Cloud Function proxy) 호출.
+
+    instances: None 이면 기본 instance 빌드 (신간 경로). SNS 급등 경로는 sns feature 가
+    주입된 instance 를 넘긴다.
+    """
     if not settings.gcp_vertex_invoke_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -455,7 +471,8 @@ def _call_gcp_vertex_new_book(req: NewBookPredictReq) -> NewBookPredictResp:
         headers["Authorization"] = f"Bearer {settings.gcp_function_bearer_token}"
 
     loc_rows = [row for row in _load_active_locations() if row[2] != "WH"]
-    instances = _build_vertex_instances(req)
+    if instances is None:
+        instances = _build_vertex_instances(req)
     payload = {"instances": instances, "mode": "real"}
     try:
         with httpx.Client(timeout=settings.gcp_http_timeout_seconds) as client:
@@ -556,8 +573,13 @@ def _response_from_gcp_new_book(req: NewBookPredictReq, data: dict) -> NewBookPr
     )
 
 
-def _call_vertex_sdk_direct(req: NewBookPredictReq) -> NewBookPredictResp:
-    """Call Vertex AI private endpoint directly via SDK — VPN path, no Cloud Function proxy."""
+def _call_vertex_sdk_direct(
+    req: NewBookPredictReq, instances: list[dict] | None = None
+) -> NewBookPredictResp:
+    """Call Vertex AI private endpoint directly via SDK — VPN path, no Cloud Function proxy.
+
+    instances: None 이면 기본 instance 빌드. SNS 급등 경로는 sns feature 주입 instance 전달.
+    """
     try:
         from google.cloud import aiplatform
     except ImportError as exc:
@@ -579,7 +601,8 @@ def _call_vertex_sdk_direct(req: NewBookPredictReq) -> NewBookPredictResp:
 
     aiplatform.init(**init_kwargs)
     endpoint = aiplatform.Endpoint(endpoint_name=settings.gcp_vertex_endpoint_name)
-    instances = _build_vertex_instances(req)
+    if instances is None:
+        instances = _build_vertex_instances(req)
     try:
         prediction = endpoint.predict(instances=instances)
     except Exception as exc:
@@ -729,3 +752,157 @@ def newbook_predict_demand(
             detail="GCP new-book inference is not configured and mock fallback is disabled",
         )
     return _mock_new_book_response(req)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SNS 급등 자동 발주 — 급등 감지 시점 수요예측 (2026-05-19 사용자 결정)
+#
+# 흐름:
+#   1) spike-detect Lambda 가 SNS z-score 급등 감지 → spike_events INSERT
+#      (predicted_qty = z-score 기반 1차 추정량 · forecast_meta)
+#   2) 본사 직원이 대시보드 SNS 급등 페이지에서 발주 plan 확인 → 이 endpoint 호출
+#      입력: isbn13 + 현 SNS 상태(z_score · mentions) → 출력: 선제 확보 필요 재고량
+#   3) 본사 승인 (/intervention/spike-events/{id}/approve) → PUBLISHER_ORDER 즉시 APPROVED
+#
+# mock/real 분리 — 신간 예측(newbook/predict-demand)과 동일 패턴:
+#   - mock: 항상 동작 (GCP 무관) · z_score·mentions 기반 결정론적 추정
+#   - real: 실제 Vertex 호출 (SNS feature 주입) · 미설정 시 503
+#   - auto: GCP 설정 있으면 real · 없으면 allow_mock_fallback
+# ──────────────────────────────────────────────────────────────────────────────
+class SpikePredictReq(BaseModel):
+    isbn13: str
+    z_score: float = 0.0
+    mentions: int = 0
+    category: str | None = None
+
+
+class SpikePredictResp(BaseModel):
+    isbn13: str
+    model_version: str
+    predicted_at: str
+    z_score: float
+    mentions: int
+    predicted_demand_7d: float       # 급등 반영 7일 예측 수요 (전 매장 합)
+    recommended_preemptive_qty: int  # 선제 확보 권장 재고량 (발주 plan)
+    confidence: float                # 0.0~1.0
+    recommendation: str              # 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'PASS'
+    source: str                      # 'mock' | 'vertex'
+
+
+def _spike_recommended_qty(demand_7d: float) -> int:
+    """7일 예측 수요 → 선제 확보 권장 재고량. 버퍼 1.2배 · 30~600권."""
+    return int(min(600, max(30, round(demand_7d * 1.2))))
+
+
+def _mock_spike_response(req: SpikePredictReq) -> SpikePredictResp:
+    """GCP 무관 항상 동작하는 mock — z_score·mentions·isbn 기반 결정론적 추정.
+
+    급등 강도(z)가 클수록, 언급량(mentions)이 많을수록 7일 예측 수요 증가.
+    """
+    import random as _rnd
+
+    rng = _rnd.Random(hash(req.isbn13) & 0xFFFFFFFF)
+    base = 40 + rng.uniform(-8, 12)            # 매장 기본 일 수요 (책마다 약간 다름)
+    z_factor = 1.0 + max(0.0, req.z_score) * 0.55  # z 3.0 → ×2.65 · z 6.0 → ×4.3
+    mention_factor = 1.0 + min(2.0, req.mentions / 100.0)  # 언급 100건 → ×2 (상한)
+    locations = [r for r in _load_active_locations() if r[2] != "WH"]
+    store_n = max(1, len(locations))
+    demand_7d = base * 7 * z_factor * mention_factor * (store_n / 12.0)
+    demand_7d = round(demand_7d, 1)
+    confidence = round(min(0.92, 0.55 + max(0.0, req.z_score) * 0.06), 2)
+    qty = _spike_recommended_qty(demand_7d)
+    return SpikePredictResp(
+        isbn13=req.isbn13,
+        model_version="mock-spike-vertexai-v0.1",
+        predicted_at=datetime.now(timezone.utc).isoformat(),
+        z_score=req.z_score,
+        mentions=req.mentions,
+        predicted_demand_7d=demand_7d,
+        recommended_preemptive_qty=qty,
+        confidence=confidence,
+        recommendation=_recommendation(demand_7d),
+        source="mock",
+    )
+
+
+def _real_spike_response(req: SpikePredictReq) -> SpikePredictResp:
+    """실제 Vertex 호출 — 급등 감지 시점 SNS 언급량을 feature 로 주입.
+
+    newbook 의 Vertex 경로(_call_vertex_sdk_direct / _call_gcp_vertex_new_book)를 재사용:
+    동일 endpoint·instance 스키마에 sns_mentions_1d/7d 만 급등값으로 채워 매장별 예측 →
+    합산해 7일 수요 + 권장 발주량 산출. GCP 미설정이면 503 (fallback 없음).
+    """
+    nb_req = NewBookPredictReq(isbn13=req.isbn13, category=req.category)
+    # SNS 급등 신호 주입: 감지 시점 언급량을 1d/7d feature 로 사용 (7d 는 누적 가정).
+    sns_1d = req.mentions
+    sns_7d = req.mentions * 3
+
+    instances = _build_vertex_instances(nb_req, sns_mentions_1d=sns_1d, sns_mentions_7d=sns_7d)
+    if settings.gcp_vertex_endpoint_name:
+        nb_resp = _call_vertex_sdk_direct(nb_req, instances)
+    elif settings.gcp_vertex_invoke_url:
+        nb_resp = _call_gcp_vertex_new_book(nb_req, instances)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SNS 급등 실예측은 Vertex endpoint 설정(FORECAST_GCP_VERTEX_ENDPOINT_NAME "
+                   "또는 FORECAST_GCP_VERTEX_INVOKE_URL)이 필요합니다 (mock 모드 사용 가능)",
+        )
+
+    demand_7d = round(sum(p.predicted_demand_7d for p in nb_resp.predictions if p.location_type != "WH"), 1)
+    confidence = round(
+        sum(p.confidence for p in nb_resp.predictions) / max(1, len(nb_resp.predictions)), 2
+    )
+    return SpikePredictResp(
+        isbn13=req.isbn13,
+        model_version=nb_resp.model_version,
+        predicted_at=nb_resp.predicted_at,
+        z_score=req.z_score,
+        mentions=req.mentions,
+        predicted_demand_7d=demand_7d,
+        recommended_preemptive_qty=_spike_recommended_qty(demand_7d),
+        confidence=confidence,
+        recommendation=_recommendation(demand_7d),
+        source="vertex",
+    )
+
+
+@router.post("/spike/predict-demand", response_model=SpikePredictResp)
+def spike_predict_demand(
+    req: SpikePredictReq,
+    mode: str = "auto",
+    ctx: AuthContext = Depends(require_auth),
+):
+    """SNS 급등 발주용 수요예측. hq-admin only (선제 발주 결정 권한).
+
+    입력: isbn13 + 현 SNS 상태(z_score·mentions). 출력: 선제 확보 권장 재고량.
+
+    mode (newbook/predict-demand 와 동일 규약):
+    - mock: 항상 동작하는 z-score 기반 추정 (GCP 무관 · 평소 시연용).
+    - real: 실제 Vertex 호출 (SNS feature 주입) — 미설정 시 503.
+    - auto (default): GCP 설정 있으면 real · 없으면 allow_mock_fallback.
+    """
+    if ctx.role != "hq-admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hq-admin only (SNS 급등 발주 결정 권한)")
+
+    mode = (mode or "auto").lower()
+    if mode not in ("mock", "real", "auto"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"mode 는 mock|real|auto 중 하나여야 합니다 (받은 값: {mode})",
+        )
+
+    if mode == "mock":
+        return _mock_spike_response(req)
+    if mode == "real":
+        return _real_spike_response(req)
+
+    # auto — GCP 설정 우선, 없으면 mock fallback
+    if settings.gcp_vertex_endpoint_name or settings.gcp_vertex_invoke_url:
+        return _real_spike_response(req)
+    if not settings.allow_mock_fallback:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GCP Vertex 미설정 · mock fallback 비활성 (mode=mock 사용)",
+        )
+    return _mock_spike_response(req)

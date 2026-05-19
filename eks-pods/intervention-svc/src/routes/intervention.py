@@ -2058,3 +2058,184 @@ def reject_inbound(
         "qty": qty,
         "reject_reason": reject_reason,
     }
+
+
+# --- SNS spike auto-order approval (2026-05-19) ---
+# SNS spike = same "HQ-only preemptive order" pattern as new-book.
+@router.post("/spike-events/{event_id}/approve")
+def approve_spike_event(
+    event_id: str,
+    body: dict | None = None,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """SNS 급등 발주 plan -> 본사 승인 -> 선제 발주 즉시 실행.
+
+    body = { wh1_qty?: int >= 0, wh2_qty?: int >= 0 }
+      - 대시보드가 forecast-svc 예측(권장 발주량)으로 계산해 전달.
+      - 둘 다 0/None 이면 spike_events.predicted_qty 를 60/40 권역 분배 (fallback).
+
+    효과 (신간 PUBLISHER 패턴과 동일):
+    1. PUBLISHER_ORDER pending_orders (출판사->WH 입고) status=APPROVED urgency=URGENT
+    2. chained WH_TO_STORE (WH->권역 매장 분배 D+1) status=APPROVED
+    3. spike_events.triggered_order_id + resolved_at 갱신
+    4. SpikeUrgent 알림 (이미 존재하는 이벤트 재사용)
+    """
+    if ctx.role != "hq-admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SNS 급등 발주 승인은 hq-admin 만 가능")
+
+    try:
+        event_uuid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="event_id 형식 오류 (UUID)")
+
+    body = body or {}
+    wh1_qty = int(body.get("wh1_qty") or 0)
+    wh2_qty = int(body.get("wh2_qty") or 0)
+    if wh1_qty < 0 or wh2_qty < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="qty 는 0 이상")
+
+    new_orders: list[dict] = []
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            # spike_event 잠금 + 중복 발주 방지 (triggered_order_id 가 이미 있으면 거절)
+            cur.execute(
+                "SELECT isbn13, z_score, mentions_count, predicted_qty, triggered_order_id "
+                "FROM spike_events WHERE event_id = %s FOR UPDATE",
+                (str(event_uuid),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="급등 이벤트 없음")
+            isbn13, z_score, mentions, predicted_qty, triggered = row
+            if triggered is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="이미 발주가 생성된 급등 이벤트입니다",
+                )
+
+            # qty 미지정 시 predicted_qty 60/40 권역 분배 (수도권 우세 휴리스틱)
+            if wh1_qty == 0 and wh2_qty == 0:
+                total = int(predicted_qty or 0)
+                if total <= 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="발주 수량이 없습니다 (wh1_qty/wh2_qty 전달 또는 predicted_qty 필요)",
+                    )
+                wh1_qty = int(round(total * 0.6))
+                wh2_qty = total - wh1_qty
+
+            first_order_id: str | None = None
+            for wh_id, qty in [(1, wh1_qty), (2, wh2_qty)]:
+                if qty <= 0:
+                    continue
+                cur.execute(
+                    "SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'WH' LIMIT 1",
+                    (wh_id,),
+                )
+                loc = cur.fetchone()
+                if loc is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"WH 본체 location 누락 (wh_id={wh_id})",
+                    )
+                target_loc = loc[0]
+                order_id = uuid4()
+                if first_order_id is None:
+                    first_order_id = str(order_id)
+                # SNS 급등 선제 발주 = 양측 협의 skip - 즉시 APPROVED - urgency=URGENT.
+                # expected_arrival_at = NOW + 3 days (PUBLISHER LEAD_DAYS - 신간과 동일).
+                cur.execute(
+                    """
+                    INSERT INTO pending_orders
+                        (order_id, order_type, isbn13, source_location_id, target_location_id,
+                         qty, urgency_level, status, execution_reason, approved_at, expected_arrival_at,
+                         forecast_rationale)
+                    VALUES (%s, 'PUBLISHER_ORDER', %s, NULL, %s, %s, 'URGENT', 'APPROVED', 'SNS_SPIKE', NOW(),
+                            (CURRENT_DATE + INTERVAL '3 days')::date, %s)
+                    """,
+                    (str(order_id), isbn13, target_loc, qty,
+                     json.dumps({
+                         "trigger": "sns_spike",
+                         "spike_event_id": str(event_uuid),
+                         "z_score": float(z_score) if z_score is not None else None,
+                         "mentions": mentions,
+                     })),
+                )
+                new_orders.append({"order_id": str(order_id), "wh_id": wh_id, "qty": qty, "target_location_id": target_loc})
+
+                # WH -> 권역 매장 자동 분배 (chained WH_TO_STORE D+1 신간 패턴 동일)
+                cur.execute(
+                    "SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'STORE_OFFLINE' ORDER BY location_id",
+                    (wh_id,),
+                )
+                stores = [r[0] for r in cur.fetchall()]
+                if stores:
+                    base = qty // len(stores)
+                    extra = qty - base * len(stores)
+                    for i, store_loc in enumerate(stores):
+                        store_qty = base + (1 if i < extra else 0)
+                        if store_qty <= 0:
+                            continue
+                        sub_id = uuid4()
+                        cur.execute(
+                            """
+                            INSERT INTO pending_orders
+                                (order_id, order_type, isbn13, source_location_id, target_location_id,
+                                 qty, urgency_level, status, execution_reason, approved_at, expected_arrival_at)
+                            VALUES (%s, 'WH_TO_STORE', %s, %s, %s, %s, 'URGENT', 'APPROVED', 'SNS_SPIKE', NOW(),
+                                    (CURRENT_DATE + INTERVAL '4 days')::date)
+                            """,
+                            (str(sub_id), isbn13, target_loc, store_loc, store_qty),
+                        )
+                        new_orders.append({
+                            "order_id": str(sub_id), "wh_id": wh_id, "qty": store_qty,
+                            "target_location_id": store_loc, "phase": "wh_to_store",
+                        })
+
+            if not new_orders:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="발주 수량이 0 입니다")
+
+            # spike_event 해소 표시 - triggered_order_id = PUBLISHER_ORDER 대표 1건.
+            cur.execute(
+                "UPDATE spike_events SET triggered_order_id = %s, resolved_at = NOW() WHERE event_id = %s",
+                (first_order_id, str(event_uuid)),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
+                VALUES ('user', %s, 'intervention.spike.approve', 'spike_events', %s, %s)
+                """,
+                (ctx.user_id, str(event_uuid),
+                 json.dumps({"isbn13": isbn13, "wh1_qty": wh1_qty, "wh2_qty": wh2_qty,
+                             "z_score": float(z_score) if z_score is not None else None,
+                             "orders": new_orders})),
+            )
+        conn.commit()
+
+    # SpikeUrgent - 이미 존재하는 알림 이벤트 재사용 (선제 재고 확보 발주 성립 통지).
+    _notify(
+        ctx.token, "SpikeUrgent",
+        severity="WARNING",
+        payload={
+            "spike_event_id": str(event_uuid),
+            "isbn13": isbn13,
+            "stage": "ORDER_APPROVED",
+            "approver_role": ctx.role,
+            "z_score": float(z_score) if z_score is not None else None,
+            "mentions": mentions,
+            "wh1_qty": wh1_qty,
+            "wh2_qty": wh2_qty,
+            "orders_created": len(new_orders),
+        },
+        correlation_id=str(event_uuid),
+    )
+
+    return {
+        "event_id": str(event_uuid),
+        "status": "ORDER_APPROVED",
+        "isbn13": isbn13,
+        "wh1_qty": wh1_qty,
+        "wh2_qty": wh2_qty,
+        "orders": new_orders,
+    }

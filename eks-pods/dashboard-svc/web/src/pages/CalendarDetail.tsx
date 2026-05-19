@@ -378,7 +378,7 @@ export default function CalendarDetail() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 text-sm font-medium truncate">
                       <span className="ot-dot" />
-                      {ORDER_TYPE_KO[o.order_type] ?? o.order_type} · ISBN {o.isbn13} · 수량 {o.qty}
+                      {ORDER_TYPE_KO[o.order_type] ?? o.order_type} · {o.title || `ISBN ${o.isbn13}`} · 수량 {o.qty}
                     </div>
                     <div className="text-xs text-bf-muted mt-0.5">
                       {nameOf(o.source_location_id ?? undefined) ?? '외부'} → {nameOf(o.target_location_id) ?? '?'}

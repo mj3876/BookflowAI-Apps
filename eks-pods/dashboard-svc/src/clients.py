@@ -208,6 +208,31 @@ async def post_newbook_predict_demand(body: dict, token: str, mode: str = "auto"
     )
 
 
+async def post_spike_predict_demand(body: dict, token: str, mode: str = "auto") -> tuple[int, Any]:
+    """SNS 급등 발주용 수요예측 — forecast-svc /forecast/spike/predict-demand 프록시.
+
+    body = {isbn13, z_score?, mentions?, category?}
+    mode: mock = z-score 기반 추정 (GCP 무관) · real = 실제 Vertex 호출 · auto = 기존 동작.
+    """
+    return await _safe_post(
+        f"{settings.forecast_svc_url}/forecast/spike/predict-demand?mode={mode}", body, token
+    )
+
+
+async def post_intervention_spike_approve(
+    event_id: str, body: dict, token: str
+) -> tuple[int, Any]:
+    """SNS 급등 발주 승인 — intervention-svc /intervention/spike-events/{id}/approve 프록시.
+
+    body = { wh1_qty?: int, wh2_qty?: int }. 승인 시 PUBLISHER_ORDER status=APPROVED 즉시 생성.
+    """
+    return await _safe_post(
+        f"{settings.intervention_svc_url}/intervention/spike-events/{event_id}/approve",
+        body or {},
+        token,
+    )
+
+
 async def post_inbound_reject(order_id: str, body: dict, token: str) -> tuple[int, Any]:
     """P1-2 매장 입고 거부 — intervention-svc /intervention/inbound/{order_id}/reject 프록시.
 

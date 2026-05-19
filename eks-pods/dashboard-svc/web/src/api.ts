@@ -377,9 +377,50 @@ export type SpikeEvent = {
   title: string | null;
   author: string | null;
   category: string | null;
+  // SNS 급등 자동 발주 (2026-05-19): predicted_qty = z-score 기반 1차 추정 발주량,
+  // triggered_order_id/resolved_at = 본사 승인 후 발주 생성 상태.
+  predicted_qty: number | null;
+  triggered_order_id: string | null;
+  resolved_at: string | null;
 };
 export const fetchSpikeEvents = (role: Role, limit = 20) =>
   getJson<{ items: SpikeEvent[] }>(`/dashboard/spike-events?limit=${limit}`, role);
+
+// SNS 급등 발주용 수요예측 (forecast-svc Vertex · mock/real 분리)
+export type SpikePredictResp = {
+  isbn13: string;
+  model_version: string;
+  predicted_at: string;
+  z_score: number;
+  mentions: number;
+  predicted_demand_7d: number;
+  recommended_preemptive_qty: number;
+  confidence: number;
+  recommendation: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'PASS';
+  source: 'mock' | 'vertex';
+};
+export const postSpikePredictDemand = (
+  role: Role,
+  body: { isbn13: string; z_score?: number; mentions?: number; category?: string },
+  mode: 'mock' | 'real' = 'mock',
+) => postJson<SpikePredictResp>(
+  `/dashboard/forecast/spike/predict-demand?mode=${mode}`, role, body,
+);
+
+// SNS 급등 발주 승인 — 본사 승인 시 PUBLISHER_ORDER status=APPROVED 즉시 생성
+export type SpikeApproveResp = {
+  event_id: string;
+  status: string;
+  isbn13: string;
+  wh1_qty: number;
+  wh2_qty: number;
+  orders: { order_id: string; wh_id: number; qty: number; target_location_id: number; phase?: string }[];
+};
+export const postSpikeEventApprove = (
+  role: Role,
+  event_id: string,
+  body: { wh1_qty?: number; wh2_qty?: number },
+) => postJson<SpikeApproveResp>(`/dashboard/spike-events/${event_id}/approve`, role, body);
 
 // ─── Returns ────────────────────────────────────────────────────────
 export type ReturnRow = {

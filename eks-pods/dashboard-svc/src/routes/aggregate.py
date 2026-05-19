@@ -508,3 +508,36 @@ async def newbook_predict_demand(
     if status_code >= 400:
         raise HTTPException(status_code=status_code, detail=data)
     return data
+
+
+@router.post("/forecast/spike/predict-demand")
+async def spike_predict_demand(
+    body: dict = Body(...),
+    mode: str = "auto",
+    ctx: AuthContext = Depends(require_auth),
+):
+    """SNS 급등 발주용 수요예측 — forecast-svc 프록시 (2026-05-19).
+    body: {isbn13, z_score?, mentions?, category?}
+    mode: mock = z-score 기반 추정 · real = 실제 Vertex · auto = 기존 동작.
+    """
+    from ..clients import post_spike_predict_demand
+    status_code, data = await post_spike_predict_demand(body, ctx.token, mode)
+    if status_code >= 400:
+        raise HTTPException(status_code=status_code, detail=data)
+    return data
+
+
+@router.post("/spike-events/{event_id}/approve")
+async def spike_event_approve(
+    event_id: str,
+    body: dict = Body(default_factory=dict),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """SNS 급등 발주 승인 (intervention-svc proxy · 2026-05-19).
+
+    body = { wh1_qty?: int, wh2_qty?: int } - 권역별 발주 수량.
+    승인 시 PUBLISHER_ORDER pending_orders status=APPROVED 즉시 생성 (선제 발주).
+    """
+    from ..clients import post_intervention_spike_approve
+    sc, data = await post_intervention_spike_approve(event_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})

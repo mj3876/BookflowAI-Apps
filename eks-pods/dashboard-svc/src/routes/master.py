@@ -263,10 +263,12 @@ def spike_events(
     """spike_events 최근 N건 (spike-detect Lambda 가 INSERT 한 row).
 
     Phase 3.5 데모: cross-ISBN z-score · z>=0.5 위 인기 도서 자동 검출.
+    predicted_qty/triggered_order_id/resolved_at — SNS 급등 발주 plan + 승인 상태 (2026-05-19).
     """
     sql = """
         SELECT s.event_id, s.detected_at, s.isbn13, s.z_score, s.mentions_count,
-               b.title, b.author, b.category_name
+               b.title, b.author, b.category_name,
+               s.predicted_qty, s.triggered_order_id, s.resolved_at
           FROM spike_events s
           LEFT JOIN books b ON b.isbn13 = s.isbn13
          ORDER BY s.detected_at DESC
@@ -287,6 +289,9 @@ def spike_events(
                 "title":          r[5],
                 "author":         r[6],
                 "category":       r[7],
+                "predicted_qty":  r[8],
+                "triggered_order_id": str(r[9]) if r[9] else None,
+                "resolved_at":    r[10].isoformat() if r[10] else None,
             }
             for r in rows
         ],
