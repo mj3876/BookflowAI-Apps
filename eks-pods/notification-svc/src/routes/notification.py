@@ -5,6 +5,7 @@
 V3 columns: notifications_log(notification_id UUID, event_type, correlation_id UUID, severity,
                               recipients jsonb, channels, payload_summary jsonb, sent_at, status)
 """
+import asyncio
 import json
 import logging
 from uuid import uuid4
@@ -30,6 +31,9 @@ from ..settings import settings
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/notification", tags=["notification"])
+
+# Logic Apps 동시 호출 1건으로 제한 — ACS Rate Limit(429) 방지
+_logic_apps_sem = asyncio.Semaphore(1)
 
 
 # event_type -> Redis 채널 매핑 (시트04 Pub/Sub matrix · 1:1 정렬)
@@ -122,13 +126,14 @@ async def _post_logic_apps(
     # Logic Apps 가 \uXXXX 시퀀스를 디코딩하지 않으면 메일에 '????' 로 표시되는 문제 방지.
     body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
     try:
-        async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
-            r = await c.post(
-                url,
-                content=body_bytes,
-                headers={"Content-Type": "application/json; charset=utf-8"},
-            )
-            return (200 <= r.status_code < 300), None if r.is_success else f"{r.status_code} {r.text[:80]}"
+        async with _logic_apps_sem:
+            async with httpx.AsyncClient(timeout=settings.logic_apps_timeout_seconds) as c:
+                r = await c.post(
+                    url,
+                    content=body_bytes,
+                    headers={"Content-Type": "application/json; charset=utf-8"},
+                )
+                return (200 <= r.status_code < 300), None if r.is_success else f"{r.status_code} {r.text[:80]}"
     except Exception as e:
         return False, str(e)[:120]
 
