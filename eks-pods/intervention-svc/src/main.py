@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from .db import close_pool, init_pool
 from .models import ErrorResponse
@@ -32,6 +33,8 @@ app = FastAPI(title="bookflow-intervention-svc", version="0.3.0", lifespan=lifes
 app.include_router(intervention_router)
 # PR-B: 4-step state machine v2 — /intervention/orders/* (dashboard-svc proxy 정합)
 app.include_router(orders_router, prefix="/intervention")
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 # ─── A5 X-Request-ID middleware ──────────────────────────────────────────────

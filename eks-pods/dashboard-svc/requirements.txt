@@ -7,3 +7,4 @@ redis==5.2.1
 websockets==14.1
 psycopg[binary,pool]==3.2.13
 PyJWT[crypto]==2.10.1
+prometheus-fastapi-instrumentator==7.0.0

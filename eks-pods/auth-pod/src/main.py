@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from . import db
 from .routes import auth as auth_routes
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="bookflow auth-pod", lifespan=lifespan)
 app.include_router(auth_routes.router)
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 @app.get("/health")

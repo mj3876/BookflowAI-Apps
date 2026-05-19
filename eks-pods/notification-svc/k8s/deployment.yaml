@@ -16,6 +16,10 @@ spec:
       labels:
         app: notification-svc
         component: msa-pod
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "80"
     spec:
       serviceAccountName: notification-svc
       containers:

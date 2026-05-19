@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from .db import close_pool, init_pool, redis_client
 from .recipients import get_recipients
@@ -76,6 +77,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="bookflow-notification-svc", version="0.1.0", lifespan=lifespan)
 app.include_router(notification_router)
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 @app.get("/health")

@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from .clients import close_client, init_client
 from .db import close_pool, init_pool
@@ -49,6 +50,10 @@ app.include_router(ws_router)
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "dashboard-svc"}
+
+
+# Prometheus /metrics — SPA catch-all 보다 먼저 등록되어야 흡수되지 않음.
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 # SPA serve at root LAST so /dashboard, /ws, /health take precedence.
