@@ -76,6 +76,7 @@ EVENT_CHANNEL = {
 # stock-arrival/    → StockArrivalPending (운송완료 출발지 담당자 1명)
 _EVENT_LOGIC_APPS: dict[str, str] = {
     "ForecastCompleted":  "approval_request",
+    "OrderPending":       "approval_request",   # la-bookflowmj-approval-request 의 OrderPending case (개별 발주 승인요청)
     "DailyPlanFinalized": "notification",
     "SpikeUrgent":        "notification",
     "NegotiationDelay":   "notification",

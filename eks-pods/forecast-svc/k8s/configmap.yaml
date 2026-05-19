@@ -12,7 +12,8 @@ data:
   FORECAST_REDIS_PORT: "6379"
   FORECAST_AUTH_MODE: "mock"
   FORECAST_LOG_LEVEL: "INFO"
-  FORECAST_BQ_PROJECT_ID: "${GCP_PROJECT_ID}"
+  # GCP project id 는 상수 — envsubst/eks_addons 어느 경로에서도 ${...} 미치환되어 하드코딩.
+  FORECAST_BQ_PROJECT_ID: "project-8ab6bf05-54d2-4f5d-b8d"
   FORECAST_BQ_DATASET_ID: "bookflow_dw"
   FORECAST_BQ_FORECAST_TABLE: "forecast_results"
   FORECAST_BQ_LOCATION: "asia-northeast1"
