@@ -268,7 +268,7 @@ def spike_events(
     sql = """
         SELECT s.event_id, s.detected_at, s.isbn13, s.z_score, s.mentions_count,
                b.title, b.author, b.category_name,
-               s.predicted_qty, s.triggered_order_id, s.resolved_at
+               s.predicted_qty, s.triggered_order_id, s.resolved_at, b.cover_url
           FROM spike_events s
           LEFT JOIN books b ON b.isbn13 = s.isbn13
          ORDER BY s.detected_at DESC
@@ -292,6 +292,7 @@ def spike_events(
                 "predicted_qty":  r[8],
                 "triggered_order_id": str(r[9]) if r[9] else None,
                 "resolved_at":    r[10].isoformat() if r[10] else None,
+                "cover_url":      r[11],
             }
             for r in rows
         ],

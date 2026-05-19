@@ -382,6 +382,7 @@ export type SpikeEvent = {
   predicted_qty: number | null;
   triggered_order_id: string | null;
   resolved_at: string | null;
+  cover_url: string | null;
 };
 export const fetchSpikeEvents = (role: Role, limit = 20) =>
   getJson<{ items: SpikeEvent[] }>(`/dashboard/spike-events?limit=${limit}`, role);
