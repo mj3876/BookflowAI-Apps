@@ -494,12 +494,17 @@ async def orders_calendar(
 
 
 @router.post("/forecast/newbook/predict-demand")
-async def newbook_predict_demand(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+async def newbook_predict_demand(
+    body: dict = Body(...),
+    mode: str = "auto",
+    ctx: AuthContext = Depends(require_auth),
+):
     """v5 2026-05-15: 신간 편입 결정용 VertexAI 수요예측 — forecast-svc 프록시.
     body: {isbn13, publisher_id?, category?, expected_price?}
+    mode (2026-05-19): mock = 시연용 임시 분포 · real = 실제 GCP/Vertex · auto = 기존 동작.
     """
     from ..clients import post_newbook_predict_demand
-    status_code, data = await post_newbook_predict_demand(body, ctx.token)
+    status_code, data = await post_newbook_predict_demand(body, ctx.token, mode)
     if status_code >= 400:
         raise HTTPException(status_code=status_code, detail=data)
     return data

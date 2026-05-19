@@ -211,9 +211,12 @@ function DetailPanel({
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
 
   // STEP 1 — Vertex AI 수요검증: 본사가 [요청] 버튼을 눌러야 실행.
+  //   mock 검증 = GCP 미연결 시연용 (항상 동작) · 실제 GCP 검증 = Vertex 실호출.
   //   결과 수신 시 위치별 30일 수요를 권역(수도권 wh1 · 영남 wh2)별로 합산해 분배 수량 prefill.
+  const [predictMode, setPredictMode] = useState<'mock' | 'real'>('mock');
   const predict = useMutation({
-    mutationFn: () => postNewBookPredictDemand(role, { isbn13: req.isbn13, publisher_id: req.publisher_id }),
+    mutationFn: (mode: 'mock' | 'real') =>
+      postNewBookPredictDemand(role, { isbn13: req.isbn13, publisher_id: req.publisher_id }, mode),
     onSuccess: (d) => {
       let v1 = 0, v2 = 0;
       for (const p of d.predictions) {
@@ -224,6 +227,7 @@ function DetailPanel({
       setWh2(Math.round(v2));
     },
   });
+  const runPredict = (mode: 'mock' | 'real') => { setPredictMode(mode); predict.mutate(mode); };
   const verified = !!predict.data;
 
   const approve = useMutation({
@@ -272,20 +276,32 @@ function DetailPanel({
             {!verified && !predict.isPending && !predict.isError && (
               <>
                 <p className="text-xs text-bf-muted mb-2">
-                  편입 결정 전, Vertex AI 에 이 신간의 권역별 예상 수요를 검증 요청합니다.
+                  편입 결정 전, 이 신간의 권역별 예상 수요를 검증합니다 ·{' '}
+                  <b>mock 검증</b>은 GCP 미연결 시연용(항상 동작) · <b>실제 GCP 검증</b>은 Vertex AI 실호출입니다.
                 </p>
-                <button type="button" className="btn-primary w-full" onClick={() => predict.mutate()}>
-                  📊 Vertex AI 수요검증 요청
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" className="btn-primary" onClick={() => runPredict('mock')}>
+                    📊 mock 검증
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={() => runPredict('real')}>
+                    ☁️ 실제 GCP 검증
+                  </button>
+                </div>
               </>
             )}
             {predict.isPending && (
-              <div className="text-xs text-bf-muted py-3 text-center">Vertex AI 수요예측 분석 중…</div>
+              <div className="text-xs text-bf-muted py-3 text-center">
+                {predictMode === 'real' ? '실제 GCP/Vertex AI' : 'mock'} 수요예측 분석 중…
+              </div>
             )}
             {predict.isError && !predict.isPending && (
               <div className="text-xs text-bf-danger">
-                검증 실패: {predict.error instanceof Error ? predict.error.message : String(predict.error)}
-                <button type="button" className="btn-ghost ml-2 text-[11px]" onClick={() => predict.mutate()}>재시도</button>
+                {predictMode === 'real' ? '실제 GCP' : 'mock'} 검증 실패:{' '}
+                {predict.error instanceof Error ? predict.error.message : String(predict.error)}
+                <div className="flex gap-2 mt-2">
+                  <button type="button" className="btn-ghost text-[11px]" onClick={() => runPredict('mock')}>mock 검증으로 재시도</button>
+                  <button type="button" className="btn-ghost text-[11px]" onClick={() => runPredict('real')}>실제 GCP 재시도</button>
+                </div>
               </div>
             )}
             {predict.data && (
@@ -327,8 +343,13 @@ function DetailPanel({
                   </tbody>
                 </table>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-[11px] text-bf-muted">model: {predict.data.model_version} · GCP 미연결 mock</span>
-                  <button type="button" className="btn-ghost text-[11px]" disabled={predict.isPending} onClick={() => predict.mutate()}>재검증</button>
+                  <span className="text-[11px] text-bf-muted">
+                    model: {predict.data.model_version} · {predictMode === 'real' ? '실제 GCP/Vertex' : 'mock 검증 (시연용)'}
+                  </span>
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-ghost text-[11px]" disabled={predict.isPending} onClick={() => runPredict('mock')}>mock 재검증</button>
+                    <button type="button" className="btn-ghost text-[11px]" disabled={predict.isPending} onClick={() => runPredict('real')}>실제 GCP 재검증</button>
+                  </div>
                 </div>
               </>
             )}

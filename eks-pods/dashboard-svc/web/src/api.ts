@@ -719,10 +719,14 @@ export type NewBookPredictResp = {
   total_30d: number;
   recommendation: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'PASS';
 };
+// mode: 'mock' = 항상 동작하는 시연용 임시 분포 · 'real' = 실제 GCP/Vertex 호출
 export const postNewBookPredictDemand = (
   role: Role,
   body: { isbn13: string; publisher_id?: number; category?: string; expected_price?: number },
-) => postJson<NewBookPredictResp>('/dashboard/forecast/newbook/predict-demand', role, body);
+  mode: 'mock' | 'real' = 'mock',
+) => postJson<NewBookPredictResp>(
+  `/dashboard/forecast/newbook/predict-demand?mode=${mode}`, role, body,
+);
 
 // P1-4b 시연 trigger: 예측 수요 > 가용 재고 인 도서 list (HQ 만 호출)
 export type InsufficientStockItem = {

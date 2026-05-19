@@ -198,12 +198,13 @@ async def get_insufficient_stock(token: str, limit: int = 20) -> dict | None:
     )
 
 
-async def post_newbook_predict_demand(body: dict, token: str) -> tuple[int, Any]:
+async def post_newbook_predict_demand(body: dict, token: str, mode: str = "auto") -> tuple[int, Any]:
     """v5 2026-05-15: VertexAI 신간 수요예측 — forecast-svc /forecast/newbook/predict-demand 프록시.
-    GCP 연결 전 mock 응답 (forecast-svc 가 책 메타 기반 임시 분포 반환).
+
+    mode (2026-05-19): mock = 항상 동작하는 임시 분포 · real = 실제 GCP/Vertex 호출 · auto = 기존 동작.
     """
     return await _safe_post(
-        f"{settings.forecast_svc_url}/forecast/newbook/predict-demand", body, token
+        f"{settings.forecast_svc_url}/forecast/newbook/predict-demand?mode={mode}", body, token
     )
 
 

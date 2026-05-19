@@ -670,16 +670,11 @@ def _mock_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
     )
 
 
-@router.post("/newbook/predict-demand", response_model=NewBookPredictResp)
-def newbook_predict_demand(req: NewBookPredictReq, ctx: AuthContext = Depends(require_auth)):
-    """신간 편입 결정용 매장별/wh별 7d/30d 수요예측. hq-admin only.
+def _real_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
+    """실제 GCP/Vertex 경로 — Cloud Function/Vertex endpoint 우선순위로 호출.
 
-    GCP 연결 후 Vertex AI Pipeline 호출로 교체될 stub.
-    현재 mock 데이터 — 책 메타데이터 (publisher_id 인기도 ranking + category) 기반 분포.
+    GCP 설정이 하나도 없으면 503 (mock fallback 없음 — real 경로는 fail closed).
     """
-    if ctx.role != "hq-admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hq-admin only (신간 편입 결정 권한)")
-
     if settings.gcp_vertex_endpoint_name:
         return _call_vertex_sdk_direct(req)
 
@@ -688,6 +683,45 @@ def newbook_predict_demand(req: NewBookPredictReq, ctx: AuthContext = Depends(re
 
     if settings.gcp_new_book_inference_url:
         return _response_from_gcp_new_book(req, _call_gcp_new_book_inference(req))
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="GCP new-book inference is not configured (mock 모드를 사용하거나 GCP 설정을 확인하세요)",
+    )
+
+
+@router.post("/newbook/predict-demand", response_model=NewBookPredictResp)
+def newbook_predict_demand(
+    req: NewBookPredictReq,
+    mode: str = "auto",
+    ctx: AuthContext = Depends(require_auth),
+):
+    """신간 편입 결정용 매장별/wh별 7d/30d 수요예측. hq-admin only.
+
+    mode 쿼리파라미터 (2026-05-19 — mock/real 명시 분리):
+    - mock: 항상 동작하는 mock 예측 (GCP 연결 무관 · 평소 시연용).
+    - real: 실제 GCP/Vertex 호출 — 미설정 시 503 (fallback 없음).
+    - auto (default): GCP 설정 있으면 real · 없으면 allow_mock_fallback 에 따름 (기존 동작 유지).
+    """
+    if ctx.role != "hq-admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hq-admin only (신간 편입 결정 권한)")
+
+    mode = (mode or "auto").lower()
+    if mode not in ("mock", "real", "auto"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"mode 는 mock|real|auto 중 하나여야 합니다 (받은 값: {mode})",
+        )
+
+    if mode == "mock":
+        return _mock_new_book_response(req)
+
+    if mode == "real":
+        return _real_new_book_response(req)
+
+    # mode == "auto" — GCP 설정 우선, 없으면 mock fallback (기존 동작)
+    if settings.gcp_vertex_endpoint_name or settings.gcp_vertex_invoke_url or settings.gcp_new_book_inference_url:
+        return _real_new_book_response(req)
 
     if not settings.allow_mock_fallback:
         raise HTTPException(
