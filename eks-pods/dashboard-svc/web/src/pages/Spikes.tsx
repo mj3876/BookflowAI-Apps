@@ -19,6 +19,39 @@ const RECO_KO: Record<string, string> = {
   PASS: '확보 보류',
 };
 
+// 책 표지 썸네일 — cover_url 로드 실패 시 책 아이콘 placeholder 로 대체.
+function BookCover({
+  url, title, className = 'w-[64px] h-[88px]',
+}: { url: string | null; title: string; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!url || failed) {
+    return (
+      <div
+        className={`${className} flex items-center justify-center bg-bf-panel2 rounded border border-bf-border text-bf-muted text-2xl shrink-0`}
+        aria-label={title}
+      >
+        📕
+      </div>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={title}
+      className={`${className} object-cover rounded border border-bf-border shrink-0`}
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+// z-score → 심각도 등급 (1.5 / 3.0 임계)
+function severityOf(z: number) {
+  if (z >= 3) return { key: 'CRITICAL', label: '매우 높음', pill: 'pill-rejected' } as const;
+  if (z >= 1.5) return { key: 'WARNING', label: '높음', pill: 'pill-pending' } as const;
+  return { key: 'INFO', label: '보통', pill: 'pill-info' } as const;
+}
+
 // SNS 급등 발주 plan 모달 — 본사가 예측을 확인하고 선제 발주를 승인.
 //
 // 흐름: spike_event 선택 → forecast-svc /forecast/spike/predict-demand (예측 재고 필요량)
@@ -35,6 +68,7 @@ function SpikeOrderModal({
   const [mode, setMode] = useState<'mock' | 'real'>('mock');
   const [pred, setPred] = useState<SpikePredictResp | null>(null);
   const z = spike.z_score ?? 0;
+  const sev = severityOf(z);
 
   const predictMut = useMutation({
     mutationFn: () => postSpikePredictDemand(
@@ -62,26 +96,41 @@ function SpikeOrderModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="card w-[480px] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
-        <h2 className="h2 mb-1">SNS 급등 발주 plan</h2>
+        <h2 className="h2 mb-3">SNS 급등 발주 plan</h2>
+
+        {/* 대상 도서 — 표지 + 제목/저자/지표 */}
+        <div className="flex gap-3 rounded border border-bf-border bg-bf-panel2 p-3 mb-3">
+          <BookCover url={spike.cover_url} title={spike.title ?? spike.isbn13} />
+          <div className="min-w-0 flex flex-col gap-1">
+            <div className="font-semibold text-sm leading-snug">{spike.title ?? spike.isbn13}</div>
+            <div className="text-bf-muted text-xs">{spike.author ?? '저자 미상'}</div>
+            <div className="font-mono text-[10px] text-bf-muted">{spike.isbn13}</div>
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className={sev.pill}>{sev.label}</span>
+              <span className="label-tag">z {z.toFixed(2)}</span>
+              <span className="label-tag">언급 {spike.mentions_count}건</span>
+            </div>
+          </div>
+        </div>
+
         <p className="text-bf-muted text-xs mb-3">
-          {spike.title ?? spike.isbn13} — SNS 언급이 평소 대비 급증했습니다 (z {z.toFixed(2)} · 언급 {spike.mentions_count}건).
-          선제 재고 확보가 필요한지 본사가 판단해 발주를 승인하세요.
+          SNS 언급이 평소 대비 급증했습니다. 선제 재고 확보가 필요한지 본사가 판단해 발주를 승인하세요.
         </p>
 
         <div className="flex items-center gap-2 mb-3">
           <span className="label-tag">예측 모드</span>
           <button
-            className={mode === 'mock' ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}
+            className={mode === 'mock' ? 'btn-primary btn-sm' : 'btn-ghost btn-sm'}
             onClick={() => { setMode('mock'); setPred(null); }}
           >mock</button>
           <button
-            className={mode === 'real' ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}
+            className={mode === 'real' ? 'btn-primary btn-sm' : 'btn-ghost btn-sm'}
             onClick={() => { setMode('real'); setPred(null); }}
           >real (Vertex)</button>
         </div>
 
         <button
-          className="btn-outline btn-sm mb-3"
+          className="btn-ghost btn-sm mb-3"
           onClick={() => predictMut.mutate()}
           disabled={predictMut.isPending}
         >
@@ -120,7 +169,7 @@ function SpikeOrderModal({
         )}
 
         <div className="flex justify-end gap-2">
-          <button className="btn-outline btn-sm" onClick={onClose}>취소</button>
+          <button className="btn-ghost btn-sm" onClick={onClose}>취소</button>
           <button
             className="btn-primary btn-sm"
             onClick={() => approveMut.mutate()}
@@ -135,11 +184,83 @@ function SpikeOrderModal({
   );
 }
 
+// 화제 도서 카드 — 표지 + 제목/저자/지표 + 발주 plan 액션.
+function SpikeCard({
+  spike, isHQ, onOrder,
+}: { spike: SpikeEvent; isHQ: boolean; onOrder: () => void }) {
+  const z = spike.z_score ?? 0;
+  const sev = severityOf(z);
+  const resolved = !!spike.resolved_at;
+
+  return (
+    <div className="card-tight flex gap-3 hover:border-bf-primary transition-colors">
+      <BookCover url={spike.cover_url} title={spike.title ?? spike.isbn13} />
+
+      <div className="min-w-0 flex flex-col flex-1">
+        {/* 제목 + 심각도 */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="font-semibold text-sm leading-snug line-clamp-2">
+            {spike.title ?? spike.isbn13}
+          </div>
+          <span className={`${sev.pill} shrink-0`} title={`z-score ${z.toFixed(2)}`}>{sev.label}</span>
+        </div>
+        <div className="text-bf-muted text-xs mt-0.5">{spike.author ?? '저자 미상'}</div>
+        <div className="text-bf-muted text-[11px]">{spike.category ?? '카테고리 미상'}</div>
+
+        {/* 지표 — z-score · 언급 · 추정 발주량 */}
+        <div className="grid grid-cols-3 gap-1 mt-2 mb-2 text-center">
+          <div className="rounded bg-bf-panel2 py-1">
+            <div className="label-tag">수요 급등</div>
+            <div className="font-mono font-bold text-sm">{z.toFixed(2)}</div>
+          </div>
+          <div className="rounded bg-bf-panel2 py-1">
+            <div className="label-tag">SNS 언급</div>
+            <div className="font-mono font-bold text-sm">{spike.mentions_count}</div>
+          </div>
+          <div className="rounded bg-bf-panel2 py-1">
+            <div className="label-tag">추정 발주</div>
+            <div className="font-mono font-bold text-sm">
+              {spike.predicted_qty != null ? `${spike.predicted_qty}` : '-'}
+            </div>
+          </div>
+        </div>
+
+        {/* 하단 — 감지 시각 + 액션 */}
+        <div className="flex items-center justify-between gap-2 mt-auto">
+          <span className="text-[11px] text-bf-muted">
+            {new Date(spike.detected_at).toLocaleString('ko-KR')}
+          </span>
+          {resolved ? (
+            <span
+              className="pill-approved"
+              title={`발주 생성 ${new Date(spike.resolved_at!).toLocaleString('ko-KR')}`}
+            >
+              발주 완료
+            </span>
+          ) : isHQ ? (
+            <button
+              className="btn-primary btn-sm"
+              onClick={onOrder}
+              title={`${spike.title ?? spike.isbn13} — 수요예측 확인 후 선제 발주 승인`}
+            >
+              급등 발주
+            </button>
+          ) : (
+            <span className="text-[10px] text-bf-muted">본사만 발주</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Spikes() {
   const { role } = useOutletContext<{ role: Role }>();
   const isHQ = role === 'hq-admin';
   const q = useQuery({ queryKey: ['spikes', role], queryFn: () => fetchSpikeEvents(role, 30), refetchInterval: 10000 });
   const [target, setTarget] = useState<SpikeEvent | null>(null);
+
+  const items = q.data?.items ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -147,79 +268,36 @@ export default function Spikes() {
         <h1 className="h1">SNS 급등 감지</h1>
         <p className="text-bf-muted text-xs mt-1">
           최근 24시간 SNS 언급량이 평소 대비 급격히 증가한 도서 (10분마다 자동 분석).
-          본사는 우측 "급등 발주" 버튼으로 수요예측을 확인하고 선제 재고 확보 발주를 승인할 수 있어요.
+          본사는 각 카드의 "급등 발주" 버튼으로 수요예측을 확인하고 선제 재고 확보 발주를 승인할 수 있어요.
         </p>
       </div>
 
       <div className="card">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="h2">최근 급등 도서 ({q.data?.items.length ?? 0})</h2>
+          <h2 className="h2">최근 급등 도서 ({items.length})</h2>
           <span className="label-tag">10초마다 자동 갱신</span>
         </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>감지 시간</th>
-              <th>ISBN</th>
-              <th>제목</th>
-              <th>저자</th>
-              <th>카테고리</th>
-              <th className="text-right">SNS 언급</th>
-              <th className="text-right">수요 급등 (z)</th>
-              <th className="text-right">추정 발주량</th>
-              <th>심각도</th>
-              <th className="text-right">발주 plan</th>
-            </tr>
-          </thead>
-          <tbody>
-            {q.data?.items.map((s) => {
-              const z = s.z_score ?? 0;
-              const sev = z >= 3 ? 'CRITICAL' : z >= 1.5 ? 'WARNING' : 'INFO';
-              const sevLabel = sev === 'CRITICAL' ? '매우 높음' : sev === 'WARNING' ? '높음' : '보통';
-              const resolved = !!s.resolved_at;
-              return (
-                <tr key={s.event_id}>
-                  <td className="text-bf-muted">{new Date(s.detected_at).toLocaleString('ko-KR')}</td>
-                  <td className="font-mono text-[11px]">{s.isbn13}</td>
-                  <td className="font-medium">{s.title ?? '-'}</td>
-                  <td>{s.author ?? '-'}</td>
-                  <td className="text-bf-muted">{s.category ?? '-'}</td>
-                  <td className="text-right">{s.mentions_count}</td>
-                  <td className="text-right font-mono font-semibold">{z.toFixed(2)}</td>
-                  <td className="text-right font-mono">{s.predicted_qty != null ? `${s.predicted_qty}권` : '-'}</td>
-                  <td>
-                    <span className={
-                      sev === 'CRITICAL' ? 'pill-rejected' :
-                      sev === 'WARNING'  ? 'pill-pending' : 'pill-info'
-                    } title={`z-score ${z.toFixed(2)}`}>{sevLabel}</span>
-                  </td>
-                  <td className="text-right">
-                    {resolved ? (
-                      <span className="pill-approved" title={`발주 생성 ${new Date(s.resolved_at!).toLocaleString('ko-KR')}`}>
-                        발주 완료
-                      </span>
-                    ) : isHQ ? (
-                      <button
-                        className="btn-outline btn-sm"
-                        onClick={() => setTarget(s)}
-                        title={`${s.title ?? s.isbn13} — 수요예측 확인 후 선제 발주 승인`}
-                      >
-                        급등 발주
-                      </button>
-                    ) : (
-                      <span className="text-[10px] text-bf-muted">본사만 발주</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {(q.data?.items.length ?? 0) === 0 && !q.isLoading && (
-              <tr><td colSpan={10}>
-                <EmptyState message="감지된 급등 도서 없음" hint="spike-detect Lambda 가 10분마다 SNS 데이터를 분석합니다" />
-              </td></tr>
-            )}
-          </tbody>
-        </table>
+
+        {items.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {items.map((s) => (
+              <SpikeCard
+                key={s.event_id}
+                spike={s}
+                isHQ={isHQ}
+                onOrder={() => setTarget(s)}
+              />
+            ))}
+          </div>
+        ) : !q.isLoading ? (
+          <EmptyState
+            icon="📈"
+            message="감지된 급등 도서 없음"
+            hint="spike-detect Lambda 가 10분마다 SNS 데이터를 분석합니다"
+          />
+        ) : (
+          <div className="text-center py-10 text-bf-muted text-sm">로딩 중…</div>
+        )}
       </div>
 
       {target && (
