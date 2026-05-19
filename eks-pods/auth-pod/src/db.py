@@ -53,6 +53,7 @@ def upsert_user(oid: str, email: str, display_name: str, groups: list[str]) -> d
       hq@…           → hq-admin (전역)
       wh{N}@…        → wh-manager (scope_wh_id=N)
       branch{N}@…    → branch-clerk (scope_store_id=N · 1~14)
+      engineer@…     → engineer (전역 · 운영 대시보드 Grafana 접근)
       그 외          → group GUID 매핑 fallback
     매번 로그인 시 role/scope 갱신 — UPN 이 정해진 매장과 일치하지 않는 사용자는 변동 없음.
     """
@@ -82,6 +83,7 @@ def upsert_user(oid: str, email: str, display_name: str, groups: list[str]) -> d
 _UPN_HQ = re.compile(r"^hq(?:[-_.].*)?$")
 _UPN_WH = re.compile(r"^wh(\d+)(?:[-_.].*)?$")
 _UPN_BRANCH = re.compile(r"^branch(\d+)(?:[-_.].*)?$")
+_UPN_ENGINEER = re.compile(r"^engineer(?:[-_.].*)?$")
 
 
 def _resolve_role_scope(email: str | None, groups: list[str]) -> tuple[str, int | None, int | None]:
@@ -93,6 +95,8 @@ def _resolve_role_scope(email: str | None, groups: list[str]) -> tuple[str, int 
         local = email.split("@", 1)[0].lower().strip()
         if _UPN_HQ.match(local):
             return ("hq-admin", None, None)
+        if _UPN_ENGINEER.match(local):
+            return ("engineer", None, None)
         m = _UPN_WH.match(local)
         if m:
             return ("wh-manager", int(m.group(1)), None)

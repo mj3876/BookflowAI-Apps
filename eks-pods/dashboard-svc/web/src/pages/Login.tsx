@@ -6,6 +6,7 @@ const ROLES: { id: Role; label: string; group: string; desc: string }[] = [
   { id: 'hq-admin',     label: '본사 관리자',  group: 'HQ',     desc: '시연 발의 + 전사 관제' },
   { id: 'wh-manager-1', label: '창고 매니저 (수도권)', group: 'WH',     desc: '수도권 권역 협의 + 입출고' },
   { id: 'wh-manager-2', label: '창고 매니저 (영남)',   group: 'WH',     desc: '영남 권역 협의 + 입출고' },
+  { id: 'engineer',     label: '운영 엔지니어', group: 'OPS',    desc: '멀티클라우드 인프라 관제 (Grafana)' },
 ];
 
 // 2026-05-15 v3 시연 편의 — 12 매장 별도 mock (실제 운영은 Entra ID OIDC)

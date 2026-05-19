@@ -2,7 +2,7 @@
 // Cookie 우선 — Login.tsx 진입 시 /auth/whoami 호출해서 cookie 유효하면 자동 setRole.
 import { useEffect, useState } from 'react';
 
-export type Role = 'hq-admin' | 'wh-manager-1' | 'wh-manager-2' | 'branch-clerk';
+export type Role = 'hq-admin' | 'wh-manager-1' | 'wh-manager-2' | 'branch-clerk' | 'engineer';
 
 export type Scope = {
   scope_wh_id: number | null;     // wh-manager 일 때 1 (수도권) / 2 (영남)
@@ -23,6 +23,7 @@ export async function fetchSessionRole(): Promise<{ role: Role; scope: Scope } |
     if (j.role === 'hq-admin') role = 'hq-admin';
     else if (j.role === 'wh-manager') role = scope.scope_wh_id === 2 ? 'wh-manager-2' : 'wh-manager-1';
     else if (j.role === 'branch-clerk') role = 'branch-clerk';
+    else if (j.role === 'engineer') role = 'engineer';
     return role ? { role, scope } : null;
   } catch { return null; }
 }
@@ -46,6 +47,7 @@ const MOCK_SCOPE: Record<Role, Scope> = {
   'wh-manager-1': { scope_wh_id: 1,    scope_store_id: null },
   'wh-manager-2': { scope_wh_id: 2,    scope_store_id: null },
   'branch-clerk': { scope_wh_id: null, scope_store_id: 1 },  // 강남점 (location_id=1)
+  'engineer':     { scope_wh_id: null, scope_store_id: null },  // 전역 · 운영 대시보드
 };
 
 const ROLE_LABELS: Record<Role, string> = {
@@ -53,14 +55,18 @@ const ROLE_LABELS: Record<Role, string> = {
   'wh-manager-1': '창고 매니저 (수도권)',
   'wh-manager-2': '창고 매니저 (영남)',
   'branch-clerk': '지점 직원',
+  'engineer':     '운영 엔지니어',
 };
 
-const ROLE_GROUP: Record<Role, 'HQ' | 'WH' | 'BRANCH'> = {
+export type RoleGroup = 'HQ' | 'WH' | 'BRANCH' | 'OPS';
+
+const ROLE_GROUP: Record<Role, RoleGroup> = {
   'hq-admin': 'HQ', 'wh-manager-1': 'WH', 'wh-manager-2': 'WH', 'branch-clerk': 'BRANCH',
+  'engineer': 'OPS',
 };
 
 export function roleLabel(r: Role): string { return ROLE_LABELS[r]; }
-export function roleGroup(r: Role): 'HQ' | 'WH' | 'BRANCH' { return ROLE_GROUP[r]; }
+export function roleGroup(r: Role): RoleGroup { return ROLE_GROUP[r]; }
 export function token(role: Role): string {
   // 매장별 mock token override (Login.tsx 의 onPickStore 가 설정)
   const override = localStorage.getItem(TOKEN_OVERRIDE_KEY);

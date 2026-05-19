@@ -29,6 +29,7 @@ import LiveEvents from './pages/LiveEvents';
 // 이슈15 2026-05-16: Logistics.tsx 폐기 → /logistics 는 CalendarDetail 을 date 없이(오늘) 렌더.
 import Calendar from './pages/Calendar';
 import CalendarDetail from './pages/CalendarDetail';
+import OpsDashboard from './pages/OpsDashboard';
 import { getRole, roleGroup } from './auth';
 import { ToastProvider } from './components/Toast';
 import './styles.css';
@@ -41,6 +42,11 @@ function RequireRole({ children }: { children: React.ReactNode }) {
   const loc = useLocation();
   const role = getRole();
   if (!role) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  // engineer 는 운영 대시보드(/ops) 외 비즈니스 페이지 접근 불가.
+  const isOps = roleGroup(role) === 'OPS';
+  const onOpsPath = loc.pathname === '/ops';
+  if (isOps && !onOpsPath) return <Navigate to="/ops" replace />;
+  if (!isOps && onOpsPath) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -48,7 +54,11 @@ function HomeRedirect() {
   const role = getRole();
   if (!role) return <Navigate to="/login" replace />;
   const group = roleGroup(role);
-  const home = group === 'HQ' ? '/home/hq' : group === 'WH' ? '/wh-dashboard' : '/home/branch';
+  const home =
+    group === 'OPS' ? '/ops'
+    : group === 'HQ' ? '/home/hq'
+    : group === 'WH' ? '/wh-dashboard'
+    : '/home/branch';
   return <Navigate to={home} replace />;
 }
 
@@ -98,6 +108,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/branch-inbound"   element={<Navigate to="/approval" replace />} />
             <Route path="/branch-curation"  element={<Navigate to="/spikes" replace />} />
             <Route path="/branch-manual"    element={<Navigate to="/inventory" replace />} />
+
+            {/* 운영 (engineer 전용 · Grafana 임베드) */}
+            <Route path="/ops" element={<OpsDashboard />} />
 
             {/* 공통 */}
             <Route path="/notifications" element={<Notifications />} />

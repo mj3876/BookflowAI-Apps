@@ -20,6 +20,7 @@ ROLE_USERS = {
     "wh-manager-1": ("00000000-0000-0000-0000-000000000002", "wh-manager",      1, None),
     "wh-manager-2": ("00000000-0000-0000-0000-000000000003", "wh-manager",      2, None),
     "branch-clerk": ("00000000-0000-0000-0000-000000000004", "branch-clerk", None,    1),
+    "engineer":     ("00000000-0000-0000-0000-000000000005", "engineer",     None, None),
 }
 # 2026-05-15 v3 시연 편의 — 12 매장 mock token (location_id 1~12)
 for _sid in range(1, 13):
@@ -29,14 +30,15 @@ for _sid in range(1, 13):
 
 
 class AuthContext:
-    __slots__ = ("user_id", "role", "scope_wh_id", "scope_store_id", "token")
+    __slots__ = ("user_id", "role", "scope_wh_id", "scope_store_id", "token", "email")
 
-    def __init__(self, user_id, role, scope_wh_id, scope_store_id, token):
+    def __init__(self, user_id, role, scope_wh_id, scope_store_id, token, email=None):
         self.user_id = user_id
         self.role = role
         self.scope_wh_id = scope_wh_id
         self.scope_store_id = scope_store_id
         self.token = token
+        self.email = email
 
 
 def _parse_mock(token_value: str, raw: str) -> AuthContext:
@@ -46,7 +48,7 @@ def _parse_mock(token_value: str, raw: str) -> AuthContext:
     user = ROLE_USERS.get(role_key)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"unknown role: {role_key}")
-    return AuthContext(*user, token=raw)
+    return AuthContext(*user, token=raw, email=f"{role_key}@mock.bookflow.local")
 
 
 def _parse_jwt(token_value: str, raw: str) -> AuthContext:
@@ -65,6 +67,7 @@ def _parse_jwt(token_value: str, raw: str) -> AuthContext:
         scope_wh_id=claims.get("scope_wh_id"),
         scope_store_id=claims.get("scope_store_id"),
         token=raw,
+        email=claims.get("email"),
     )
 
 

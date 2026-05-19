@@ -4,7 +4,7 @@ import { useLiveStream } from './useLiveStream';
 import { useLiveInvalidate } from './useLiveInvalidate';
 import { useLocations } from './useLocations';
 
-type NavItem = { to: string; label: string; desc: string; allow: 'HQ' | 'WH' | 'BRANCH' | 'ALL' };
+type NavItem = { to: string; label: string; desc: string; allow: 'HQ' | 'WH' | 'BRANCH' | 'OPS' | 'ALL' };
 
 const NAV: { section: string; items: NavItem[] }[] = [
   {
@@ -61,6 +61,12 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/live',          label: '실시간 이벤트', desc: '재고 변동 · 주문 · SNS 급등 실시간 스트림', allow: 'ALL' },
     ],
   },
+  {
+    section: '🛰️ 운영 (엔지니어)',
+    items: [
+      { to: '/ops', label: '운영 대시보드', desc: '멀티클라우드 인프라 관제 (Grafana)', allow: 'OPS' },
+    ],
+  },
 ];
 
 const STATUS_PILL: Record<string, string> = {
@@ -93,6 +99,7 @@ const PAGE_LABEL: Record<string, string> = {
   'branch-sales': '매장 매출',
   notifications: '알림 로그',
   live: '실시간 이벤트',
+  ops: '운영 대시보드',
 };
 
 export default function Layout() {
@@ -107,9 +114,12 @@ export default function Layout() {
   if (!role) return null;
 
   const group = roleGroup(role);
+  // engineer(OPS) 는 운영 대시보드 메뉴만 — 비즈니스 페이지(ALL 포함) 노출 X.
   const visible = NAV.map((s) => ({
     section: s.section,
-    items: s.items.filter((i) => i.allow === 'ALL' || i.allow === group),
+    items: s.items.filter((i) =>
+      group === 'OPS' ? i.allow === 'OPS' : (i.allow === 'ALL' || i.allow === group),
+    ),
   })).filter((s) => s.items.length > 0);
 
   const onLogout = () => {
@@ -120,7 +130,8 @@ export default function Layout() {
   };
   const seg = loc.pathname.split('/').filter(Boolean)[0] ?? 'home';
   const pageTitle = PAGE_LABEL[seg] ?? seg;
-  const groupLabel = group === 'HQ' ? '본사' : group === 'WH' ? '물류센터' : '매장';
+  const groupLabel =
+    group === 'HQ' ? '본사' : group === 'WH' ? '물류센터' : group === 'OPS' ? '운영' : '매장';
   // 역할별 scope 표시 (본사 = 전사 / wh = 권역 / branch = 매장명)
   // 이슈16 2026-05-16: branch-clerk 매장명 — location_id 1 하드코딩 제거.
   //   현재 로그인 매장의 scope_store_id 로 (어느 매장으로 로그인하든 정확).
@@ -128,6 +139,7 @@ export default function Layout() {
     role === 'hq-admin' ? '전사 관제'
     : role === 'wh-manager-1' ? '수도권 권역'
     : role === 'wh-manager-2' ? '영남 권역'
+    : role === 'engineer' ? '멀티클라우드 관제'
     : role === 'branch-clerk' ? nameOf(getScope().scope_store_id ?? undefined) : '';
 
   return (

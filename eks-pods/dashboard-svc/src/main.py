@@ -21,6 +21,7 @@ from .clients import close_client, init_client
 from .db import close_pool, init_pool
 from .redis_bridge import close_bridge, init_bridge
 from .routes.aggregate import router as aggregate_router
+from .routes.internal import router as internal_router
 from .routes.master import router as master_router
 from .routes.ws import router as ws_router
 from .settings import settings
@@ -45,6 +46,7 @@ app = FastAPI(title="bookflow-dashboard-svc", version="0.1.0", lifespan=lifespan
 app.include_router(master_router)
 app.include_router(aggregate_router)
 app.include_router(ws_router)
+app.include_router(internal_router)
 
 
 @app.get("/health")
