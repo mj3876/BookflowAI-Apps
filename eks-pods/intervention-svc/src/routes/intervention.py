@@ -1488,7 +1488,8 @@ def approve_new_book_request(
 
     효과:
     1. new_book_requests.status='APPROVED'
-    2. wh1_qty, wh2_qty > 0 면 → pending_orders PUBLISHER_ORDER 자동 생성 (status=APPROVED · 본사 단독 승인)
+    2. wh1_qty, wh2_qty > 0 면 → pending_orders PUBLISHER_ORDER (출판사→WH 입고) +
+       chained WH_TO_STORE (WH→권역 매장 분배 · D+1) 자동 생성 (status=APPROVED · 강제)
     3. ⑨NewBookRequest 알림 (시트04 12 events)
     """
     if ctx.role != "hq-admin":
@@ -1543,8 +1544,11 @@ def approve_new_book_request(
                 )
                 new_orders.append({"order_id": str(order_id), "wh_id": wh_id, "qty": qty, "target_location_id": target_loc})
 
-                # WH → 매장 자동 분배 (REBALANCE NEWBOOK · 권역 내 균등 분배)
+                # WH → 매장 자동 분배 (chained WH_TO_STORE NEWBOOK · 권역 내 균등 분배)
                 # 본사 신간 지시 = WH 수신 + 매장 분배 둘 다 자동 (Notion 2.3 "수신 확인만")
+                # order_type='WH_TO_STORE' (WH 본체 → 권역 매장 · REBALANCE 는 매장↔매장 이므로 오분류였음)
+                # expected_arrival_at = PUBLISHER_ORDER 도착 (CURRENT_DATE+3) 의 익일 (D+1) → CURRENT_DATE+4.
+                # NULL 이면 WH/지점 대시보드 도착 캘린더 가 그 row 를 skip → 분배 계획이 안 보이는 버그였음.
                 cur.execute(
                     "SELECT location_id FROM locations WHERE wh_id = %s AND location_type = 'STORE_OFFLINE' ORDER BY location_id",
                     (wh_id,),
@@ -1562,8 +1566,9 @@ def approve_new_book_request(
                             """
                             INSERT INTO pending_orders
                                 (order_id, order_type, isbn13, source_location_id, target_location_id,
-                                 qty, urgency_level, status, approved_at)
-                            VALUES (%s, 'REBALANCE', %s, %s, %s, %s, 'NEWBOOK', 'APPROVED', NOW())
+                                 qty, urgency_level, status, approved_at, expected_arrival_at)
+                            VALUES (%s, 'WH_TO_STORE', %s, %s, %s, %s, 'NEWBOOK', 'APPROVED', NOW(),
+                                    (CURRENT_DATE + INTERVAL '4 days')::date)
                             """,
                             (str(sub_id), isbn13, target_loc, store_loc, store_qty),
                         )
