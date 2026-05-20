@@ -94,6 +94,15 @@ def _normalize_request(item: dict) -> dict:
         sales = int(item.get("estimated_initial_sales") or 0)
     except (ValueError, TypeError):
         sales = 0
+    # price_sales 는 publisher-api 폼에서 필수(>0) 이므로 정상 흐름에서 항상 존재.
+    # 방어적으로 coerce 실패 / 누락 / 0이하 시 None → books UPSERT 시 price_sales NULL 회피 위해 row skip 처리.
+    try:
+        ps_raw = item.get("price_sales")
+        price_sales = int(ps_raw) if ps_raw is not None else None
+        if price_sales is not None and price_sales <= 0:
+            price_sales = None
+    except (ValueError, TypeError):
+        price_sales = None
     return {
         "isbn13":                  item.get("isbn13"),
         "publisher_id":            item.get("publisher_id"),
@@ -105,6 +114,7 @@ def _normalize_request(item: dict) -> dict:
         "marketing_plan":          item.get("marketing_plan") or "",
         "similar_books":           item.get("similar_books") or [],
         "target_segments":         item.get("target_segments") or [],
+        "price_sales":             price_sales,
     }
 
 
@@ -124,9 +134,10 @@ def fetch_pending(api_url: str, timeout: float) -> list[dict]:
 
 # FR-A11.1 books master upsert — 출판사가 새로 신청한 ISBN13 은 books 에 등록되어야
 # forecast/decision/inventory pod 가 참조 가능. ON CONFLICT DO NOTHING 으로 idempotent.
+# price_sales 를 함께 채워야 ecs-sim catalog 필터 (price > 0) TypeError 차단.
 BOOKS_UPSERT_SQL = """
-    INSERT INTO books (isbn13, title, author, category_name, source, active, discontinue_mode)
-    VALUES (%s, %s, %s, %s, 'PUBLISHER_REQUEST', TRUE, 'NONE')
+    INSERT INTO books (isbn13, title, author, category_name, price_sales, source, active, discontinue_mode)
+    VALUES (%s, %s, %s, %s, %s, 'PUBLISHER_REQUEST', TRUE, 'NONE')
     ON CONFLICT (isbn13) DO NOTHING
 """
 
@@ -135,10 +146,10 @@ NEWREQ_INSERT_SQL = """
     INSERT INTO new_book_requests
         (isbn13, publisher_id, title, author, genre,
          expected_pub_date, estimated_initial_sales, marketing_plan,
-         similar_books, target_segments, status)
+         similar_books, target_segments, price_sales, status)
     VALUES (%s, %s, %s, %s, %s,
             %s, %s, %s,
-            %s::jsonb, %s::jsonb, 'NEW')
+            %s::jsonb, %s::jsonb, %s, 'NEW')
     ON CONFLICT (isbn13) DO NOTHING
     RETURNING id
 """
@@ -162,11 +173,15 @@ def main() -> int:
             n = _normalize_request(it)
             if not n["isbn13"] or not n["publisher_id"]:
                 continue  # 필수 필드 누락 row 는 스킵
+            if n["price_sales"] is None:
+                # price_sales 누락/0이하 row 는 catalog 정합 깨뜨림 → 스킵 (publisher-api 가 폼에서 차단해야 정상)
+                log.warning("skip request without valid price_sales: isbn13=%s", n["isbn13"])
+                continue
             with conn.cursor() as cur:
                 # 1) books master upsert (신간이 아직 카탈로그에 없을 수 있음)
                 cur.execute(
                     BOOKS_UPSERT_SQL,
-                    (n["isbn13"], n["title"], n["author"], n["genre"]),
+                    (n["isbn13"], n["title"], n["author"], n["genre"], n["price_sales"]),
                 )
                 # 2) new_book_requests INSERT
                 cur.execute(
@@ -175,6 +190,7 @@ def main() -> int:
                         n["isbn13"], n["publisher_id"], n["title"], n["author"], n["genre"],
                         n["expected_pub_date"], n["estimated_initial_sales"], n["marketing_plan"],
                         json.dumps(n["similar_books"]), json.dumps(n["target_segments"]),
+                        n["price_sales"],
                     ),
                 )
                 row = cur.fetchone()

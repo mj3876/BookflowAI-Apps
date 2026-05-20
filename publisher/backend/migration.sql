@@ -7,6 +7,32 @@
 ALTER TABLE new_book_requests
     ADD COLUMN IF NOT EXISTS attachment_s3_key TEXT;
 
+-- new_book_requests 테이블에 정가 컬럼 추가 (필수 · 0 초과)
+-- 도입 배경: publisher 채널 신간이 books.price_sales=NULL 로 등록 → ecs-sim catalog 필터
+--   (price > 0) 에서 TypeError 발생 → POS 시뮬 crash loop (2026-05-20 16시 incident).
+-- 절차: 1) NULLABLE 추가 → 2) 기존 row 1 (price_sales NULL) 무해한 default backfill →
+--        3) NOT NULL 승격. 멱등성 위해 information_schema 검사 후에만 NOT NULL 적용.
+ALTER TABLE new_book_requests
+    ADD COLUMN IF NOT EXISTS price_sales INTEGER;
+
+-- 기존 NULL row backfill (1 원 sentinel · 운영 시 본사가 보정).
+UPDATE new_book_requests SET price_sales = 1 WHERE price_sales IS NULL;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'new_book_requests'
+          AND column_name = 'price_sales'
+          AND is_nullable = 'YES'
+    ) THEN
+        ALTER TABLE new_book_requests ALTER COLUMN price_sales SET NOT NULL;
+    END IF;
+END$$;
+
+COMMENT ON COLUMN new_book_requests.price_sales
+    IS '정가 (원, 1 이상). publisher-api 폼 필수 입력 · books.price_sales 로 전파.';
+
 -- ON CONFLICT (isbn13) DO NOTHING 을 위한 UNIQUE 제약 추가
 DO $$
 BEGIN

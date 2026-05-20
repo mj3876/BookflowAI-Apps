@@ -18,6 +18,8 @@ class NewBookRequestIn(BaseModel):
     publisher_id: str = Field(..., min_length=1, max_length=50)
     title: str = Field(..., min_length=1, max_length=500)
     author: str = Field(..., min_length=1, max_length=500)
+    # 정가 (필수 · 0 초과). books.price_sales NULL → ecs-sim catalog 필터 TypeError 의 근본 차단.
+    price_sales: int = Field(..., gt=0, description="정가 (원)")
     genre: Optional[str] = Field(None, max_length=100)
     expected_pub_date: Optional[date] = None          # YYYY-MM-DD
     estimated_initial_sales: int = Field(0, ge=0)

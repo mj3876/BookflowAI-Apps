@@ -92,6 +92,8 @@ async def submit_new_book_request(
     publisher_id: str = Form(..., description="출판사 코드"),
     title: str = Form(..., description="도서명"),
     author: str = Form(..., description="저자명"),
+    # 정가 (필수 · 0 초과). books.price_sales NULL → ecs-sim catalog TypeError 의 근본 차단.
+    price_sales: int = Form(..., gt=0, description="정가 (원, 1 이상)"),
     # ── 선택 필드 ──
     genre: Optional[str] = Form(None, description="장르/카테고리"),
     expected_pub_date: Optional[str] = Form(None, description="출판 예정일 YYYY-MM-DD"),
@@ -143,29 +145,30 @@ async def submit_new_book_request(
         with conn.cursor() as cur:
             # books 마스터 UPSERT
             # publisher-watcher poll.py 의 BOOKS_UPSERT_SQL 과 동일 패턴
+            # price_sales 를 함께 채워야 ecs-sim catalog 필터 (price > 0) 가 정상 동작.
             cur.execute(
                 """
                 INSERT INTO books
-                    (isbn13, title, author, category_name, source, active, discontinue_mode)
-                VALUES (%s, %s, %s, %s, 'PUBLISHER_REQUEST', TRUE, 'NONE')
+                    (isbn13, title, author, category_name, price_sales, source, active, discontinue_mode)
+                VALUES (%s, %s, %s, %s, %s, 'PUBLISHER_REQUEST', TRUE, 'NONE')
                 ON CONFLICT (isbn13) DO NOTHING
                 """,
-                (isbn13, title, author, genre),
+                (isbn13, title, author, genre, price_sales),
             )
 
             # new_book_requests INSERT
             # attachment_s3_key 컬럼은 migration.sql 실행 후 사용 가능
-            # migration.sql 미적용 시: attachment_s3_key 컬럼 없음 → 아래 INSERT 실패
-            # → migration.sql 을 먼저 Ansible Playbook 에서 실행할 것 (README 참조)
+            # price_sales 컬럼도 migration.sql 에서 추가됨 (idempotent ALTER)
+            # migration.sql 미적용 시: 아래 INSERT 실패 → Ansible Playbook 으로 먼저 적용할 것
             cur.execute(
                 """
                 INSERT INTO new_book_requests
                     (isbn13, publisher_id, title, author, genre,
                      expected_pub_date, estimated_initial_sales, marketing_plan,
-                     similar_books, target_segments, attachment_s3_key, status)
+                     similar_books, target_segments, price_sales, attachment_s3_key, status)
                 VALUES (%s, %s, %s, %s, %s,
                         %s, %s, %s,
-                        %s::jsonb, %s::jsonb, %s, 'NEW')
+                        %s::jsonb, %s::jsonb, %s, %s, 'NEW')
                 ON CONFLICT (isbn13) DO NOTHING
                 RETURNING id, created_at
                 """,
@@ -176,6 +179,7 @@ async def submit_new_book_request(
                     marketing_plan or "",
                     json.dumps(similar_list),
                     json.dumps(segment_list),
+                    price_sales,
                     attachment_s3_key,
                 ),
             )
@@ -241,7 +245,7 @@ def list_new_book_requests(
                 """
                 SELECT id, isbn13, publisher_id, title, author, genre,
                        expected_pub_date, estimated_initial_sales, marketing_plan,
-                       similar_books, target_segments, status, created_at
+                       similar_books, target_segments, price_sales, status, created_at
                 FROM new_book_requests
                 WHERE status = %s
                 ORDER BY created_at
@@ -254,7 +258,7 @@ def list_new_book_requests(
     cols = [
         "id", "isbn13", "publisher_id", "title", "author", "genre",
         "expected_pub_date", "estimated_initial_sales", "marketing_plan",
-        "similar_books", "target_segments", "status", "created_at",
+        "similar_books", "target_segments", "price_sales", "status", "created_at",
     ]
     items = []
     for row in rows:
