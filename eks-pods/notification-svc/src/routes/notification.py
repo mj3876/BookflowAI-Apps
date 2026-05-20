@@ -35,6 +35,26 @@ router = APIRouter(prefix="/notification", tags=["notification"])
 # Logic Apps 동시 호출 1건으로 제한 — ACS Rate Limit(429) 방지
 _logic_apps_sem = asyncio.Semaphore(1)
 
+_DEDUP_TTL = 300  # 5분 이내 동일 event_type + correlation_id 재발송 차단
+
+
+def _check_and_set_dedup(event_type: str, correlation_id) -> bool:
+    """Redis SET NX로 중복 발송 여부 확인.
+    True  → 이미 발송됨(중복), Logic Apps 호출 건너뜀.
+    False → 최초 발송, Redis 키 등록 후 진행.
+    correlation_id 없으면 항상 False(차단 불가).
+    Redis 장애 시 fail-open(발송 허용).
+    """
+    if correlation_id is None:
+        return False
+    key = f"notif:dedup:{event_type}:{correlation_id}"
+    try:
+        result = redis_client().set(key, 1, nx=True, ex=_DEDUP_TTL)
+        return result is None  # None → 키 이미 존재 → 중복
+    except Exception as e:
+        log.warning("redis dedup check failed (fail-open): %s", e)
+        return False
+
 
 # event_type -> Redis 채널 매핑 (시트04 Pub/Sub matrix · 1:1 정렬)
 #
@@ -152,15 +172,18 @@ async def send(req: SendRequest, ctx: AuthContext = Depends(require_auth)) -> Se
             ok, err = False, str(e)[:120]
         new_status = "BUFFERED" if ok else "FAILED"
     elif _get_logic_apps_url(req.event_type):
-        recipients = get_recipients(req.event_type, req.payload_summary)
-        ok, err = await _post_logic_apps(
-            req.event_type,
-            req.severity,
-            req.payload_summary,
-            req.correlation_id,
-            recipients,
-        )
-        new_status = "SENT" if ok else "FAILED"
+        if _check_and_set_dedup(req.event_type, req.correlation_id):
+            ok, err, new_status = True, None, "DEDUP"
+        else:
+            recipients = get_recipients(req.event_type, req.payload_summary)
+            ok, err = await _post_logic_apps(
+                req.event_type,
+                req.severity,
+                req.payload_summary,
+                req.correlation_id,
+                recipients,
+            )
+            new_status = "SENT" if ok else "FAILED"
     else:
         ok, err, new_status = True, None, "SKIPPED"
 
