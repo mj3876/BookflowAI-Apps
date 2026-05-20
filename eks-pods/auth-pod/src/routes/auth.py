@@ -153,9 +153,6 @@ def whoami(bookflow_session: str | None = Cookie(default=None)):
 
 @router.get("/auth/logout")
 async def logout():
-    meta = await _get_oidc_meta()
-    end_session = meta.get("end_session_endpoint", settings.public_base_url)
-    post_logout = urllib.parse.quote(settings.public_base_url, safe="")
-    resp = RedirectResponse(f"{end_session}?post_logout_redirect_uri={post_logout}", status_code=302)
+    resp = RedirectResponse(f"{settings.public_base_url}/login", status_code=302)
     resp.delete_cookie(COOKIE_NAME, path="/")
     return resp
