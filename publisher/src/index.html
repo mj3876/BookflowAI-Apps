@@ -352,6 +352,14 @@
           </div>
         </div>
 
+        <!-- 정가 (필수) -->
+        <div class="field">
+          <label for="priceSales">정가 (원) <span class="req">*</span></label>
+          <input type="number" id="priceSales" name="price_sales"
+                 required min="1" step="100" placeholder="15000" style="width:220px">
+          <p class="hint">판매가 (1원 이상). 시뮬레이터/카탈로그 정합을 위해 필수입니다.</p>
+        </div>
+
         <!-- 장르 + 출판 예정일 -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
           <div class="field">
@@ -664,6 +672,7 @@ function validateForm() {
     { id: "publisherId", check: v => v.length > 0,        msg: "출판사 코드를 입력해 주세요." },
     { id: "title",       check: v => v.length > 0,        msg: "도서명을 입력해 주세요." },
     { id: "author",      check: v => v.length > 0,        msg: "저자명을 입력해 주세요." },
+    { id: "priceSales",  check: v => v.length > 0 && Number(v) > 0, msg: "정가를 1원 이상으로 입력해 주세요." },
   ];
   const errors = [];
   fields.forEach(f => {
