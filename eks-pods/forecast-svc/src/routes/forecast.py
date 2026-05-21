@@ -767,7 +767,7 @@ def _assemble_new_book_features(client, bigquery, isbn13: str) -> None:
     log.info("new-book cold-start features assembled isbn=%s genre=%s tier=%s", isbn13, genre, ptier)
 
 
-def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> dict:
+def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> NewBookPredictResp:
     """신간 수요예측을 BigQuery ML.PREDICT 로 직접 수행 (private PSC 경로).
 
     bookflow-new-book-inference Cloud Function 과 동일한 BQML 모델
@@ -847,33 +847,66 @@ def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> dict:
         location=settings.bq_location,
     ).result()
 
-    # 3. wh_id 별 합계 → 발주 추천량
+    # 3. 지점별 예측 조회 (중복 방어 GROUP BY — 동시 클릭 시 중복 INSERT 평균화)
     rows = list(client.query(
         f"""
-        SELECT wh_id, SUM(predicted_30d_qty) AS wh_qty
+        SELECT store_id,
+               ANY_VALUE(wh_id) AS wh_id,
+               AVG(predicted_daily_demand) AS daily,
+               AVG(predicted_30d_qty) AS q30
         FROM {_p(table)}
         WHERE isbn13 = @isbn13 AND prediction_date = CURRENT_DATE()
-        GROUP BY wh_id ORDER BY wh_id
+        GROUP BY store_id ORDER BY store_id
         """,
         job_config=bigquery.QueryJobConfig(query_parameters=isbn_param),
         location=settings.bq_location,
     ).result())
-    wh_qtys = {int(r.wh_id): int(r.wh_qty) for r in rows if r.wh_id is not None}
-    if not wh_qtys:
+    if not rows:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"new-book ML.PREDICT returned no rows (isbn={req.isbn13} not in books_static?)",
         )
-    log.info("new-book BQML predict isbn=%s wh1=%s wh2=%s",
-             req.isbn13, wh_qtys.get(1, 0), wh_qtys.get(2, 0))
-    return {
-        "isbn13": req.isbn13,
-        "wh1_qty": wh_qtys.get(1, 0),
-        "wh2_qty": wh_qtys.get(2, 0),
-        "lead_days": lead_days,
-        "source": "bq_new_book_ml_predict",
-        "model_version": model,
-    }
+
+    # store_id == 운영 locations.location_id (정합 확인됨) → 지점명/타입 매핑
+    locs = _load_active_locations()
+    loc_map = {int(lid): (name, ltype, wh) for lid, name, ltype, wh in locs}
+    predictions: list[NewBookLocationPred] = []
+    wh_30d: dict[int, float] = {}
+    for r in rows:
+        sid = int(r.store_id)
+        name, ltype, wh = loc_map.get(
+            sid, (f"지점 {sid}", "STORE_OFFLINE", int(r.wh_id) if r.wh_id is not None else None))
+        d7 = round(float(r.daily) * 7, 1)
+        d30 = round(float(r.q30), 1)
+        predictions.append(NewBookLocationPred(
+            location_id=sid, location_name=name, location_type=ltype, wh_id=wh,
+            predicted_demand_7d=d7, predicted_demand_30d=d30, confidence=0.85,
+        ))
+        if wh is not None:
+            wh_30d[wh] = wh_30d.get(wh, 0.0) + d30
+
+    # WH 본체 엔트리(권역 지점 합계) 추가 — mock 과 동일 구조(지점 + WH)로 노출
+    for lid, name, ltype, wh in locs:
+        if ltype == "WH" and wh in wh_30d:
+            predictions.append(NewBookLocationPred(
+                location_id=int(lid), location_name=name, location_type="WH", wh_id=wh,
+                predicted_demand_7d=round(wh_30d[wh] / max(lead_days, 1) * 7, 1),
+                predicted_demand_30d=round(wh_30d[wh], 1), confidence=0.85,
+            ))
+
+    total_7d = round(sum(p.predicted_demand_7d for p in predictions if p.location_type != "WH"), 1)
+    total_30d = round(sum(p.predicted_demand_30d for p in predictions if p.location_type != "WH"), 1)
+    log.info("new-book BQML predict isbn=%s stores=%d wh1=%s wh2=%s",
+             req.isbn13, len(rows), int(wh_30d.get(1, 0)), int(wh_30d.get(2, 0)))
+    return NewBookPredictResp(
+        isbn13=req.isbn13,
+        model_version=model,
+        predicted_at=datetime.now(timezone.utc).isoformat(),
+        predictions=predictions,
+        total_7d=total_7d,
+        total_30d=total_30d,
+        recommendation=_recommendation(total_7d),
+    )
 
 
 def _real_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
@@ -882,7 +915,7 @@ def _real_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
     GCP 설정이 하나도 없으면 503 (mock fallback 없음 — real 경로는 fail closed).
     """
     if settings.gcp_new_book_use_bq_direct:
-        return _response_from_gcp_new_book(req, _call_bq_new_book_ml_predict(req))
+        return _call_bq_new_book_ml_predict(req)  # 지점별 NewBookPredictResp 직접 반환
 
     if settings.gcp_vertex_endpoint_name:
         return _call_vertex_sdk_direct(req)
