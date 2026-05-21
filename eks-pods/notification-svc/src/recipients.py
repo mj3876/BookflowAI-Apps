@@ -37,7 +37,7 @@ def _branches() -> list[dict]:
 
 
 def _location_contacts() -> dict[int, str]:
-    """NOTIFICATION_LOCATION_CONTACTS_JSON → {location_id: email}."""
+    """NOTIFICATION_CONTACT_LOCATION_CONTACTS_JSON → {location_id: email}."""
     raw = settings.contact_location_contacts_json.strip()
     if not raw:
         return {}
