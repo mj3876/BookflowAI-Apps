@@ -46,10 +46,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
 
-def _notify_new_book_request(request_id: int, publisher_id, isbn13: str, title: str | None) -> None:
+def _notify_new_book_request(request_id: int, publisher_id, isbn13: str, title: str | None,
+                             requester_email: str | None = None) -> None:
     """notification-svc /send `NewBookRequest` 호출 (실패 비치명 · log only).
 
-    notification-svc 가 notifications_log INSERT + Redis pub `newbook.request` (EVENT_CHANNEL) 담당.
+    notification-svc 가 notifications_log INSERT + Redis pub `newbook.request` (EVENT_CHANNEL)
+    + Logic App 매니저 알림 메일(시나리오 2 · 1-2) 담당.
     """
     body = {
         "event_type": "NewBookRequest",
@@ -62,6 +64,7 @@ def _notify_new_book_request(request_id: int, publisher_id, isbn13: str, title: 
             "isbn13": isbn13,
             "title": title,
             "stage": "DISCOVERED",
+            "requester_email": requester_email,
         },
     }
     try:
@@ -115,6 +118,7 @@ def _normalize_request(item: dict) -> dict:
         "similar_books":           item.get("similar_books") or [],
         "target_segments":         item.get("target_segments") or [],
         "price_sales":             price_sales,
+        "requester_email":         item.get("requester_email"),
     }
 
 
@@ -146,10 +150,10 @@ NEWREQ_INSERT_SQL = """
     INSERT INTO new_book_requests
         (isbn13, publisher_id, title, author, genre,
          expected_pub_date, estimated_initial_sales, marketing_plan,
-         similar_books, target_segments, price_sales, status)
+         similar_books, target_segments, price_sales, requester_email, status)
     VALUES (%s, %s, %s, %s, %s,
             %s, %s, %s,
-            %s::jsonb, %s::jsonb, %s, 'NEW')
+            %s::jsonb, %s::jsonb, %s, %s, 'NEW')
     ON CONFLICT (isbn13) DO NOTHING
     RETURNING id
 """
@@ -183,20 +187,32 @@ def main() -> int:
                     BOOKS_UPSERT_SQL,
                     (n["isbn13"], n["title"], n["author"], n["genre"], n["price_sales"]),
                 )
-                # 2) new_book_requests INSERT
+                # 2) new_book_requests INSERT (방어적 — publisher-api 가 이미 넣었으면 no-op)
                 cur.execute(
                     NEWREQ_INSERT_SQL,
                     (
                         n["isbn13"], n["publisher_id"], n["title"], n["author"], n["genre"],
                         n["expected_pub_date"], n["estimated_initial_sales"], n["marketing_plan"],
                         json.dumps(n["similar_books"]), json.dumps(n["target_segments"]),
-                        n["price_sales"],
+                        n["price_sales"], n["requester_email"],
                     ),
+                )
+                # 3) NEW → FETCHED 전이로 "감지 1회당 알림 1회" 보장.
+                #    publisher-api 가 같은 RDS 에 status=NEW 로 먼저 insert 하므로 (2)의 INSERT 는
+                #    대개 no-op → 이전엔 notify 가 영영 안 됐음. status 전이를 알림 트리거로 삼아
+                #    감지 메일(시나리오 2 · 1-2)이 매 신간마다 정확히 한 번 발송되게 한다.
+                #    status=NEW 필터(fetch_pending)라 FETCHED 전이 후엔 재폴링되지 않음 → 중복 알림 없음.
+                #    intervention 은 NEW/FETCHED 둘 다 승인 가능하므로 후속 흐름에 영향 없음.
+                cur.execute(
+                    "UPDATE new_book_requests SET status='FETCHED', fetched_at=NOW() "
+                    "WHERE isbn13=%s AND status='NEW' RETURNING id, requester_email",
+                    (n["isbn13"],),
                 )
                 row = cur.fetchone()
                 if row is None:
-                    continue  # duplicate isbn13, already in queue
+                    continue  # 이미 FETCHED/처리됨 — 재알림 안 함
                 request_id = row[0]
+                requester_email = row[1] if row[1] is not None else n["requester_email"]
                 cur.execute(
                     """
                     INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
@@ -208,13 +224,13 @@ def main() -> int:
                 )
                 inserted += 1
                 notify_jobs.append(
-                    (request_id, n["publisher_id"], n["isbn13"], n["title"])
+                    (request_id, n["publisher_id"], n["isbn13"], n["title"], requester_email)
                 )
         conn.commit()
 
     # commit 후 알림 발송 (row 가 durably 적재된 뒤 NewBookRequest 발의)
-    for request_id, publisher_id, isbn13, title in notify_jobs:
-        _notify_new_book_request(request_id, publisher_id, isbn13, title)
+    for request_id, publisher_id, isbn13, title, requester_email in notify_jobs:
+        _notify_new_book_request(request_id, publisher_id, isbn13, title, requester_email)
 
     log.info("inserted %d new_book_requests", inserted)
     return 0

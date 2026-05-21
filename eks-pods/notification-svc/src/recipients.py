@@ -47,6 +47,18 @@ def _location_contacts() -> dict[int, str]:
         return {}
 
 
+def _publisher(payload: dict | None) -> list[dict]:
+    """신간 요청서의 출판사 담당자 이메일 (new_book_requests.requester_email).
+
+    승인(stage=APPROVED) 시 출판사에게 최종 발주명세 메일을 보내기 위한 수신자.
+    requester_email 미존재(구 데이터/신생 미입력) → 빈 리스트.
+    """
+    email = (payload or {}).get("requester_email")
+    if not email or not str(email).strip():
+        return []
+    return [{"address": str(email).strip(), "displayName": "출판사"}]
+
+
 def _location_recipient(location_id, display_name: str | None = None) -> list[dict]:
     """location_id 담당자 1명만 반환. 미등록이면 빈 리스트."""
     if location_id is None:
@@ -96,11 +108,16 @@ def get_recipients(event_type: str, payload: dict | None = None) -> list[dict]:
         return _dedup(_stock_depart_recipients(payload))
     if event_type == "StockArrivalPending":
         return _dedup(_stock_arrival_recipients(payload))
+    # 신간: 발견(DISCOVERED) 단계는 본사 매니저 알림(1-2),
+    #       승인(APPROVED) 단계는 본사 + 출판사 발주명세 메일(1-7).
+    if event_type == "NewBookRequest":
+        if (payload or {}).get("stage") == "APPROVED":
+            return _dedup(_hq() + _publisher(payload))
+        return _dedup(_hq())
 
     mapping: dict[str, list[dict]] = {
         # 본사 단독
         "AutoExecutedUrgent":  _hq(),
-        "NewBookRequest":      _hq(),
         "ReturnPending":       _hq(),
         "BranchFeedback":      _hq(),
 

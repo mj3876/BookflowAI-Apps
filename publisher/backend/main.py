@@ -89,12 +89,16 @@ def health():
 async def submit_new_book_request(
     # ── 필수 필드 ──
     isbn13: str = Form(..., description="ISBN-13 (13자리 숫자)"),
-    publisher_id: str = Form(..., description="출판사 코드"),
     title: str = Form(..., description="도서명"),
     author: str = Form(..., description="저자명"),
     # 정가 (필수 · 0 초과). books.price_sales NULL → ecs-sim catalog TypeError 의 근본 차단.
     price_sales: int = Form(..., gt=0, description="정가 (원, 1 이상)"),
+    # 결과 통보용 출판사 담당자 이메일 (필수) — 승인 시 발주명세 메일 수신처.
+    requester_email: str = Form(..., description="출판사 담당자 이메일 (결과 통보용)"),
     # ── 선택 필드 ──
+    # 출판사 코드. 신생 출판사는 코드를 모르므로 선택 — 미입력 시 publisher_name 으로 등록/조회.
+    publisher_id: Optional[str] = Form(None, description="출판사 코드 (기존 출판사) · 신생은 비우고 publisher_name 입력"),
+    publisher_name: Optional[str] = Form(None, description="출판사명 (신생 출판사 · publisher_id 미입력 시 필수)"),
     genre: Optional[str] = Form(None, description="장르/카테고리"),
     expected_pub_date: Optional[str] = Form(None, description="출판 예정일 YYYY-MM-DD"),
     estimated_initial_sales: int = Form(0, ge=0, description="예상 초판 판매량"),
@@ -122,6 +126,15 @@ async def submit_new_book_request(
     if not isbn13.isdigit() or len(isbn13) != 13:
         raise HTTPException(status_code=422, detail="isbn13 은 13자리 숫자여야 합니다")
 
+    # 출판사 식별: 기존 출판사는 publisher_id, 신생 출판사는 publisher_name 으로 등록.
+    publisher_id = (publisher_id or "").strip() or None
+    publisher_name = (publisher_name or "").strip() or None
+    if not publisher_id and not publisher_name:
+        raise HTTPException(
+            status_code=422,
+            detail="publisher_id (기존) 또는 publisher_name (신생) 중 하나는 필수입니다",
+        )
+
     # ── 1. 첨부파일 S3 업로드 ──────────────────────────────────────────────────
     attachment_s3_key: Optional[str] = None
     if attachment and attachment.filename:
@@ -143,6 +156,21 @@ async def submit_new_book_request(
     # ── 3. RDS INSERT ─────────────────────────────────────────────────────────
     with db.db_conn() as conn:
         with conn.cursor() as cur:
+            # 신생 출판사: publisher_id 미입력 → publisher_name 으로 publishers upsert 후 id 확보.
+            # publishers.name 은 UNIQUE → ON CONFLICT (name) 로 멱등. contact_email 은 requester_email 로 보강.
+            if not publisher_id:
+                cur.execute(
+                    """
+                    INSERT INTO publishers (name, contact_email)
+                    VALUES (%s, %s)
+                    ON CONFLICT (name) DO UPDATE
+                        SET contact_email = COALESCE(publishers.contact_email, EXCLUDED.contact_email)
+                    RETURNING publisher_id
+                    """,
+                    (publisher_name, requester_email),
+                )
+                publisher_id = str(cur.fetchone()[0])
+
             # books 마스터 UPSERT
             # publisher-watcher poll.py 의 BOOKS_UPSERT_SQL 과 동일 패턴
             # price_sales 를 함께 채워야 ecs-sim catalog 필터 (price > 0) 가 정상 동작.
@@ -157,18 +185,16 @@ async def submit_new_book_request(
             )
 
             # new_book_requests INSERT
-            # attachment_s3_key 컬럼은 migration.sql 실행 후 사용 가능
-            # price_sales 컬럼도 migration.sql 에서 추가됨 (idempotent ALTER)
-            # migration.sql 미적용 시: 아래 INSERT 실패 → Ansible Playbook 으로 먼저 적용할 것
+            # attachment_s3_key / price_sales / requester_email 컬럼은 ansible migration 적용 후 사용 가능
             cur.execute(
                 """
                 INSERT INTO new_book_requests
                     (isbn13, publisher_id, title, author, genre,
                      expected_pub_date, estimated_initial_sales, marketing_plan,
-                     similar_books, target_segments, price_sales, attachment_s3_key, status)
+                     similar_books, target_segments, price_sales, requester_email, attachment_s3_key, status)
                 VALUES (%s, %s, %s, %s, %s,
                         %s, %s, %s,
-                        %s::jsonb, %s::jsonb, %s, %s, 'NEW')
+                        %s::jsonb, %s::jsonb, %s, %s, %s, 'NEW')
                 ON CONFLICT (isbn13) DO NOTHING
                 RETURNING id, created_at
                 """,
@@ -180,6 +206,7 @@ async def submit_new_book_request(
                     json.dumps(similar_list),
                     json.dumps(segment_list),
                     price_sales,
+                    requester_email,
                     attachment_s3_key,
                 ),
             )
@@ -245,7 +272,7 @@ def list_new_book_requests(
                 """
                 SELECT id, isbn13, publisher_id, title, author, genre,
                        expected_pub_date, estimated_initial_sales, marketing_plan,
-                       similar_books, target_segments, price_sales, status, created_at
+                       similar_books, target_segments, price_sales, requester_email, status, created_at
                 FROM new_book_requests
                 WHERE status = %s
                 ORDER BY created_at
@@ -258,7 +285,7 @@ def list_new_book_requests(
     cols = [
         "id", "isbn13", "publisher_id", "title", "author", "genre",
         "expected_pub_date", "estimated_initial_sales", "marketing_plan",
-        "similar_books", "target_segments", "price_sales", "status", "created_at",
+        "similar_books", "target_segments", "price_sales", "requester_email", "status", "created_at",
     ]
     items = []
     for row in rows:

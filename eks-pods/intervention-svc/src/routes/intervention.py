@@ -1505,13 +1505,14 @@ def approve_new_book_request(
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE new_book_requests SET status = 'APPROVED', approved_at = NOW() WHERE id = %s AND status IN ('NEW','FETCHED') RETURNING isbn13",
+                "UPDATE new_book_requests SET status = 'APPROVED', approved_at = NOW() WHERE id = %s AND status IN ('NEW','FETCHED') RETURNING isbn13, requester_email",
                 (request_id,),
             )
             row = cur.fetchone()
             if row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="요청 없음 또는 이미 처리됨")
             isbn13 = row[0]
+            requester_email = row[1]
 
             # 권역별 발주 지시서 자동 생성 (FR-A4.8 · 본사 신간 지시는 물류센터 자동 실행)
             # location_type='WH' (시드 스키마 정합 · 'WAREHOUSE' 는 과거 명명 잔존 버그였음)
@@ -1599,6 +1600,8 @@ def approve_new_book_request(
             "wh1_qty": wh1_qty,
             "wh2_qty": wh2_qty,
             "orders_created": len(new_orders),
+            # 출판사 발주명세 이메일 수신처 (시나리오 2 · test 1-7) — recipients.py 가 publisher 수신자로 사용
+            "requester_email": requester_email,
         },
     )
 

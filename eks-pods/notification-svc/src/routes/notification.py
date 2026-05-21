@@ -107,6 +107,9 @@ _EVENT_LOGIC_APPS: dict[str, str] = {
     "InboundRejected":    "notification",   # 5분 batch flush 경로 (main.py _flush_inbound_rejected)
     "StockDepartPending": "stock_depart",
     "StockArrivalPending":"stock_arrival",
+    # 신간 (시나리오 2): DISCOVERED → 본사 매니저 알림(1-2) · APPROVED → 출판사 발주명세(1-7).
+    # 수신자는 recipients.get_recipients 가 stage 로 분기 (본사 / 본사+출판사).
+    "NewBookRequest":     "notification",
 }
 
 
