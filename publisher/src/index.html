@@ -341,9 +341,12 @@
         <!-- 신생 출판사명 + 담당자 이메일 -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
           <div class="field">
-            <label for="publisherName">출판사명 <span class="opt">(신생 · 코드 미입력 시)</span></label>
+            <label for="publisherName">출판사명 <span class="opt">(검색 · 코드 몰라도 OK)</span></label>
             <input type="text" id="publisherName" name="publisher_name" maxlength="200"
-                   placeholder="신생 출판사명 (코드를 모르면 입력)">
+                   list="publisherList" autocomplete="off"
+                   placeholder="출판사명 입력/검색 · 목록에 없으면 신생으로 등록">
+            <datalist id="publisherList"></datalist>
+            <p class="hint">이름을 입력하면 기존 출판사가 자동완성됩니다. 목록에 없으면 신생 출판사로 등록돼요.</p>
           </div>
           <div class="field">
             <label for="requesterEmail">담당자 이메일 <span class="req">*</span></label>
@@ -600,6 +603,21 @@ function switchTab(name, btn) {
 
 /* ── 유사 도서 태그 ─────────────────────────────────────────────────────────── */
 const similarIsbns = [];
+
+// 출판사 자동완성 — 코드를 몰라도 이름으로 검색/선택 (목록에 없으면 신생 등록)
+async function loadPublishers() {
+  try {
+    const res = await fetch(`${API_BASE}/publishers`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const dl = document.getElementById("publisherList");
+    if (!dl) return;
+    dl.innerHTML = (data.items || [])
+      .map(p => `<option value="${(p.name || "").replace(/"/g, "&quot;")}">`)
+      .join("");
+  } catch (e) { /* 자동완성 실패는 비치명 — 직접 입력 가능 */ }
+}
+document.addEventListener("DOMContentLoaded", loadPublishers);
 
 function addSimilar() {
   const input = document.getElementById("similarInput");

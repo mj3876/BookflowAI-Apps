@@ -304,6 +304,36 @@ def list_new_book_requests(
     return {"items": items, "count": len(items)}
 
 
+# ─── 출판사 검색 (신청 폼 자동완성) ─────────────────────────────────────────
+
+@app.get(
+    "/api/v1/publishers",
+    tags=["publisher"],
+    summary="출판사 검색 (이름 자동완성)",
+)
+def search_publishers(q: str = "", limit: int = 1000):
+    """출판사 이름 검색 — 출판사가 코드를 몰라도 이름으로 찾을 수 있게 한다.
+
+    신청 폼이 호출하여 datalist 자동완성에 사용. q 미지정 시 전체(최대 limit) 반환.
+    이름은 공개 정보 — API 키 불요(공개 read).
+    """
+    like = f"%{q.strip()}%" if q.strip() else "%"
+    with db.db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT publisher_id, name
+                  FROM publishers
+                 WHERE name ILIKE %s
+                 ORDER BY name
+                 LIMIT %s
+                """,
+                (like, min(limit, 2000)),
+            )
+            rows = cur.fetchall()
+    return {"items": [{"publisher_id": r[0], "name": r[1]} for r in rows], "count": len(rows)}
+
+
 # ─── 제출 상태 조회 (출판사 확인용) ──────────────────────────────────────────
 
 @app.get(

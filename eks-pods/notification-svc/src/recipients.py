@@ -109,9 +109,9 @@ def get_recipients(event_type: str, payload: dict | None = None) -> list[dict]:
     if event_type == "StockArrivalPending":
         return _dedup(_stock_arrival_recipients(payload))
     # 신간: 발견(DISCOVERED) 단계는 본사 매니저 알림(1-2),
-    #       승인(APPROVED) 단계는 본사 + 출판사 발주명세 메일(1-7).
+    #       승인(APPROVED)/거절(REJECTED) 단계는 본사 + 출판사 결과 메일(1-7 · 거절 통보).
     if event_type == "NewBookRequest":
-        if (payload or {}).get("stage") == "APPROVED":
+        if (payload or {}).get("stage") in ("APPROVED", "REJECTED"):
             return _dedup(_hq() + _publisher(payload))
         return _dedup(_hq())
 
