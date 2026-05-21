@@ -95,11 +95,15 @@ async def submit_new_book_request(
     price_sales: int = Form(..., gt=0, description="정가 (원, 1 이상)"),
     # 결과 통보용 출판사 담당자 이메일 (필수) — 승인 시 발주명세 메일 수신처.
     requester_email: str = Form(..., description="출판사 담당자 이메일 (결과 통보용)"),
+    # 장르 (필수) — 신간은 판매 이력이 없으므로 같은 장르 도서들의 피처를 평균내어
+    # cold-start 수요예측을 수행한다 (forecast-svc _assemble_new_book_features).
+    # 권장 값: 소설/시/희곡 · 인문학 · 어린이 · 경제경영 · 컴퓨터/모바일 · 자기계발 ·
+    #          건강/취미 · 예술/대중문화 · 사회과학 · 역사 · 과학 · 에세이 · 청소년 · 종교/역학
+    genre: str = Form(..., description="장르 (필수 · 신간 cold-start 피처 수집 기준)"),
     # ── 선택 필드 ──
     # 출판사 코드. 신생 출판사는 코드를 모르므로 선택 — 미입력 시 publisher_name 으로 등록/조회.
     publisher_id: Optional[str] = Form(None, description="출판사 코드 (기존 출판사) · 신생은 비우고 publisher_name 입력"),
     publisher_name: Optional[str] = Form(None, description="출판사명 (신생 출판사 · publisher_id 미입력 시 필수)"),
-    genre: Optional[str] = Form(None, description="장르/카테고리"),
     expected_pub_date: Optional[str] = Form(None, description="출판 예정일 YYYY-MM-DD"),
     estimated_initial_sales: int = Form(0, ge=0, description="예상 초판 판매량"),
     marketing_plan: Optional[str] = Form("", description="마케팅 계획"),
