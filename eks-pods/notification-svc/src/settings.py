@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # ── 지점·물류센터 개별 담당자 연락처 ─────────────────────────────
     # JSON 문자열: {"location_id": "email", ...} (location_id = locations 테이블 PK)
-    # K8s ConfigMap NOTIFICATION_LOCATION_CONTACTS_JSON 으로 주입
+    # K8s ConfigMap NOTIFICATION_CONTACT_LOCATION_CONTACTS_JSON 으로 주입
     contact_location_contacts_json: str = ""
 
 
