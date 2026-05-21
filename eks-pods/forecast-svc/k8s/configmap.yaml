@@ -22,6 +22,13 @@ data:
   FORECAST_GCP_NEW_BOOK_INFERENCE_URL: ""
   FORECAST_GCP_HTTP_TIMEOUT_SECONDS: "30"
   FORECAST_ALLOW_MOCK_FALLBACK: "false"
+  # 신간 수요예측: BigQuery ML.PREDICT 직접 실행 (private PSC · bigquery.googleapis.com -> 10.50.0.10).
+  # Cloud Function(bookflow-new-book-inference)은 ingress=internal-only 라 EKS 에서 사설 도달 불가 →
+  # forecast-svc 가 동일 BQML 모델(bookflow_new_books_forecast) + new_book_forecast 테이블로 직접 추론.
+  FORECAST_GCP_NEW_BOOK_USE_BQ_DIRECT: "true"
+  FORECAST_GCP_NEW_BOOK_MODEL: "bookflow_new_books_forecast"
+  FORECAST_GCP_NEW_BOOK_FORECAST_TABLE: "new_book_forecast"
+  FORECAST_GCP_NEW_BOOK_LEAD_DAYS: "30"
   # Direct Vertex AI SDK call via VPN (bypasses Cloud Function ALLOW_INTERNAL_ONLY block)
   FORECAST_GCP_VERTEX_ENDPOINT_NAME: "${GCP_VERTEX_ENDPOINT_NAME}"
   FORECAST_GCP_VERTEX_PRIVATE_API_ENDPOINT: "${GCP_VERTEX_PRIVATE_API_ENDPOINT}"
