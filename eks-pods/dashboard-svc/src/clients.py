@@ -203,8 +203,11 @@ async def post_newbook_predict_demand(body: dict, token: str, mode: str = "auto"
 
     mode (2026-05-19): mock = 항상 동작하는 임시 분포 · real = 실제 GCP/Vertex 호출 · auto = 기존 동작.
     """
+    # BQ-direct 신간추론(cold-start 피처 조립 + ML.PREDICT + 집계 = BQ 잡 4~5개)은
+    # 기본 fan-in 3s 보다 오래 걸림 → 60s override (없으면 ReadTimeout → 503 으로 둔갑).
     return await _safe_post(
-        f"{settings.forecast_svc_url}/forecast/newbook/predict-demand?mode={mode}", body, token
+        f"{settings.forecast_svc_url}/forecast/newbook/predict-demand?mode={mode}", body, token,
+        timeout=60.0,
     )
 
 
@@ -215,7 +218,8 @@ async def post_spike_predict_demand(body: dict, token: str, mode: str = "auto") 
     mode: mock = z-score 기반 추정 (GCP 무관) · real = 실제 Vertex 호출 · auto = 기존 동작.
     """
     return await _safe_post(
-        f"{settings.forecast_svc_url}/forecast/spike/predict-demand?mode={mode}", body, token
+        f"{settings.forecast_svc_url}/forecast/spike/predict-demand?mode={mode}", body, token,
+        timeout=60.0,
     )
 
 
