@@ -693,6 +693,80 @@ def _mock_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
     )
 
 
+def _assemble_new_book_features(client, bigquery, isbn13: str) -> None:
+    """신간 cold-start 피처 수집 (시나리오 2 의 'books_static 에서 피처 수집' 단계).
+
+    신간은 판매 이력이 없으므로 같은 **장르**의 기존 도서들(books_static)의 정적 피처를
+    평균내어 신간의 books_static 행을 조립한다. 장르(category_name)는 출판사 신청 시 필수.
+    이미 books_static 에 있으면 skip (Aladin ETL 로 적재된 경우).
+    """
+    proj, ds = settings.bq_project_id, settings.bq_dataset_id
+    bs = f"`{proj}.{ds}.books_static`"
+    exists = list(client.query(
+        f"SELECT 1 FROM {bs} WHERE isbn13=@i LIMIT 1",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("i", "STRING", isbn13)]),
+        location=settings.bq_location,
+    ).result())
+    if exists:
+        return
+
+    # RDS new_book_requests/books 에서 신간 메타 (장르·정가·제목·저자) 조회
+    genre, title, author, price = "", isbn13, "", 15000
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT COALESCE(nbr.genre, b.category_name, ''),
+                      COALESCE(b.title, nbr.title, ''),
+                      COALESCE(b.author, nbr.author, ''),
+                      COALESCE(b.price_sales, nbr.price_sales, 15000)
+                 FROM new_book_requests nbr
+                 LEFT JOIN books b ON b.isbn13 = nbr.isbn13
+                WHERE nbr.isbn13 = %s ORDER BY nbr.id DESC LIMIT 1""",
+            (isbn13,),
+        )
+        r = cur.fetchone()
+    if r:
+        genre, title, author, price = (r[0] or ""), (r[1] or isbn13), (r[2] or ""), int(r[3] or 15000)
+    ptier = "LOW" if price < 12000 else ("MID" if price < 25000 else "HIGH")
+
+    # basis: 같은 장르(category_name LIKE) 도서 · 장르 미매칭 시 같은 price_tier 로 fallback
+    basis = "category_name LIKE CONCAT('%', @genre, '%')" if genre.strip() else "price_tier = @ptier"
+    params = [
+        bigquery.ScalarQueryParameter("isbn", "STRING", isbn13),
+        bigquery.ScalarQueryParameter("title", "STRING", title or isbn13),
+        bigquery.ScalarQueryParameter("author", "STRING", author or ""),
+        bigquery.ScalarQueryParameter("price", "INT64", price),
+        bigquery.ScalarQueryParameter("ptier", "STRING", ptier),
+        bigquery.ScalarQueryParameter("genre", "STRING", genre.strip()),
+    ]
+    # 같은 장르가 0건이면 price_tier, 그것도 없으면 전체 평균으로 안전 fallback (COALESCE 체인).
+    sql = f"""
+    INSERT INTO {bs}
+      (isbn13, title, author, category_id, category_name, price_standard, price_sales,
+       price_tier, sales_point, item_page, is_bestseller_flag,
+       author_past_books_count, author_experience_years, source, pub_date)
+    SELECT @isbn, @title, @author,
+      COALESCE(
+        (SELECT category_id FROM {bs} WHERE {basis} AND category_id IS NOT NULL
+           GROUP BY category_id ORDER BY COUNT(*) DESC LIMIT 1),
+        (SELECT category_id FROM {bs} WHERE category_id IS NOT NULL
+           GROUP BY category_id ORDER BY COUNT(*) DESC LIMIT 1)),
+      COALESCE((SELECT category_name FROM {bs} WHERE {basis} AND category_name IS NOT NULL LIMIT 1), @genre),
+      @price, @price, @ptier,
+      CAST(COALESCE((SELECT AVG(sales_point) FROM {bs} WHERE {basis}),
+                    (SELECT AVG(sales_point) FROM {bs}), 0) AS INT64),
+      CAST(COALESCE((SELECT AVG(item_page) FROM {bs} WHERE {basis}),
+                    (SELECT AVG(item_page) FROM {bs}), 300) AS INT64),
+      FALSE,
+      CAST(COALESCE((SELECT AVG(author_past_books_count) FROM {bs} WHERE {basis}), 0) AS INT64),
+      CAST(COALESCE((SELECT AVG(author_experience_years) FROM {bs} WHERE {basis}), 0) AS INT64),
+      'NEW_BOOK_COLDSTART', CURRENT_DATE()
+    """
+    client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params),
+                 location=settings.bq_location).result()
+    log.info("new-book cold-start features assembled isbn=%s genre=%s tier=%s", isbn13, genre, ptier)
+
+
 def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> dict:
     """신간 수요예측을 BigQuery ML.PREDICT 로 직접 수행 (private PSC 경로).
 
@@ -700,6 +774,8 @@ def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> dict:
     (bookflow_new_books_forecast) · 동일 결과 테이블(new_book_forecast)을 사용하되,
     CF 가 ingress=internal-only 라 EKS(AWS)에서 사설 도달이 안 되므로 forecast-svc 가
     BigQuery API(bigquery.googleapis.com -> PSC 10.50.0.10)로 직접 ML.PREDICT 한다.
+
+    신간이 books_static 에 없으면 같은 장르 도서 피처를 평균내 cold-start 행을 먼저 조립한다.
     """
     if not settings.bq_project_id:
         raise HTTPException(
@@ -725,6 +801,9 @@ def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> dict:
 
     client = bigquery.Client(project=project, location=settings.bq_location)
     isbn_param = [bigquery.ScalarQueryParameter("isbn13", "STRING", req.isbn13)]
+
+    # 0. 신간 cold-start 피처 수집 — books_static 미존재 시 같은 장르 도서 피처 평균으로 조립
+    _assemble_new_book_features(client, bigquery, req.isbn13)
 
     # 1. 기존 예측 제거 (멱등)
     client.query(
