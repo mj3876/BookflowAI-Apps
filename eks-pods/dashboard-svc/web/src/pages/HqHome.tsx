@@ -301,7 +301,7 @@ export default function HqHome() {
                 {requestsTop5.map((r) => (
                   <tr key={r.id} className="border-t border-bf-border2 hover:bg-bf-panel2">
                     <td className="py-1.5 font-medium truncate max-w-[200px]">{r.title ?? r.isbn13}</td>
-                    <td className="py-1.5 text-bf-muted">P-{r.publisher_id}</td>
+                    <td className="py-1.5 text-bf-muted truncate max-w-[140px]">{r.publisher_name ?? `P-${r.publisher_id}`}</td>
                     <td className="py-1.5 text-bf-warn">{r.status}</td>
                     <td className="py-1.5 pl-2 text-bf-muted">{r.requested_at?.slice(5, 10) ?? '-'}</td>
                   </tr>

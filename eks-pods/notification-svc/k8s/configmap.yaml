@@ -14,7 +14,7 @@ data:
   NOTIFICATION_LOGIC_APPS_TIMEOUT_SECONDS: "120.0"
   NOTIFICATION_AUTH_MODE: "mock"
   NOTIFICATION_LOG_LEVEL: "INFO"
-  NOTIFICATION_CONTACT_HQ_EMAILS: "woohek00@gmail.com"
+  NOTIFICATION_CONTACT_HQ_EMAILS: "woohek00@gmail.com,bleach10905@gmail.com"
   NOTIFICATION_CONTACT_WH_EMAILS: "rladudgjs0427@gmail.com"
   NOTIFICATION_CONTACT_BRANCH_EMAILS: "ms8405493@gmail.com"
   # 지점·물류센터 개별 담당자 이메일 (locations 테이블 PK 기준)

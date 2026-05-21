@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     gcp_http_timeout_seconds: float = 30.0
     allow_mock_fallback: bool = False
 
+    # New-book inference via BigQuery ML.PREDICT executed directly from forecast-svc
+    # (BigQuery reached privately over PSC: bigquery.googleapis.com -> 10.50.0.10).
+    # Mirrors the bookflow-new-book-inference Cloud Function logic but keeps the
+    # call path AWS->BQ private, since the Cloud Function is ingress=internal-only
+    # and not reachable from the EKS VPC.
+    gcp_new_book_use_bq_direct: bool = False
+    gcp_new_book_model: str = "bookflow_new_books_forecast"
+    gcp_new_book_forecast_table: str = "new_book_forecast"
+    gcp_new_book_lead_days: int = 30
+
     # Direct Vertex AI SDK call — bypasses Cloud Function, uses VPN private endpoint
     gcp_vertex_endpoint_name: str | None = None   # full resource name or display name
     gcp_vertex_location: str = "asia-northeast1"

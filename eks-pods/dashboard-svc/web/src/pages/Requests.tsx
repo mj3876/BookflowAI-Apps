@@ -149,7 +149,7 @@ export default function Requests() {
                   </td>
                   <td className="font-mono text-[11px]">{r.isbn13}</td>
                   <td className="font-medium">{r.title ?? '-'}</td>
-                  <td>출판사 #{r.publisher_id}</td>
+                  <td>{r.publisher_name ?? `출판사 #${r.publisher_id}`}</td>
                   <td><StatusPill status={r.status} /></td>
                 </tr>
               ))}
@@ -263,7 +263,8 @@ function DetailPanel({
         <dl className="text-xs grid grid-cols-[80px_1fr] gap-y-1 gap-x-3">
           <dt className="text-bf-muted">ISBN</dt><dd className="font-mono">{req.isbn13}</dd>
           <dt className="text-bf-muted">제목</dt><dd className="font-medium">{req.title ?? '-'}</dd>
-          <dt className="text-bf-muted">출판사</dt><dd>출판사 #{req.publisher_id}</dd>
+          <dt className="text-bf-muted">출판사</dt><dd>{req.publisher_name ?? `출판사 #${req.publisher_id}`}</dd>
+          {req.requester_email && (<><dt className="text-bf-muted">담당자</dt><dd>{req.requester_email}</dd></>)}
           <dt className="text-bf-muted">요청 일시</dt><dd>{new Date(req.requested_at).toLocaleString('ko-KR')}</dd>
           <dt className="text-bf-muted">상태</dt><dd><StatusPill status={req.status} /></dd>
         </dl>

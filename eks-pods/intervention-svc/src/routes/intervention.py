@@ -1505,13 +1505,14 @@ def approve_new_book_request(
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE new_book_requests SET status = 'APPROVED', approved_at = NOW() WHERE id = %s AND status IN ('NEW','FETCHED') RETURNING isbn13",
+                "UPDATE new_book_requests SET status = 'APPROVED', approved_at = NOW() WHERE id = %s AND status IN ('NEW','FETCHED') RETURNING isbn13, requester_email",
                 (request_id,),
             )
             row = cur.fetchone()
             if row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="요청 없음 또는 이미 처리됨")
             isbn13 = row[0]
+            requester_email = row[1]
 
             # 권역별 발주 지시서 자동 생성 (FR-A4.8 · 본사 신간 지시는 물류센터 자동 실행)
             # location_type='WH' (시드 스키마 정합 · 'WAREHOUSE' 는 과거 명명 잔존 버그였음)
@@ -1599,6 +1600,8 @@ def approve_new_book_request(
             "wh1_qty": wh1_qty,
             "wh2_qty": wh2_qty,
             "orders_created": len(new_orders),
+            # 출판사 발주명세 이메일 수신처 (시나리오 2 · test 1-7) — recipients.py 가 publisher 수신자로 사용
+            "requester_email": requester_email,
         },
     )
 
@@ -1627,22 +1630,38 @@ def reject_new_book_request(
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE new_book_requests SET status = 'REJECTED', approved_at = NOW() WHERE id = %s AND status IN ('NEW','FETCHED') RETURNING isbn13",
+                "UPDATE new_book_requests SET status = 'REJECTED', approved_at = NOW() WHERE id = %s AND status IN ('NEW','FETCHED') RETURNING isbn13, requester_email",
                 (request_id,),
             )
             row = cur.fetchone()
             if row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="요청 없음 또는 이미 처리됨")
+            isbn13 = row[0]
+            requester_email = row[1]
             cur.execute(
                 """
                 INSERT INTO audit_log (actor_type, actor_id, action, entity_type, entity_id, after_state)
                 VALUES ('user', %s, 'intervention.new_book.reject', 'new_book_requests', %s, %s)
                 """,
-                (ctx.user_id, str(request_id), json.dumps({"isbn13": row[0], "reason": reason})),
+                (ctx.user_id, str(request_id), json.dumps({"isbn13": isbn13, "reason": reason})),
             )
         conn.commit()
 
-    return {"id": request_id, "status": "REJECTED", "isbn13": row[0]}
+    # 거절 결과를 출판사에게 메일 통보 (recipients 가 stage=REJECTED → 본사+출판사 분기)
+    _notify(
+        ctx.token, "NewBookRequest",
+        severity="INFO",
+        payload={
+            "id": request_id,
+            "isbn13": isbn13,
+            "stage": "REJECTED",
+            "approver_role": ctx.role,
+            "reason": reason,
+            "requester_email": requester_email,
+        },
+    )
+
+    return {"id": request_id, "status": "REJECTED", "isbn13": isbn13}
 
 
 # ─── HQ 도서 ON/OFF + 소진 모드 (FR-A6.1 + A6.2) ────────────────────────────────

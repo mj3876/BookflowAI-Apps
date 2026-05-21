@@ -332,9 +332,27 @@
             <p class="hint">하이픈 없이 13자리 숫자</p>
           </div>
           <div class="field">
-            <label for="publisherId">출판사 코드 <span class="req">*</span></label>
+            <label for="publisherId">출판사 코드 <span class="opt">(기존 출판사)</span></label>
             <input type="text" id="publisherId" name="publisher_id"
-                   placeholder="PUB-001">
+                   placeholder="PUB-001 · 신생 출판사는 비워두세요">
+          </div>
+        </div>
+
+        <!-- 신생 출판사명 + 담당자 이메일 -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <div class="field">
+            <label for="publisherName">출판사명 <span class="opt">(검색 · 코드 몰라도 OK)</span></label>
+            <input type="text" id="publisherName" name="publisher_name" maxlength="200"
+                   list="publisherList" autocomplete="off"
+                   placeholder="출판사명 입력/검색 · 목록에 없으면 신생으로 등록">
+            <datalist id="publisherList"></datalist>
+            <p class="hint">이름을 입력하면 기존 출판사가 자동완성됩니다. 목록에 없으면 신생 출판사로 등록돼요.</p>
+          </div>
+          <div class="field">
+            <label for="requesterEmail">담당자 이메일 <span class="req">*</span></label>
+            <input type="email" id="requesterEmail" name="requester_email" required
+                   placeholder="결과 통보용 이메일">
+            <p class="hint">승인 시 발주 명세가 이 이메일로 발송됩니다.</p>
           </div>
         </div>
 
@@ -363,19 +381,24 @@
         <!-- 장르 + 출판 예정일 -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
           <div class="field">
-            <label for="genre">장르/카테고리 <span class="opt">(선택)</span></label>
-            <select id="genre" name="genre">
+            <label for="genre">장르/카테고리 <span class="req">*</span></label>
+            <!-- 신간 cold-start: 같은 장르 도서 피처 평균으로 수요예측 → 값은 books_static 카테고리와 정렬 -->
+            <select id="genre" name="genre" required>
               <option value="">── 선택 ──</option>
-              <option>소설/문학</option>
-              <option>경제/경영</option>
+              <option>소설/시/희곡</option>
+              <option>경제경영</option>
               <option>자기계발</option>
-              <option>과학/기술</option>
-              <option>역사/문화</option>
-              <option>아동/청소년</option>
-              <option>예술/디자인</option>
-              <option>만화/그래픽</option>
-              <option>학습/참고서</option>
-              <option>기타</option>
+              <option>인문학</option>
+              <option>사회과학</option>
+              <option>역사</option>
+              <option>과학</option>
+              <option>컴퓨터/모바일</option>
+              <option>건강/취미</option>
+              <option>예술/대중문화</option>
+              <option>에세이</option>
+              <option>어린이</option>
+              <option>청소년</option>
+              <option>종교/역학</option>
             </select>
           </div>
           <div class="field">
@@ -581,6 +604,21 @@ function switchTab(name, btn) {
 /* ── 유사 도서 태그 ─────────────────────────────────────────────────────────── */
 const similarIsbns = [];
 
+// 출판사 자동완성 — 코드를 몰라도 이름으로 검색/선택 (목록에 없으면 신생 등록)
+async function loadPublishers() {
+  try {
+    const res = await fetch(`${API_BASE}/publishers`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const dl = document.getElementById("publisherList");
+    if (!dl) return;
+    dl.innerHTML = (data.items || [])
+      .map(p => `<option value="${(p.name || "").replace(/"/g, "&quot;")}">`)
+      .join("");
+  } catch (e) { /* 자동완성 실패는 비치명 — 직접 입력 가능 */ }
+}
+document.addEventListener("DOMContentLoaded", loadPublishers);
+
 function addSimilar() {
   const input = document.getElementById("similarInput");
   const val = input.value.trim();
@@ -669,10 +707,11 @@ function validateForm() {
   let ok = true;
   const fields = [
     { id: "isbn13",      check: v => /^\d{13}$/.test(v), msg: "ISBN-13 은 13자리 숫자여야 합니다." },
-    { id: "publisherId", check: v => v.length > 0,        msg: "출판사 코드를 입력해 주세요." },
     { id: "title",       check: v => v.length > 0,        msg: "도서명을 입력해 주세요." },
     { id: "author",      check: v => v.length > 0,        msg: "저자명을 입력해 주세요." },
     { id: "priceSales",  check: v => v.length > 0 && Number(v) > 0, msg: "정가를 1원 이상으로 입력해 주세요." },
+    { id: "requesterEmail", check: v => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v), msg: "결과 통보용 담당자 이메일을 입력해 주세요." },
+    { id: "genre",       check: v => v.length > 0,        msg: "장르를 선택해 주세요 (신간 수요예측 기준)." },
   ];
   const errors = [];
   fields.forEach(f => {
@@ -686,6 +725,18 @@ function validateForm() {
       el.classList.remove("error");
     }
   });
+  // 출판사 식별: 코드(기존) 또는 출판사명(신생) 중 하나는 필수
+  const pid = document.getElementById("publisherId").value.trim();
+  const pname = document.getElementById("publisherName").value.trim();
+  if (!pid && !pname) {
+    document.getElementById("publisherId").classList.add("error");
+    document.getElementById("publisherName").classList.add("error");
+    errors.push("출판사 코드(기존) 또는 출판사명(신생) 중 하나는 입력해 주세요.");
+    ok = false;
+  } else {
+    document.getElementById("publisherId").classList.remove("error");
+    document.getElementById("publisherName").classList.remove("error");
+  }
   return { ok, errors };
 }
 

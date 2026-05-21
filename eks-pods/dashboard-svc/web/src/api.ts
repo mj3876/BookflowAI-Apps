@@ -445,9 +445,11 @@ export type NewBookRequest = {
   id: number;
   isbn13: string;
   publisher_id: number;
+  publisher_name: string | null;
   title: string | null;
   status: string;
   requested_at: string;
+  requester_email: string | null;
 };
 export const fetchNewBookRequests = (role: Role, limit = 50) =>
   getJson<{ items: NewBookRequest[] }>(`/dashboard/new-book-requests?limit=${limit}`, role);

@@ -443,10 +443,14 @@ def new_book_requests(
     프론트 호환 위해 SQL alias 로 requested_at 노출.
     """
     sql = """
-        SELECT id, isbn13, publisher_id, title, status,
-               created_at AS requested_at, fetched_at, approved_at
-          FROM new_book_requests
-         ORDER BY created_at DESC
+        SELECT nbr.id, nbr.isbn13, nbr.publisher_id,
+               COALESCE(p.name, nbr.publisher_id) AS publisher_name,
+               nbr.title, nbr.status,
+               nbr.created_at AS requested_at, nbr.fetched_at, nbr.approved_at,
+               nbr.requester_email
+          FROM new_book_requests nbr
+          LEFT JOIN publishers p ON p.publisher_id::text = nbr.publisher_id
+         ORDER BY nbr.created_at DESC
          LIMIT %s
     """
     with db_conn() as conn, conn.cursor() as cur:
@@ -456,12 +460,14 @@ def new_book_requests(
     return {
         "items": [
             {
-                "id":           r[0],
-                "isbn13":       r[1],
-                "publisher_id": r[2],
-                "title":        r[3],
-                "status":       r[4],
-                "requested_at": r[5].isoformat() if r[5] else None,
+                "id":             r[0],
+                "isbn13":         r[1],
+                "publisher_id":   r[2],
+                "publisher_name": r[3],
+                "title":          r[4],
+                "status":         r[5],
+                "requested_at":   r[6].isoformat() if r[6] else None,
+                "requester_email": r[9],
             }
             for r in rows
         ],
