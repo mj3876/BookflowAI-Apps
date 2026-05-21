@@ -693,11 +693,118 @@ def _mock_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
     )
 
 
+def _call_bq_new_book_ml_predict(req: NewBookPredictReq) -> dict:
+    """신간 수요예측을 BigQuery ML.PREDICT 로 직접 수행 (private PSC 경로).
+
+    bookflow-new-book-inference Cloud Function 과 동일한 BQML 모델
+    (bookflow_new_books_forecast) · 동일 결과 테이블(new_book_forecast)을 사용하되,
+    CF 가 ingress=internal-only 라 EKS(AWS)에서 사설 도달이 안 되므로 forecast-svc 가
+    BigQuery API(bigquery.googleapis.com -> PSC 10.50.0.10)로 직접 ML.PREDICT 한다.
+    """
+    if not settings.bq_project_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FORECAST_BQ_PROJECT_ID is required for new-book BigQuery ML.PREDICT",
+        )
+    try:
+        from google.cloud import bigquery
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="google-cloud-bigquery dependency is not installed",
+        ) from exc
+
+    project = settings.bq_project_id
+    dataset = settings.bq_dataset_id
+    model = settings.gcp_new_book_model
+    table = settings.gcp_new_book_forecast_table
+    lead_days = settings.gcp_new_book_lead_days
+
+    def _p(name: str) -> str:
+        return f"`{project}.{dataset}.{name}`"
+
+    client = bigquery.Client(project=project, location=settings.bq_location)
+    isbn_param = [bigquery.ScalarQueryParameter("isbn13", "STRING", req.isbn13)]
+
+    # 1. 기존 예측 제거 (멱등)
+    client.query(
+        f"DELETE FROM {_p(table)} WHERE isbn13 = @isbn13",
+        job_config=bigquery.QueryJobConfig(query_parameters=isbn_param),
+        location=settings.bq_location,
+    ).result()
+
+    # 2. ML.PREDICT × 매장 → new_book_forecast INSERT
+    client.query(
+        f"""
+        INSERT INTO {_p(table)}
+          (isbn13, store_id, wh_id, predicted_daily_demand, predicted_30d_qty,
+           prediction_date, model_version)
+        SELECT
+          @isbn13 AS isbn13, slm.store_id, ls.wh_id,
+          GREATEST(pred.predicted_label, 0.0) AS predicted_daily_demand,
+          CAST(ROUND(GREATEST(pred.predicted_label, 0.0) * @lead_days) AS INT64) AS predicted_30d_qty,
+          CURRENT_DATE() AS prediction_date, @model_name AS model_version
+        FROM ML.PREDICT(MODEL {_p(model)}, (
+            SELECT b.category_id, b.price_tier, COALESCE(b.sales_point, 0) AS sales_point,
+                   CAST(COALESCE(b.is_bestseller_flag, FALSE) AS INT64) AS is_bestseller_flag,
+                   COALESCE(b.author_experience_years, 0) AS author_experience_years,
+                   COALESCE(b.author_past_books_count, 0) AS author_past_books_count,
+                   COALESCE(b.item_page, 0) AS item_page, slm.store_id,
+                   COALESCE(ls.wh_id, 1) AS region_code,
+                   COALESCE(CASE ls.size WHEN 'L' THEN 3 WHEN 'M' THEN 2 WHEN 'S' THEN 1 ELSE 2 END, 2) AS size_numeric
+            FROM {_p('books_static')} b
+            CROSS JOIN {_p('store_location_map')} slm
+            LEFT JOIN {_p('locations_static')} ls ON ls.location_id = slm.location_id
+            WHERE b.isbn13 = @isbn13
+        )) AS pred
+        JOIN {_p('store_location_map')} slm ON slm.store_id = pred.store_id
+        JOIN {_p('locations_static')} ls ON ls.location_id = slm.inventory_location_id
+        """,
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("isbn13", "STRING", req.isbn13),
+            bigquery.ScalarQueryParameter("lead_days", "INT64", lead_days),
+            bigquery.ScalarQueryParameter("model_name", "STRING", model),
+        ]),
+        location=settings.bq_location,
+    ).result()
+
+    # 3. wh_id 별 합계 → 발주 추천량
+    rows = list(client.query(
+        f"""
+        SELECT wh_id, SUM(predicted_30d_qty) AS wh_qty
+        FROM {_p(table)}
+        WHERE isbn13 = @isbn13 AND prediction_date = CURRENT_DATE()
+        GROUP BY wh_id ORDER BY wh_id
+        """,
+        job_config=bigquery.QueryJobConfig(query_parameters=isbn_param),
+        location=settings.bq_location,
+    ).result())
+    wh_qtys = {int(r.wh_id): int(r.wh_qty) for r in rows if r.wh_id is not None}
+    if not wh_qtys:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"new-book ML.PREDICT returned no rows (isbn={req.isbn13} not in books_static?)",
+        )
+    log.info("new-book BQML predict isbn=%s wh1=%s wh2=%s",
+             req.isbn13, wh_qtys.get(1, 0), wh_qtys.get(2, 0))
+    return {
+        "isbn13": req.isbn13,
+        "wh1_qty": wh_qtys.get(1, 0),
+        "wh2_qty": wh_qtys.get(2, 0),
+        "lead_days": lead_days,
+        "source": "bq_new_book_ml_predict",
+        "model_version": model,
+    }
+
+
 def _real_new_book_response(req: NewBookPredictReq) -> NewBookPredictResp:
-    """실제 GCP/Vertex 경로 — Cloud Function/Vertex endpoint 우선순위로 호출.
+    """실제 GCP 경로 — BQML 직접(private) / Cloud Function / Vertex endpoint 우선순위.
 
     GCP 설정이 하나도 없으면 503 (mock fallback 없음 — real 경로는 fail closed).
     """
+    if settings.gcp_new_book_use_bq_direct:
+        return _response_from_gcp_new_book(req, _call_bq_new_book_ml_predict(req))
+
     if settings.gcp_vertex_endpoint_name:
         return _call_vertex_sdk_direct(req)
 
@@ -743,7 +850,8 @@ def newbook_predict_demand(
         return _real_new_book_response(req)
 
     # mode == "auto" — GCP 설정 우선, 없으면 mock fallback (기존 동작)
-    if settings.gcp_vertex_endpoint_name or settings.gcp_vertex_invoke_url or settings.gcp_new_book_inference_url:
+    if (settings.gcp_new_book_use_bq_direct or settings.gcp_vertex_endpoint_name
+            or settings.gcp_vertex_invoke_url or settings.gcp_new_book_inference_url):
         return _real_new_book_response(req)
 
     if not settings.allow_mock_fallback:
