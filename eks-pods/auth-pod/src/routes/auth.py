@@ -69,6 +69,10 @@ async def login(request: Request):
         "state": state,
         "nonce": nonce,
     }
+    if settings.oidc_prompt:
+        params["prompt"] = settings.oidc_prompt
+    if settings.entra_domain_hint:
+        params["domain_hint"] = settings.entra_domain_hint
     authorize_url = f"{meta['authorization_endpoint']}?{urllib.parse.urlencode(params)}"
     resp = RedirectResponse(authorize_url, status_code=302)
     resp.set_cookie(STATE_COOKIE, f"{state}|{nonce}", httponly=True, secure=True,
@@ -153,6 +157,20 @@ def whoami(bookflow_session: str | None = Cookie(default=None)):
 
 @router.get("/auth/logout")
 async def logout():
-    resp = RedirectResponse(f"{settings.public_base_url}/login", status_code=302)
+    post_logout = f"{settings.public_base_url}/login"
+    if settings.entra_logout_full:
+        try:
+            meta = await _get_oidc_meta()
+            entra_url = (
+                f"{meta['end_session_endpoint']}"
+                f"?post_logout_redirect_uri={urllib.parse.quote(post_logout, safe='')}"
+                f"&client_id={settings.entra_client_id}"
+            )
+            resp = RedirectResponse(entra_url, status_code=302)
+        except Exception as e:
+            log.warning("entra end_session lookup failed, falling back to local logout: %s", e)
+            resp = RedirectResponse(post_logout, status_code=302)
+    else:
+        resp = RedirectResponse(post_logout, status_code=302)
     resp.delete_cookie(COOKIE_NAME, path="/")
     return resp
