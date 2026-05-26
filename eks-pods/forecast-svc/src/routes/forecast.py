@@ -41,10 +41,16 @@ def _fetch_bigquery_forecast_rows(days: int) -> list[dict]:
     dataset = settings.bq_dataset_id
     table = settings.bq_forecast_table
     query = f"""
-        WITH latest AS (
-          SELECT MAX(prediction_date) AS pred_date,
-                 MAX(target_date) AS max_tgt
+        WITH latest_prediction AS (
+          SELECT MAX(prediction_date) AS pred_date
           FROM `{project}.{dataset}.{table}`
+        ),
+        latest AS (
+          SELECT lp.pred_date,
+                 MAX(f.target_date) AS max_tgt
+          FROM `{project}.{dataset}.{table}` f
+          JOIN latest_prediction lp ON f.prediction_date = lp.pred_date
+          GROUP BY lp.pred_date
         )
         SELECT
           f.target_date AS snapshot_date,
@@ -200,7 +206,11 @@ def insufficient_stock(
     scope_sql = f" AND {scope_clause}" if scope_clause else ""
     sql = f"""
         WITH target AS (
-            SELECT MIN(snapshot_date) AS d FROM forecast_cache WHERE snapshot_date > CURRENT_DATE
+            SELECT COALESCE(
+                MIN(snapshot_date) FILTER (WHERE snapshot_date > CURRENT_DATE),
+                MAX(snapshot_date)
+            ) AS d
+            FROM forecast_cache
         ),
         wh_loc AS (
             -- 권역별 WH location_id (location_type='WH')
@@ -225,7 +235,12 @@ def insufficient_stock(
     with db_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, (*scope_params, limit))
         rows = cur.fetchall()
-        cur.execute("SELECT MIN(snapshot_date) FROM forecast_cache WHERE snapshot_date > CURRENT_DATE")
+        cur.execute(
+            "SELECT COALESCE("
+            "MIN(snapshot_date) FILTER (WHERE snapshot_date > CURRENT_DATE), "
+            "MAX(snapshot_date)"
+            ") FROM forecast_cache"
+        )
         snapshot = cur.fetchone()[0]
 
     items: list[InsufficientStockItem] = []
