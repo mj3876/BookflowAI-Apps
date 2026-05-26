@@ -12,6 +12,17 @@ class Settings(BaseSettings):
     public_base_url: str = "https://bookflow.myosoon.store"
     redirect_path: str = "/auth/callback"
 
+    # OIDC behavior
+    # prompt=select_account → account picker every time (lets users switch Entra accounts)
+    # prompt=login → force credential re-entry
+    # prompt=none → silent SSO only (fails if interaction needed)
+    # empty string → omit param (Entra default: silent SSO when possible)
+    oidc_prompt: str = "select_account"
+    # optional tenant hint, e.g. "yourcompany.onmicrosoft.com"; empty = omit
+    entra_domain_hint: str = ""
+    # if true, /auth/logout also hits Entra end_session_endpoint (clears IdP session)
+    entra_logout_full: bool = True
+
     # JWT (BookFlow internal · HS256)
     jwt_signing_key: str
     jwt_issuer: str = "bookflow-auth-pod"
