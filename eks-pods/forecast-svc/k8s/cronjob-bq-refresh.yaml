@@ -7,8 +7,8 @@ metadata:
     app: forecast-svc
     component: cronjob
 spec:
-  # 15:00 KST = 06:00 UTC. ETL(13:00~) + Vertex AI 예측 완료 후 BigQuery forecast_results → RDS forecast_cache 동기화.
-  schedule: "0 6 * * *"
+  # 16:20 KST = 07:20 UTC. ETL(13:00~) + Vertex AI 예측 완료 후 BigQuery forecast_results → RDS forecast_cache 동기화.
+  schedule: "20 7 * * *"
   timeZone: "UTC"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
