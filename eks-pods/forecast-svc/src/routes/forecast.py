@@ -320,13 +320,23 @@ def refresh(req: RefreshRequest, ctx: AuthContext = Depends(require_auth)):
 #   - Mock output is available only when FORECAST_ALLOW_MOCK_FALLBACK=true.
 # ──────────────────────────────────────────────────────────────────────────────
 import random as _rnd
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 class NewBookPredictReq(BaseModel):
     isbn13: str
     publisher_id: int | None = None
     category: str | None = None
     expected_price: int | None = None
+
+    @field_validator("publisher_id", mode="before")
+    @classmethod
+    def _coerce_publisher_id(cls, v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
 
 class NewBookLocationPred(BaseModel):
     location_id: int
