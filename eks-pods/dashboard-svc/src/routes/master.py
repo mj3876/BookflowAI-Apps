@@ -25,15 +25,24 @@ def forecast_all(
     기존 /dashboard/forecast/{store_id}/{date} 는 단일 매장 1일치. 14 매장 × 1000 ISBN
     grid view 에서는 호출 폭증 → 한 번에 모든 row 반환. role-scope 무관 (read-only · 의사결정 미동반).
     """
-    if snapshot_date is None:
-        snapshot_date = (datetime.now(_KST).date() + timedelta(days=1)).isoformat()
-
     sql = """
         SELECT snapshot_date, isbn13, store_id, predicted_demand
           FROM forecast_cache
          WHERE snapshot_date = %s
     """
     with db_conn() as conn, conn.cursor() as cur:
+        if snapshot_date is None:
+            cur.execute("SELECT MAX(snapshot_date) FROM forecast_cache")
+            row = cur.fetchone()
+            latest_snapshot = row[0] if row else None
+            snapshot_date = (
+                latest_snapshot.isoformat()
+                if hasattr(latest_snapshot, "isoformat")
+                else latest_snapshot
+            )
+            if snapshot_date is None:
+                snapshot_date = (datetime.now(_KST).date() + timedelta(days=1)).isoformat()
+
         cur.execute(sql, (snapshot_date,))
         rows = cur.fetchall()
 
