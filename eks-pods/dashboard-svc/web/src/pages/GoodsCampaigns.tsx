@@ -183,15 +183,15 @@ export default function GoodsCampaigns() {
             onChange={(e) => setIsbnInput(e.target.value)}
           />
           <div className="flex gap-2 flex-wrap">
-            {(books.data?.items ?? []).slice(0, 6).map((b) => (
+            {(books.data?.items ?? []).map((b) => (
               <button
                 key={b.isbn13}
                 type="button"
                 className="btn-ghost btn-sm"
-                title={b.title}
+                title={b.isbn13}
                 onClick={() => setIsbnInput((prev) => prev ? `${prev},${b.isbn13}` : b.isbn13)}
               >
-                {b.isbn13}
+                {b.title ?? b.isbn13}
               </button>
             ))}
           </div>
