@@ -28,6 +28,7 @@ EventType = Literal[
     "NewBookRejectedToPublisher",
     "NewBookDisplayRequest",
     "BranchFeedback",
+    "GoodsDisplayCampaign",
 ]
 
 Severity = Literal["INFO", "WARNING", "CRITICAL"]

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     gcp_vertex_private_api_endpoint: str | None = None  # e.g. "ENDPOINT_ID.asia-northeast1-aiplatform.googleapis.com"
 
     # forecast → decision service trigger (post BQ refresh)
+    gcp_gemini_generate_url: str | None = None
+    gcp_gemini_model: str = "gemini-2.5-flash"
+    gcp_gemini_temperature: float = 0.2
+    notification_svc_url: str = "http://notification-svc.bookflow.svc.cluster.local"
+
     decision_svc_url: str = "http://decision-svc.bookflow.svc.cluster.local"
     decision_svc_timeout: float = 5.0
 

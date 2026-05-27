@@ -7,6 +7,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .db import close_pool, init_pool
 from .routes.forecast import router as forecast_router
+from .routes.goods_campaigns import router as goods_campaign_router
 from .settings import settings
 
 logging.basicConfig(level=settings.log_level)
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="bookflow-forecast-svc", version="0.1.0", lifespan=lifespan)
+app.include_router(goods_campaign_router)
 app.include_router(forecast_router)
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)

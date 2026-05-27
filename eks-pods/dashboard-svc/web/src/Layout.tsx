@@ -29,6 +29,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/wh-inventory?view=stores',  label: '🏪 지점별 재고',     desc: '권역 + 지점 selector · 매장 도서 단위',     allow: 'HQ' },
       { to: '/returns',     label: '반품 처리',           desc: '매장이 신청한 반품 승인 / 거부',           allow: 'HQ' },
       { to: '/requests',    label: '신간 편입 결정',      desc: '출판사 신간을 우리 매장에 들일지 결정',    allow: 'HQ' },
+      { to: '/goods-campaigns', label: '굿즈 이벤트', desc: 'AI 굿즈 진열 추천과 지점 메일 발송', allow: 'HQ' },
     ],
   },
   {
@@ -87,6 +88,7 @@ const PAGE_LABEL: Record<string, string> = {
   plan: '시연 발의',
   returns: '반품 처리',
   requests: '신간 신청',
+  'goods-campaigns': '굿즈 이벤트',
   spikes: '급등 감지',
   'wh-dashboard': '권역 홈',
   'wh-inventory': '거점창고 재고',

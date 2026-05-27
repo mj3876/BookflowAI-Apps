@@ -541,3 +541,57 @@ async def spike_event_approve(
     from ..clients import post_intervention_spike_approve
     sc, data = await post_intervention_spike_approve(event_id, body, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "intervention-svc unavailable"})
+
+
+@router.get("/goods-campaigns")
+async def goods_campaigns(limit: int = 30, ctx: AuthContext = Depends(require_auth)):
+    from ..clients import get_goods_campaigns
+    data = await get_goods_campaigns(ctx.token, limit)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="forecast-svc unavailable")
+    return data
+
+
+@router.get("/goods-campaigns/{campaign_id}")
+async def goods_campaign(campaign_id: str, ctx: AuthContext = Depends(require_auth)):
+    from ..clients import get_goods_campaign
+    data = await get_goods_campaign(campaign_id, ctx.token)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="forecast-svc unavailable")
+    return data
+
+
+@router.post("/goods-campaigns")
+async def goods_campaign_create(body: dict = Body(...), ctx: AuthContext = Depends(require_auth)):
+    from ..clients import post_goods_campaign
+    sc, data = await post_goods_campaign(body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "forecast-svc unavailable"})
+
+
+@router.post("/goods-campaigns/{campaign_id}/recommend")
+async def goods_campaign_recommend(
+    campaign_id: str,
+    mode: str = "auto",
+    ctx: AuthContext = Depends(require_auth),
+):
+    from ..clients import post_goods_campaign_recommend
+    sc, data = await post_goods_campaign_recommend(campaign_id, ctx.token, mode)
+    return JSONResponse(status_code=sc, content=data or {"detail": "forecast-svc unavailable"})
+
+
+@router.patch("/goods-campaigns/{campaign_id}/recommendation")
+async def goods_recommendation_patch(
+    campaign_id: str,
+    body: dict = Body(...),
+    ctx: AuthContext = Depends(require_auth),
+):
+    from ..clients import patch_goods_recommendation
+    sc, data = await patch_goods_recommendation(campaign_id, body, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "forecast-svc unavailable"})
+
+
+@router.post("/goods-campaigns/{campaign_id}/send")
+async def goods_campaign_send(campaign_id: str, ctx: AuthContext = Depends(require_auth)):
+    from ..clients import post_goods_campaign_send
+    sc, data = await post_goods_campaign_send(campaign_id, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "forecast-svc unavailable"})
