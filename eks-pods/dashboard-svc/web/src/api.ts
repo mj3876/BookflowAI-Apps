@@ -79,6 +79,12 @@ async function patchJson<T>(path: string, role: Role, body: unknown): Promise<T>
   return r.json();
 }
 
+async function deleteJson<T>(path: string, role: Role): Promise<T> {
+  const r = await fetch(path, _authInit(role, undefined, 'DELETE'));
+  if (!r.ok) await _throwApiError(r);
+  return r.json();
+}
+
 // D5-7 WH AI 추천 수정 (qty / target_location_id)
 export function patchPendingOrder(role: Role, order_id: string, body: { qty?: number; target_location_id?: number; note?: string }) {
   return patchJson<{ order_id: string; qty: number; target_location_id: number; edited_at: string; edited_by: string }>(
@@ -1078,3 +1084,6 @@ export const postGoodsCampaignSend = (role: Role, campaignId: string) =>
   postJson<{ campaign_id: string; sent: Array<{ branch_id: number; status: string }>; sent_at: string }>(
     `/dashboard/goods-campaigns/${campaignId}/send`, role, {},
   );
+
+export const deleteGoodsCampaign = (role: Role, campaignId: string) =>
+  deleteJson<{ campaign_id: string; deleted: boolean }>(`/dashboard/goods-campaigns/${campaignId}`, role);
