@@ -144,6 +144,26 @@ async def _safe_post(url: str, body: dict, token: str, timeout: float | None = N
     return 503, None
 
 
+async def _safe_delete(url: str, token: str) -> tuple[int, Any]:
+    """DELETE 프록시. transient retry 동일 패턴."""
+    import asyncio
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = await _client.delete(url, headers={"Authorization": token})
+            return r.status_code, r.json() if r.content else None
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+        except Exception as e:
+            log.warning("fan-in DELETE %s failed (non-retryable): %s", url, e)
+            return 503, None
+    log.warning("fan-in DELETE %s failed after 3 retries: %s", url, last_err)
+    return 503, None
+
+
 async def _safe_patch(url: str, body: dict, token: str) -> tuple[int, Any]:
     """PATCH 프록시. D5-7 pending order 수정 proxy 용. transient retry 동일 패턴."""
     import asyncio
@@ -258,6 +278,12 @@ async def post_goods_campaign_send(campaign_id: str, token: str) -> tuple[int, A
         {},
         token,
         timeout=60.0,
+    )
+
+
+async def delete_goods_campaign(campaign_id: str, token: str) -> tuple[int, Any]:
+    return await _safe_delete(
+        f"{settings.forecast_svc_url}/forecast/goods-campaigns/{campaign_id}", token
     )
 
 
