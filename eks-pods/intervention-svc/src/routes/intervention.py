@@ -29,6 +29,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from ..auth import AuthContext, require_auth
 from ..db import db_conn, redis_client
+from .orders import _fetch_stock_details
 from ..models import (
     ApprovalResponse,
     ApproveRequest,
@@ -1854,6 +1855,17 @@ def receive_inbound(order_id: str, ctx: AuthContext = Depends(require_auth)):
         },
         correlation_id=order_id,
     )
+
+    # 출발지 담당자에게 운송 완료 확인 메일 (Logic Apps stock-arrival)
+    details = _fetch_stock_details(order_id)
+    if details and details.get("source_location_id"):
+        _notify(
+            ctx.token,
+            "StockArrivalPending",
+            severity="INFO",
+            payload={"order_id": order_id, **details},
+            correlation_id=order_id,
+        )
 
     return {
         "order_id": order_id,
