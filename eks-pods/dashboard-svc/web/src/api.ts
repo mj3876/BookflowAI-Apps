@@ -1004,3 +1004,77 @@ export const postOrdersBatchReceive = (role: Role, body: { order_ids: string[] }
   postJson<{ ok: unknown[]; failed: unknown[]; total: number }>(
     `/dashboard/orders/batch-receive`, role, body,
   );
+
+// Goods event campaigns: HQ-triggered, on-demand Gemini recommendations.
+export type GoodsRecommendation = {
+  recommendation_id: string;
+  campaign_id: string;
+  isbn13: string;
+  branch_id: number;
+  recommended_goods: Array<{ name?: string; display_position?: string } & Record<string, unknown>>;
+  display_position: string | null;
+  reason: string | null;
+  priority: 'HIGH' | 'MEDIUM' | 'LOW' | string;
+  email_subject: string | null;
+  email_body: string | null;
+  ai_model: string | null;
+  source: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type GoodsCampaign = {
+  campaign_id: string;
+  title: string;
+  campaign_type: string;
+  start_date: string;
+  end_date: string;
+  isbn13s: string[];
+  target_branch_ids: number[];
+  objective: string | null;
+  status: 'DRAFT' | 'RECOMMENDED' | 'SENT' | string;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  recommendations?: GoodsRecommendation[];
+};
+
+export const fetchGoodsCampaigns = (role: Role, limit = 30) =>
+  getJson<{ items: GoodsCampaign[] }>(`/dashboard/goods-campaigns?limit=${limit}`, role);
+
+export const fetchGoodsCampaign = (role: Role, campaignId: string) =>
+  getJson<GoodsCampaign>(`/dashboard/goods-campaigns/${campaignId}`, role);
+
+export const postGoodsCampaign = (
+  role: Role,
+  body: {
+    title: string;
+    campaign_type?: string;
+    start_date: string;
+    end_date: string;
+    isbn13s: string[];
+    target_branch_ids: number[];
+    objective?: string;
+  },
+) => postJson<{ campaign_id: string; status: string }>('/dashboard/goods-campaigns', role, body);
+
+export const postGoodsCampaignRecommend = (
+  role: Role,
+  campaignId: string,
+  mode: 'auto' | 'mock' | 'real' = 'auto',
+) => postJson<{ campaign_id: string; source: string; items: GoodsRecommendation[] }>(
+  `/dashboard/goods-campaigns/${campaignId}/recommend?mode=${mode}`, role, {},
+);
+
+export const patchGoodsRecommendation = (
+  role: Role,
+  campaignId: string,
+  body: Partial<Pick<GoodsRecommendation, 'recommended_goods' | 'display_position' | 'reason' | 'priority' | 'email_subject' | 'email_body'>> & {
+    recommendation_id: string;
+  },
+) => patchJson<GoodsRecommendation>(`/dashboard/goods-campaigns/${campaignId}/recommendation`, role, body);
+
+export const postGoodsCampaignSend = (role: Role, campaignId: string) =>
+  postJson<{ campaign_id: string; sent: Array<{ branch_id: number; status: string }>; sent_at: string }>(
+    `/dashboard/goods-campaigns/${campaignId}/send`, role, {},
+  );

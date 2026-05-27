@@ -13,6 +13,7 @@ import Approval from './pages/Approval';
 import Returns from './pages/Returns';
 import Requests from './pages/Requests';
 import Spikes from './pages/Spikes';
+import GoodsCampaigns from './pages/GoodsCampaigns';
 import HqHome from './pages/HqHome';
 import BranchHome from './pages/BranchHome';
 import WhDashboard from './pages/WhDashboard';
@@ -85,6 +86,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/approval"   element={<Approval />} />
             <Route path="/returns"    element={<Returns />} />
             <Route path="/requests"   element={<Requests />} />
+            <Route path="/goods-campaigns" element={<GoodsCampaigns />} />
             <Route path="/spikes"     element={<Spikes />} />
             {/* PR-D legacy redirect (북마크 보존) */}
             <Route path="/decision"   element={<Navigate to="/plan" replace />} />

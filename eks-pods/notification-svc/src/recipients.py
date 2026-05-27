@@ -108,6 +108,8 @@ def get_recipients(event_type: str, payload: dict | None = None) -> list[dict]:
         return _dedup(_stock_depart_recipients(payload))
     if event_type == "StockArrivalPending":
         return _dedup(_stock_arrival_recipients(payload))
+    if event_type == "GoodsDisplayCampaign":
+        return _dedup(_location_recipient((payload or {}).get("branch_id"), (payload or {}).get("branch_name")))
     # 신간: 발견(DISCOVERED) 단계는 본사 매니저 알림(1-2),
     #       승인(APPROVED)/거절(REJECTED) 단계는 본사 + 출판사 결과 메일(1-7 · 거절 통보).
     if event_type == "NewBookRequest":

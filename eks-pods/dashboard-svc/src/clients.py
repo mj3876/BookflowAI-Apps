@@ -223,6 +223,44 @@ async def post_spike_predict_demand(body: dict, token: str, mode: str = "auto") 
     )
 
 
+async def get_goods_campaigns(token: str, limit: int = 30) -> dict | None:
+    return await _safe_get(f"{settings.forecast_svc_url}/forecast/goods-campaigns?limit={limit}", token)
+
+
+async def get_goods_campaign(campaign_id: str, token: str) -> dict | None:
+    return await _safe_get(f"{settings.forecast_svc_url}/forecast/goods-campaigns/{campaign_id}", token)
+
+
+async def post_goods_campaign(body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_post(f"{settings.forecast_svc_url}/forecast/goods-campaigns", body, token)
+
+
+async def post_goods_campaign_recommend(campaign_id: str, token: str, mode: str = "auto") -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.forecast_svc_url}/forecast/goods-campaigns/{campaign_id}/recommend?mode={mode}",
+        {},
+        token,
+        timeout=60.0,
+    )
+
+
+async def patch_goods_recommendation(campaign_id: str, body: dict, token: str) -> tuple[int, Any]:
+    return await _safe_patch(
+        f"{settings.forecast_svc_url}/forecast/goods-campaigns/{campaign_id}/recommendation",
+        body,
+        token,
+    )
+
+
+async def post_goods_campaign_send(campaign_id: str, token: str) -> tuple[int, Any]:
+    return await _safe_post(
+        f"{settings.forecast_svc_url}/forecast/goods-campaigns/{campaign_id}/send",
+        {},
+        token,
+        timeout=60.0,
+    )
+
+
 async def post_intervention_spike_approve(
     event_id: str, body: dict, token: str
 ) -> tuple[int, Any]:

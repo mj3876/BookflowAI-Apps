@@ -33,6 +33,10 @@ data:
   FORECAST_GCP_VERTEX_ENDPOINT_NAME: "${GCP_VERTEX_ENDPOINT_NAME}"
   FORECAST_GCP_VERTEX_PRIVATE_API_ENDPOINT: "${GCP_VERTEX_PRIVATE_API_ENDPOINT}"
   # forecast → decision-svc trigger (post BQ refresh)
+  FORECAST_GCP_GEMINI_GENERATE_URL: "${GCP_GEMINI_GENERATE_URL}"
+  FORECAST_GCP_GEMINI_MODEL: "gemini-2.5-flash"
+  FORECAST_GCP_GEMINI_TEMPERATURE: "0.2"
+  FORECAST_NOTIFICATION_SVC_URL: "http://notification-svc.bookflow.svc.cluster.local"
   FORECAST_DECISION_SVC_URL: "http://decision-svc.bookflow.svc.cluster.local"
   AUTH_MODE: "jwt"
   AUTH_JWT_ISSUER: "bookflow-auth-pod"
