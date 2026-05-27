@@ -253,33 +253,33 @@ def _fallback_recommendations(
     for book in books:
         category = (book.get("category") or "").lower()
         if "child" in category or "kids" in category:
-            goods = [{"name": "Character bookmark set", "display_position": "Kids section endcap"}]
+            goods = [{"name": "캐릭터 북마크 세트", "display_position": "아동 코너 엔드캡"}]
         elif "travel" in category:
-            goods = [{"name": "Travel note and sticker pack", "display_position": "New release table"}]
+            goods = [{"name": "여행 노트 & 스티커 팩", "display_position": "신간 테이블"}]
         else:
-            goods = [{"name": "Premium bookmark and postcard set", "display_position": "Checkout counter"}]
+            goods = [{"name": "프리미엄 북마크 & 엽서 세트", "display_position": "계산대 앞"}]
         for branch in branches:
             demand = forecast_map.get((book["isbn13"], branch["branch_id"]), 0.0)
             priority = "HIGH" if demand >= 20 else "MEDIUM"
             title = book.get("title") or book["isbn13"]
-            branch_name = branch.get("name") or f"Branch {branch['branch_id']}"
+            branch_name = branch.get("name") or f"지점 {branch['branch_id']}"
             body = (
-                f"Campaign: {campaign['title']}\n"
-                f"Period: {campaign['start_date']} ~ {campaign['end_date']}\n"
-                f"Branch: {branch_name}\n"
-                f"Book: {title} ({book['isbn13']})\n"
-                f"Recommended goods: {goods[0]['name']}\n"
-                f"Display position: {goods[0]['display_position']}\n"
-                "Please display this as an event campaign after HQ approval."
+                f"캠페인: {campaign['title']}\n"
+                f"기간: {campaign['start_date']} ~ {campaign['end_date']}\n"
+                f"지점: {branch_name}\n"
+                f"도서: {title} ({book['isbn13']})\n"
+                f"추천 굿즈: {goods[0]['name']}\n"
+                f"진열 위치: {goods[0]['display_position']}\n"
+                "본사 승인 후 이벤트 캠페인으로 진열해 주시기 바랍니다."
             )
             items.append({
                 "isbn13": book["isbn13"],
                 "branch_id": branch["branch_id"],
                 "recommended_goods": goods,
                 "display_position": goods[0]["display_position"],
-                "reason": "Generated from category, campaign period, branch, and latest forecast summary.",
+                "reason": "카테고리, 캠페인 기간, 지점 및 최신 수요 예측을 기반으로 자동 생성되었습니다.",
                 "priority": priority,
-                "email_subject": f"[BOOKFLOW] Goods display campaign: {campaign['title']}",
+                "email_subject": f"[BOOKFLOW] 굿즈 진열 캠페인: {campaign['title']}",
                 "email_body": body,
             })
     return {"items": items}
@@ -287,12 +287,13 @@ def _fallback_recommendations(
 
 def _gemini_prompt(campaign: dict, books: list[dict], branches: list[dict], forecasts: list[dict]) -> str:
     payload = {
-        "task": "Create event-only goods display recommendations for bookstore branches.",
+        "task": "서점 지점의 단기 이벤트 굿즈 진열 추천을 생성해주세요.",
         "rules": [
-            "Do not recommend inventory quantity changes.",
-            "Return JSON only.",
-            "One item per isbn13 and branch_id pair.",
-            "Keep goods low-cost and practical for short event display.",
+            "재고 수량 변경은 추천하지 마세요.",
+            "JSON만 반환하세요.",
+            "isbn13과 branch_id 조합마다 하나의 항목을 생성하세요.",
+            "단기 이벤트 진열에 적합한 저렴하고 실용적인 굿즈를 추천하세요.",
+            "name, display_position, reason, email_subject, email_body 등 모든 텍스트 필드는 반드시 한국어로 작성하세요.",
         ],
         "campaign": campaign,
         "books": books,
@@ -543,7 +544,7 @@ def send_campaign(campaign_id: UUID, ctx: AuthContext = Depends(require_auth)):
                 "campaign_title": campaign["title"],
                 "campaign_period": f"{campaign['start_date']} ~ {campaign['end_date']}",
                 "branch_id": branch_id,
-                "email_subject": branch_recs[0].get("email_subject") or f"[BOOKFLOW] Goods campaign: {campaign['title']}",
+                "email_subject": branch_recs[0].get("email_subject") or f"[BOOKFLOW] 굿즈 캠페인: {campaign['title']}",
                 "email_body": "\n\n".join(r.get("email_body") or "" for r in branch_recs),
                 "recommendations": branch_recs,
             }
