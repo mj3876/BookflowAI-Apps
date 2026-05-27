@@ -407,6 +407,21 @@ def get_campaign(campaign_id: UUID, ctx: AuthContext = Depends(require_auth)):
     return {**campaign, "recommendations": recs}
 
 
+@router.delete("/{campaign_id}")
+def delete_campaign(campaign_id: UUID, ctx: AuthContext = Depends(require_auth)):
+    _require_hq(ctx)
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM goods_campaigns WHERE campaign_id = %s RETURNING campaign_id",
+                (str(campaign_id),),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="campaign not found")
+        conn.commit()
+    return {"campaign_id": str(campaign_id), "deleted": True}
+
+
 @router.post("/{campaign_id}/recommend")
 def recommend_campaign(campaign_id: UUID, mode: str = "auto", ctx: AuthContext = Depends(require_auth)):
     _require_hq(ctx)

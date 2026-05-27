@@ -595,3 +595,10 @@ async def goods_campaign_send(campaign_id: str, ctx: AuthContext = Depends(requi
     from ..clients import post_goods_campaign_send
     sc, data = await post_goods_campaign_send(campaign_id, ctx.token)
     return JSONResponse(status_code=sc, content=data or {"detail": "forecast-svc unavailable"})
+
+
+@router.delete("/goods-campaigns/{campaign_id}")
+async def goods_campaign_delete(campaign_id: str, ctx: AuthContext = Depends(require_auth)):
+    from ..clients import delete_goods_campaign
+    sc, data = await delete_goods_campaign(campaign_id, ctx.token)
+    return JSONResponse(status_code=sc, content=data or {"detail": "forecast-svc unavailable"})
