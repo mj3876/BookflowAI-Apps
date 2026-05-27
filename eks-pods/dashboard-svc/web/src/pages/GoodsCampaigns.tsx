@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOutletContext } from 'react-router-dom';
 import {
+  deleteGoodsCampaign,
   fetchBooks,
   fetchGoodsCampaign,
   fetchGoodsCampaigns,
@@ -110,6 +111,18 @@ export default function GoodsCampaigns() {
     onError: (e) => setError(e instanceof Error ? e.message : 'Send failed'),
   });
 
+  const deleteCampaign = useMutation({
+    mutationFn: (campaign: GoodsCampaign) => {
+      if (!window.confirm(`"${campaign.title}" 캠페인을 삭제하시겠습니까?`)) throw new Error('cancelled');
+      return deleteGoodsCampaign(role, campaign.campaign_id);
+    },
+    onSuccess: (_, campaign) => {
+      if (selectedId === campaign.campaign_id) setSelectedId(null);
+      qc.invalidateQueries({ queryKey: ['goods-campaigns'] });
+    },
+    onError: (e) => { if ((e as Error).message !== 'cancelled') setError((e as Error).message || 'Delete failed'); },
+  });
+
   const saveEdit = useMutation({
     mutationFn: (rec: GoodsRecommendation) => patchGoodsRecommendation(role, rec.campaign_id, {
       recommendation_id: rec.recommendation_id,
@@ -133,6 +146,7 @@ export default function GoodsCampaigns() {
 
   const activeCampaign = selected.data;
   const recommendations = activeCampaign?.recommendations ?? [];
+  const recSource = recommendations[0]?.source ?? null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -216,7 +230,7 @@ export default function GoodsCampaigns() {
                 <th>Status</th>
                 <th>Books</th>
                 <th>Branches</th>
-                <th>Action</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -227,8 +241,13 @@ export default function GoodsCampaigns() {
                   <td><span className="label-tag">{c.status}</span></td>
                   <td>{c.isbn13s.length}</td>
                   <td>{c.target_branch_ids.length}</td>
-                  <td>
+                  <td className="flex gap-1">
                     <button className="btn-ghost btn-sm" onClick={() => setSelectedId(c.campaign_id)}>Open</button>
+                    <button
+                      className="btn-ghost btn-sm text-bf-danger"
+                      onClick={() => deleteCampaign.mutate(c)}
+                      disabled={deleteCampaign.isPending}
+                    >Delete</button>
                   </td>
                 </tr>
               ))}
@@ -249,7 +268,12 @@ export default function GoodsCampaigns() {
                 {activeCampaign.start_date} ~ {activeCampaign.end_date} · {activeCampaign.status}
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {recSource && (
+                <span className={`label-tag ${recSource === 'gemini' ? 'text-green-600' : 'text-bf-muted'}`}>
+                  {recSource === 'gemini' ? '✦ Gemini' : '⚙ mock'}
+                </span>
+              )}
               <button className="btn-primary" onClick={() => recommend.mutate(activeCampaign)} disabled={recommend.isPending}>
                 {recommend.isPending ? 'Generating...' : 'Generate AI'}
               </button>
