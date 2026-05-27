@@ -22,7 +22,8 @@ def _conninfo() -> str:
         f"dbname={settings.rds_db} user={settings.rds_user} "
         f"password={settings.rds_password} "
         f"sslmode=require connect_timeout=3 "
-        f"keepalives=1 keepalives_idle=30 keepalives_interval=10 keepalives_count=3"
+        f"keepalives=1 keepalives_idle=10 keepalives_interval=3 keepalives_count=3 "
+        f"tcp_user_timeout=5000"
     )
 
 
