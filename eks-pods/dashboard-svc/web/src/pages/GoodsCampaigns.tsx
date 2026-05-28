@@ -183,22 +183,22 @@ export default function GoodsCampaigns() {
             onChange={(e) => setIsbnInput(e.target.value)}
           />
           <div className="flex gap-2 flex-wrap">
-            {(books.data?.items ?? []).slice(0, 6).map((b) => (
+            {(books.data?.items ?? []).map((b) => (
               <button
                 key={b.isbn13}
                 type="button"
                 className="btn-ghost btn-sm"
-                title={b.title}
+                title={b.isbn13}
                 onClick={() => setIsbnInput((prev) => prev ? `${prev},${b.isbn13}` : b.isbn13)}
               >
-                {b.isbn13}
+                {b.title ?? b.isbn13}
               </button>
             ))}
           </div>
           <label className="text-[11px] text-bf-muted">지점 ID (쉼표 구분)</label>
           <input className="ipt" value={branchInput} onChange={(e) => setBranchInput(e.target.value)} />
           <div className="flex gap-2 flex-wrap">
-            {branchOptions.slice(0, 8).map((l) => (
+            {branchOptions.map((l) => (
               <button
                 key={l.location_id}
                 type="button"
@@ -206,7 +206,7 @@ export default function GoodsCampaigns() {
                 title={l.name ?? String(l.location_id)}
                 onClick={() => setBranchInput((prev) => prev ? `${prev},${l.location_id}` : String(l.location_id))}
               >
-                {l.location_id}
+                {l.location_id} {l.name ?? ''}
               </button>
             ))}
           </div>
