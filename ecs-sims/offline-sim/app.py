@@ -156,7 +156,7 @@ def load_catalog() -> list:
         resp = requests.get(f"{url}/books/active", timeout=15)
         resp.raise_for_status()
         books = resp.json()
-        _catalog    = [b for b in books if b.get("price_sales", 0) > 0]
+        _catalog    = [b for b in books if (b.get("price_sales") or 0) > 0]
         _catalog_ts = time.time()
         log.info("[catalog] %d권 로드 완료", len(_catalog))
         return _catalog
